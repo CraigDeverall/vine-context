@@ -10,7 +10,7 @@
 // are the host's own user, peers only get describe, call and info.
 
 import type { InputSpecT } from "../core/pack.js";
-import type { Role } from "../core/graph.js";
+import type { Role, SnapshotSchema } from "../core/graph.js";
 
 export type Request = { t: "req"; id: number; method: string; params?: unknown };
 export type Response = { t: "res"; id: number; result?: unknown; error?: { message: string } };
@@ -24,6 +24,8 @@ export interface ToolDescriptor {
   kind: "read" | "write";
   role: Role;
   input: Record<string, InputSpecT>;
+  view?: "receipt" | "conflicts";
+  undo?: { tool: string; arg: string; field: string };
 }
 
 /** What a client needs to offer a host's graph as MCP tools. */
@@ -32,12 +34,13 @@ export interface GraphDescription {
   host: string;
   model: { name: string; version: number; title: string; description: string };
   guide: string;
+  schema: SnapshotSchema;
   tools: ToolDescriptor[];
   you: { id: string; role: Role };
 }
 
 /** Methods a peer may call. Everything else is for the host's own user. */
-export const PEER_METHODS = new Set(["describe", "call", "info"]);
+export const PEER_METHODS = new Set(["describe", "call", "info", "snapshot"]);
 
 export class RemoteError extends Error {}
 

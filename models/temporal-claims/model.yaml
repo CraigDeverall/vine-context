@@ -69,3 +69,7 @@ relationships:
 search:
   labels: [Claim, Question]
   text: text
+
+time:
+  recorded: recorded_at
+  ended: withdrawn_at

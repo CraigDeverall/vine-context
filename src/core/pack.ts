@@ -11,6 +11,7 @@ import { join, resolve } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 import { packageRoot } from "./package-root.js";
+import { userPacksDir } from "./paths.js";
 
 const identifier = z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/, "must be a Cypher identifier");
 const toolName = z.string().regex(/^[a-z][a-z0-9_]{0,47}$/, "must be snake_case, up to 48 characters");
@@ -24,6 +25,8 @@ const PropertySpec = z.object({
 const NodeSpec = z.object({
   description: z.string(),
   key: identifier.optional(),
+  /** The property shown as the node's label in views. Default: the search text, else the key. */
+  title: identifier.optional(),
   properties: z.record(identifier, PropertySpec).default({}),
 });
 
@@ -47,6 +50,12 @@ export const ModelSchema = z
         text: identifier,
       })
       .optional(),
+    /**
+     * Which properties hold time, so views can show the graph as it stood at
+     * any moment. `recorded` is on nodes and relationships; `ended`, if set, is
+     * when a node stopped being current.
+     */
+    time: z.object({ recorded: identifier, ended: identifier.optional() }).optional(),
   })
   .superRefine((m, ctx) => {
     const labels = new Set(Object.keys(m.nodes));
@@ -55,6 +64,9 @@ export const ModelSchema = z
         if (!labels.has(l)) ctx.addIssue({ code: "custom", path: ["relationships", type], message: `unknown node label ${l}` });
     for (const l of m.search?.labels ?? [])
       if (!labels.has(l)) ctx.addIssue({ code: "custom", path: ["search", "labels"], message: `unknown node label ${l}` });
+    for (const [label, node] of Object.entries(m.nodes))
+      for (const p of [node.key, node.title])
+        if (p && !(p in node.properties)) ctx.addIssue({ code: "custom", path: ["nodes", label], message: `${p} is not one of its properties` });
   });
 
 type InputType = z.infer<typeof InputBase>["type"];
@@ -97,6 +109,10 @@ export const ToolSchema = z.object({
   input: z.record(identifier, InputSpec).default({}),
   derive: z.record(identifier, Derive).default({}),
   steps: z.array(Step).min(1),
+  /** A built-in view that shows this tool's result: receipt (for writes) or conflicts (pairs of items). */
+  view: z.enum(["receipt", "conflicts"]).optional(),
+  /** How to undo a write from its receipt: call `tool` with { [arg]: result[field] }. */
+  undo: z.object({ tool: toolName, arg: identifier.default("id"), field: identifier.default("id") }).optional(),
 });
 
 /** Parameter names the server sets on every call. */
@@ -114,6 +130,13 @@ export const RESERVED_TOOL_NAMES = [
   "remove_peer",
   "join_graph",
   "leave_graph",
+  "open_console",
+  "explore_graph",
+  "model_studio",
+  "validate_model",
+  "install_model",
+  "use_graph",
+  "browser_view",
 ] as const;
 
 export const ToolsFileSchema = z.object({
@@ -191,6 +214,10 @@ export function loadPack(dir: string): Pack {
     }
     return { ...t, steps, role: t.role ?? (t.kind === "read" ? "reader" : "contributor") };
   });
+  for (const t of expanded) {
+    if (t.undo && !seen.has(t.undo.tool)) problems.push(`${t.name}: undo tool ${t.undo.tool} is not defined`);
+    if (t.undo && t.kind !== "write") problems.push(`${t.name}: only write tools can be undone`);
+  }
   if (problems.length) throw new PackError("tools.yaml:\n" + problems.map((p) => `  - ${p}`).join("\n"));
 
   const instructionsFile = join(abs, "instructions.md");
@@ -211,18 +238,42 @@ export function builtinPacksDir(): string {
 }
 
 export function listBuiltinPacks(): string[] {
-  const dir = builtinPacksDir();
+  return packsIn(builtinPacksDir());
+}
+
+function packsIn(dir: string): string[] {
   return existsSync(dir)
-    ? readdirSync(dir).filter((d) => statSync(join(dir, d)).isDirectory() && existsSync(join(dir, d, "model.yaml")))
+    ? readdirSync(dir)
+        .filter((d) => statSync(join(dir, d)).isDirectory() && existsSync(join(dir, d, "model.yaml")))
+        .sort()
     : [];
 }
 
-/** A built-in pack's name, or a path to a pack folder. */
-export function resolvePack(ref: string): Pack {
-  const builtin = join(builtinPacksDir(), ref);
-  if (/^[a-z][a-z0-9-]*$/.test(ref) && existsSync(join(builtin, "model.yaml"))) return loadPack(builtin);
+export interface PackEntry {
+  name: string;
+  source: "built-in" | "installed";
+  dir: string;
+}
+
+/** Built-in packs, then installed ones. An installed pack can't shadow a built-in name. */
+export function listPacks(dataDir?: string): PackEntry[] {
+  const builtin = packsIn(builtinPacksDir()).map((name) => ({ name, source: "built-in" as const, dir: join(builtinPacksDir(), name) }));
+  const names = new Set(builtin.map((p) => p.name));
+  const user = userPacksDir(dataDir);
+  const installed = packsIn(user)
+    .filter((n) => !names.has(n))
+    .map((name) => ({ name, source: "installed" as const, dir: join(user, name) }));
+  return [...builtin, ...installed];
+}
+
+/** A built-in or installed pack's name, or a path to a pack folder. */
+export function resolvePack(ref: string, dataDir?: string): Pack {
+  if (/^[a-z][a-z0-9-]*$/.test(ref)) {
+    const found = listPacks(dataDir).find((p) => p.name === ref);
+    if (found) return loadPack(found.dir);
+  }
   if (existsSync(join(ref, "model.yaml"))) return loadPack(ref);
-  throw new PackError(`No model pack '${ref}'. Built-in packs: ${listBuiltinPacks().join(", ") || "none"}.`);
+  throw new PackError(`No model pack '${ref}'. Available: ${listPacks(dataDir).map((p) => p.name).join(", ") || "none"}.`);
 }
 
 export type { InputType };

@@ -1,0 +1,363 @@
+# Tools for the decision-log model. See plugin/skills/p2p-context-graph/references/model-packs.md.
+#
+# Server parameters, set on every call and never by the caller:
+#   $now   the call's time, ISO 8601 (use datetime($now))
+#   $by    the caller's identity
+#   $role  the caller's role: reader, contributor or admin
+#
+# Read tools take an optional `at` and answer as the graph stood at that
+# moment: T below is datetime(coalesce($at, $now)).
+
+fragments:
+  # %1 existed at T and was not withdrawn by then.
+  live: >-
+    %1.recorded_at <= T AND (%1.withdrawn_at IS NULL OR %1.withdrawn_at > T)
+  # The decision %1 stood at T: live, and not superseded by a decision that was live at T.
+  current_decision: >-
+    {{live %1}}
+    AND NOT EXISTS {
+      MATCH (newer:Decision)-[s:SUPERSEDES]->(%1)
+      WHERE s.recorded_at <= T AND (newer.withdrawn_at IS NULL OR newer.withdrawn_at > T)
+    }
+  # The assumption %1 had been found false by T.
+  invalidated: >-
+    %1.invalidated_at IS NOT NULL AND %1.invalidated_at <= T
+
+tools:
+  - name: record_decision
+    title: Record a decision
+    kind: write
+    view: receipt
+    undo: { tool: withdraw }
+    description: >-
+      Record one decision the group made, in one sentence, with why. Link it to
+      decisions it supersedes or depends on, and to assumptions it rests on.
+      Then record the options that were weighed with add_option. To change a
+      decision, record a new one that supersedes it. Returns the new decision's id.
+    input:
+      text: { type: string, required: true, max_length: 1000, description: What was decided, in one sentence }
+      rationale: { type: string, max_length: 2000, description: Why, in a sentence or two }
+      decided_by: { type: string, max_length: 200, description: Who made the call, if not you or the person you work for }
+      decided_on: { type: date, description: The day it was decided (YYYY-MM-DD), if not today }
+      source: { type: string, max_length: 500, description: Where it was decided or written down }
+      supersedes: { type: array, items: id, description: Ids of decisions this replaces }
+      depends_on: { type: array, items: id, description: Ids of decisions this only makes sense alongside }
+      rests_on: { type: array, items: id, description: Ids of assumptions this takes to be true }
+    derive:
+      id: { new_id: d }
+      embedding: { embed: text }
+    steps:
+      - cypher: |
+          WITH coalesce($supersedes, []) + coalesce($depends_on, []) AS decision_refs, coalesce($rests_on, []) AS assumption_refs
+          OPTIONAL MATCH (d:Decision) WHERE d.id IN decision_refs AND d.withdrawn_at IS NULL
+          WITH decision_refs, assumption_refs, collect(DISTINCT d.id) AS found_d
+          OPTIONAL MATCH (a:Assumption) WHERE a.id IN assumption_refs AND a.withdrawn_at IS NULL
+          WITH decision_refs, assumption_refs, found_d, collect(DISTINCT a.id) AS found_a
+          WITH [x IN decision_refs WHERE NOT x IN found_d] + [x IN assumption_refs WHERE NOT x IN found_a] AS missing
+          RETURN CASE WHEN size(missing) > 0
+            THEN 'These ids are unknown or withdrawn: ' + reduce(s = '', x IN missing | s + CASE WHEN s = '' THEN '' ELSE ', ' END + x)
+          END AS _error
+      - cypher: |
+          CREATE (d:Decision {id: $id, text: $text, embedding: $embedding, recorded_at: datetime($now), recorded_by: $by})
+          SET d.rationale = $rationale, d.decided_by = $decided_by, d.source = $source,
+              d.decided_on = CASE WHEN $decided_on IS NULL THEN null ELSE date($decided_on) END
+          WITH d
+          CALL (d) {
+            UNWIND coalesce($supersedes, []) AS x MATCH (t:Decision {id: x})
+            MERGE (d)-[r:SUPERSEDES]->(t) SET r.recorded_at = d.recorded_at, r.recorded_by = $by
+            RETURN count(*) AS supersedes
+          }
+          CALL (d) {
+            UNWIND coalesce($depends_on, []) AS x MATCH (t:Decision {id: x})
+            MERGE (d)-[r:DEPENDS_ON]->(t) SET r.recorded_at = d.recorded_at, r.recorded_by = $by
+            RETURN count(*) AS depends_on
+          }
+          CALL (d) {
+            UNWIND coalesce($rests_on, []) AS x MATCH (t:Assumption {id: x})
+            MERGE (d)-[r:RESTS_ON]->(t) SET r.recorded_at = d.recorded_at, r.recorded_by = $by
+            RETURN count(*) AS rests_on
+          }
+          RETURN d.id AS id, d.recorded_at AS recorded_at, supersedes, depends_on, rests_on
+        single: true
+
+  - name: add_option
+    title: Record an option
+    kind: write
+    view: receipt
+    undo: { tool: withdraw }
+    description: >-
+      Record an alternative that was weighed for a decision, and whether the
+      decision chose it or turned it down (with the reason). Rejected options are
+      what stops the group re-litigating a decision later, so record them.
+    input:
+      decision: { type: id, required: true, description: The decision it was weighed for }
+      text: { type: string, required: true, max_length: 500, description: The option, in a few words }
+      outcome: { type: enum, values: [chosen, rejected], required: true, description: Whether the decision chose it }
+      reason: { type: string, max_length: 1000, description: Why it was chosen or turned down }
+    derive:
+      id: { new_id: o }
+      embedding: { embed: text }
+    steps:
+      - cypher: |
+          OPTIONAL MATCH (d:Decision {id: $decision})
+          RETURN CASE
+            WHEN d IS NULL THEN 'No decision ' + $decision + '.'
+            WHEN d.withdrawn_at IS NOT NULL THEN $decision + ' is withdrawn.'
+          END AS _error
+      - cypher: |
+          MATCH (d:Decision {id: $decision})
+          CREATE (o:Option {id: $id, text: $text, embedding: $embedding, recorded_at: datetime($now), recorded_by: $by})
+          FOREACH (_ IN CASE WHEN $outcome = 'chosen' THEN [1] ELSE [] END |
+            CREATE (d)-[:CHOSE {recorded_at: o.recorded_at, recorded_by: $by, reason: $reason}]->(o))
+          FOREACH (_ IN CASE WHEN $outcome = 'rejected' THEN [1] ELSE [] END |
+            CREATE (d)-[:REJECTED {recorded_at: o.recorded_at, recorded_by: $by, reason: $reason}]->(o))
+          RETURN o.id AS id, $decision AS decision, $outcome AS outcome
+        single: true
+
+  - name: add_assumption
+    title: Record an assumption
+    kind: write
+    view: receipt
+    undo: { tool: withdraw }
+    description: >-
+      Record something one or more decisions take to be true ("traffic stays under
+      1,000 requests a second", "the vendor keeps the free tier"). If it later
+      turns out false, invalidate_assumption flags every decision resting on it.
+    input:
+      text: { type: string, required: true, max_length: 1000, description: The assumption, in one sentence }
+      decisions: { type: array, items: id, description: Ids of decisions that rest on it }
+    derive:
+      id: { new_id: a }
+      embedding: { embed: text }
+    steps:
+      - cypher: |
+          WITH coalesce($decisions, []) AS refs
+          OPTIONAL MATCH (d:Decision) WHERE d.id IN refs AND d.withdrawn_at IS NULL
+          WITH refs, collect(DISTINCT d.id) AS found
+          WITH [x IN refs WHERE NOT x IN found] AS missing
+          RETURN CASE WHEN size(missing) > 0
+            THEN 'These decisions are unknown or withdrawn: ' + reduce(s = '', x IN missing | s + CASE WHEN s = '' THEN '' ELSE ', ' END + x)
+          END AS _error
+      - cypher: |
+          CREATE (a:Assumption {id: $id, text: $text, embedding: $embedding, recorded_at: datetime($now), recorded_by: $by})
+          WITH a
+          CALL (a) {
+            UNWIND coalesce($decisions, []) AS x MATCH (d:Decision {id: x})
+            MERGE (d)-[r:RESTS_ON]->(a) SET r.recorded_at = a.recorded_at, r.recorded_by = $by
+            RETURN count(*) AS decisions
+          }
+          RETURN a.id AS id, a.recorded_at AS recorded_at, decisions
+        single: true
+
+  - name: link
+    title: Link a decision
+    kind: write
+    view: receipt
+    description: >-
+      Link an existing decision to another decision it SUPERSEDES or DEPENDS_ON,
+      or to an assumption it RESTS_ON.
+    input:
+      from: { type: id, required: true, description: The decision the link starts from }
+      relation: { type: enum, values: [SUPERSEDES, DEPENDS_ON, RESTS_ON], required: true, description: How the decision relates to the other item }
+      to: { type: id, required: true, description: The decision, or for RESTS_ON the assumption, it points to }
+    steps:
+      - cypher: |
+          OPTIONAL MATCH (a:Decision {id: $from})
+          OPTIONAL MATCH (b:Decision|Assumption {id: $to})
+          RETURN CASE
+            WHEN a IS NULL OR a.withdrawn_at IS NOT NULL THEN 'No current decision ' + $from + '.'
+            WHEN b IS NULL OR b.withdrawn_at IS NOT NULL THEN 'No current decision or assumption ' + $to + '.'
+            WHEN $from = $to THEN 'A decision cannot link to itself.'
+            WHEN $relation = 'RESTS_ON' AND NOT b:Assumption THEN 'RESTS_ON links a decision to an assumption.'
+            WHEN $relation <> 'RESTS_ON' AND NOT b:Decision THEN $relation + ' links two decisions.'
+            WHEN EXISTS { MATCH (a)-[r]->(b) WHERE type(r) = $relation } THEN 'That link already exists.'
+          END AS _error
+      - cypher: |
+          MATCH (a:Decision {id: $from}), (b:Decision|Assumption {id: $to})
+          FOREACH (_ IN CASE WHEN $relation = 'SUPERSEDES' THEN [1] ELSE [] END |
+            CREATE (a)-[:SUPERSEDES {recorded_at: datetime($now), recorded_by: $by}]->(b))
+          FOREACH (_ IN CASE WHEN $relation = 'DEPENDS_ON' THEN [1] ELSE [] END |
+            CREATE (a)-[:DEPENDS_ON {recorded_at: datetime($now), recorded_by: $by}]->(b))
+          FOREACH (_ IN CASE WHEN $relation = 'RESTS_ON' THEN [1] ELSE [] END |
+            CREATE (a)-[:RESTS_ON {recorded_at: datetime($now), recorded_by: $by}]->(b))
+          RETURN $from AS from, $relation AS relation, $to AS to
+        single: true
+
+  - name: invalidate_assumption
+    title: Mark an assumption false
+    kind: write
+    description: >-
+      Record that an assumption turned out to be false, and why. It stays in the
+      graph; needs_review then lists every current decision that rests on it.
+    input:
+      id: { type: id, required: true, description: The assumption }
+      because: { type: string, required: true, max_length: 1000, description: What showed it to be false }
+    steps:
+      - cypher: |
+          OPTIONAL MATCH (a:Assumption {id: $id})
+          RETURN CASE
+            WHEN a IS NULL OR a.withdrawn_at IS NOT NULL THEN 'No current assumption ' + $id + '.'
+            WHEN a.invalidated_at IS NOT NULL THEN $id + ' is already marked false.'
+          END AS _error
+      - cypher: |
+          MATCH (a:Assumption {id: $id})
+          SET a.invalidated_at = datetime($now), a.invalidated_by = $by, a.invalidated_because = $because
+          WITH a
+          RETURN a.id AS id, a.invalidated_at AS invalidated_at,
+                 [(d:Decision)-[:RESTS_ON]->(a) WHERE d.withdrawn_at IS NULL | d.id] AS decisions_to_review
+        single: true
+
+  - name: withdraw
+    title: Withdraw an item
+    kind: write
+    description: >-
+      Take back a decision, option or assumption you recorded by mistake. It stays
+      in the history. To change a decision, prefer record_decision with
+      supersedes; to say an assumption was wrong, use invalidate_assumption. Only
+      its author or an admin can withdraw it.
+    input:
+      id: { type: id, required: true, description: The decision, option or assumption }
+      reason: { type: string, max_length: 500, description: Why it is withdrawn }
+    steps:
+      - cypher: |
+          OPTIONAL MATCH (n:Decision|Option|Assumption {id: $id})
+          RETURN CASE
+            WHEN n IS NULL THEN 'No item ' + $id + '.'
+            WHEN n.withdrawn_at IS NOT NULL THEN $id + ' is already withdrawn.'
+            WHEN n.recorded_by <> $by AND $role <> 'admin'
+              THEN 'Only its author (' + n.recorded_by + ') or an admin can withdraw it.'
+          END AS _error
+      - cypher: |
+          MATCH (n:Decision|Option|Assumption {id: $id})
+          SET n.withdrawn_at = datetime($now), n.withdrawn_by = $by, n.withdraw_reason = $reason
+          RETURN n.id AS id, n.withdrawn_at AS withdrawn_at
+        single: true
+
+  - name: search
+    title: Search
+    kind: read
+    description: >-
+      Find decisions, options and assumptions related to a text, ranked by hybrid
+      search (meaning plus keywords). Search before recording, to avoid
+      duplicates and to find what to supersede or depend on.
+    input:
+      query: { type: string, required: true, max_length: 1000, description: What to look for }
+      at: { type: datetime, description: Search the graph as it stood at this time (ISO 8601). Default now. }
+      limit: { type: integer, min: 1, max: 50, default: 10, description: How many results }
+    derive:
+      query_vector: { embed: query }
+      query_terms: { terms: query }
+    steps:
+      - cypher: |
+          MATCH (n:Decision|Option|Assumption) SEARCH n IN (COMBINE (
+            VECTOR INDEX search_embedding FOR $query_vector LIMIT 100 WEIGHT 1,
+            FULLTEXT INDEX search_text FOR $query_terms LIMIT 100 WEIGHT 1
+          ) USING WRRF WITH CONSTANT 60 LIMIT 100) SCORE AS score
+          WITH n, score, datetime(coalesce($at, $now)) AS T
+          WITH n, score, T
+          WHERE {{live n}}
+          RETURN n.id AS id,
+                 CASE WHEN n:Decision THEN 'decision' WHEN n:Option THEN 'option' ELSE 'assumption' END AS kind,
+                 n.text AS text,
+                 CASE WHEN n:Decision THEN {{current_decision n}} END AS current,
+                 CASE WHEN n:Assumption THEN {{invalidated n}} END AS invalidated,
+                 n.recorded_at AS recorded_at, n.recorded_by AS recorded_by,
+                 round(score, 4) AS score
+          ORDER BY score DESC
+          LIMIT $limit
+
+  - name: decisions
+    title: Current decisions
+    kind: read
+    description: >-
+      List the decisions that stood at a moment (default now), newest first, with
+      why, the options chosen and rejected, and what each rests on and depends
+      on. Give at to see what had been decided back then.
+    input:
+      at: { type: datetime, description: The moment to look at (ISO 8601). Default now. }
+      limit: { type: integer, min: 1, max: 200, default: 50, description: How many decisions }
+    steps:
+      - cypher: |
+          WITH datetime(coalesce($at, $now)) AS T
+          MATCH (d:Decision)
+          WHERE {{current_decision d}}
+          WITH d, T ORDER BY d.recorded_at DESC LIMIT $limit
+          RETURN d.id AS id, d.text AS text, d.rationale AS rationale, d.decided_by AS decided_by, d.decided_on AS decided_on,
+                 d.source AS source, d.recorded_at AS recorded_at, d.recorded_by AS recorded_by,
+                 [(d)-[r:CHOSE]->(o:Option) WHERE r.recorded_at <= T AND (o.withdrawn_at IS NULL OR o.withdrawn_at > T) | o.text] AS chose,
+                 [(d)-[r:REJECTED]->(o:Option) WHERE r.recorded_at <= T AND (o.withdrawn_at IS NULL OR o.withdrawn_at > T) | {option: o.text, reason: r.reason}] AS rejected,
+                 [(d)-[r:RESTS_ON]->(a:Assumption) WHERE r.recorded_at <= T AND (a.withdrawn_at IS NULL OR a.withdrawn_at > T) | {id: a.id, text: a.text, false: a.invalidated_at IS NOT NULL AND a.invalidated_at <= T}] AS rests_on,
+                 [(d)-[r:DEPENDS_ON]->(x:Decision) WHERE r.recorded_at <= T | x.id] AS depends_on,
+                 [(d)-[r:SUPERSEDES]->(x:Decision) WHERE r.recorded_at <= T | x.id] AS supersedes
+
+  - name: needs_review
+    title: Decisions that need review
+    kind: read
+    view: conflicts
+    description: >-
+      List current decisions that rest on an assumption since found false, or
+      depend on a decision that has since been superseded or withdrawn, with the
+      cause. A person should revisit each: supersede it with a new decision, or
+      record why it still stands.
+    input:
+      at: { type: datetime, description: The moment to look at (ISO 8601). Default now. }
+    steps:
+      - cypher: |
+          WITH datetime(coalesce($at, $now)) AS T
+          MATCH (d:Decision)
+          WHERE {{current_decision d}}
+          WITH d, T,
+               [(d)-[r:RESTS_ON]->(a:Assumption)
+                 WHERE r.recorded_at <= T AND {{live a}} AND {{invalidated a}}
+                 | a {.id, .text, .recorded_by, .recorded_at, why: 'assumption found false: ' + coalesce(a.invalidated_because, '')}] AS false_assumptions,
+               [(d)-[r:DEPENDS_ON]->(x:Decision)
+                 WHERE r.recorded_at <= T AND x.recorded_at <= T AND NOT ({{current_decision x}})
+                 | x {.id, .text, .recorded_by, .recorded_at,
+                      why: CASE WHEN x.withdrawn_at IS NOT NULL AND x.withdrawn_at <= T THEN 'depends on a withdrawn decision' ELSE 'depends on a superseded decision' END}] AS stale_dependencies
+          UNWIND false_assumptions + stale_dependencies AS cause
+          RETURN d {.id, .text, .recorded_by, .recorded_at} AS decision,
+                 cause {.id, .text, .recorded_by, .recorded_at} AS because_of,
+                 cause.why AS why
+          ORDER BY d.recorded_at DESC
+
+  - name: history
+    title: History of an item
+    kind: read
+    description: >-
+      Show one decision, option or assumption with every link into and out of
+      it, including superseded and withdrawn ones, with who recorded each and when.
+    input:
+      id: { type: id, required: true, description: The decision, option or assumption }
+    steps:
+      - cypher: |
+          OPTIONAL MATCH (n:Decision|Option|Assumption {id: $id})
+          RETURN CASE WHEN n IS NULL THEN 'No item ' + $id + '.' END AS _error
+      - cypher: |
+          MATCH (n:Decision|Option|Assumption {id: $id})
+          RETURN CASE WHEN n:Decision THEN 'decision' WHEN n:Option THEN 'option' ELSE 'assumption' END AS kind,
+                 n {.id, .text, .rationale, .decided_by, .decided_on, .source, .recorded_at, .recorded_by,
+                    .invalidated_at, .invalidated_by, .invalidated_because,
+                    .withdrawn_at, .withdrawn_by, .withdraw_reason} AS item,
+                 [(n)-[r]->(x) | {direction: 'out', type: type(r), id: x.id, text: x.text, reason: r.reason, recorded_at: r.recorded_at, recorded_by: r.recorded_by}]
+                 + [(x)-[r]->(n) | {direction: 'in', type: type(r), id: x.id, text: x.text, reason: r.reason, recorded_at: r.recorded_at, recorded_by: r.recorded_by}] AS links
+        single: true
+
+  - name: recent
+    title: Recent changes
+    kind: read
+    description: >-
+      What was recorded, marked false or withdrawn since a moment, newest first.
+      Use it to catch up at the start of a session.
+    input:
+      since: { type: datetime, required: true, description: Changes after this time (ISO 8601) }
+      limit: { type: integer, min: 1, max: 200, default: 50, description: How many changes }
+    steps:
+      - cypher: |
+          MATCH (n:Decision|Option|Assumption)
+          WHERE n.recorded_at > datetime($since) OR n.withdrawn_at > datetime($since) OR n.invalidated_at > datetime($since)
+          RETURN n.id AS id,
+                 CASE WHEN n:Decision THEN 'decision' WHEN n:Option THEN 'option' ELSE 'assumption' END AS kind,
+                 n.text AS text, n.recorded_at AS recorded_at, n.recorded_by AS recorded_by,
+                 n.invalidated_at AS invalidated_at, n.withdrawn_at AS withdrawn_at, n.withdrawn_by AS withdrawn_by
+          ORDER BY coalesce(n.withdrawn_at, n.invalidated_at, n.recorded_at) DESC
+          LIMIT $limit

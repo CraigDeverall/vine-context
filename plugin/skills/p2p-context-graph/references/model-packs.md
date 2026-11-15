@@ -29,6 +29,7 @@ nodes:
   Decision:                 # a Cypher label
     description: A choice the team made, with its reasons.
     key: id                 # creates a uniqueness constraint
+    title: text             # optional: the property views show as the node's label
     properties:             # documentation for agents and people; not enforced
       id: { type: id, required: true }
       text: { type: string, required: true, description: What was decided }
@@ -43,6 +44,10 @@ relationships:
 search:                     # optional: makes these labels searchable
   labels: [Decision]        # one vector index and one full-text index across them
   text: text                # the property both indexes read
+
+time:                       # optional: lets the explorer show the graph at any moment
+  recorded: recorded_at     # when a node or relationship entered the graph
+  ended: withdrawn_at       # optional: when a node stopped being current
 ```
 
 Property types are `string`, `integer`, `number`, `boolean`, `date`,
@@ -52,6 +57,10 @@ With `search`, the server creates a vector index called `search_embedding`
 (on the property `embedding`) and a full-text index called `search_text`.
 Tools write the `embedding` property through a derived parameter (see below),
 and query both indexes together with `COMBINE`.
+
+Without `title`, views label a node with its `search.text` property, else its
+key. Without `time`, the explorer shows the graph as it is now, with no time
+slider. Nodes without a `key` don't appear in the explorer.
 
 ## tools.yaml
 
@@ -136,6 +145,26 @@ are passed to it.
   step has a `name`, it returns an object with each named step's rows instead.
 - Temporal values come back as ISO strings. The `embedding` property is never
   returned.
+
+### Views
+
+A tool can name a built-in view that shows its result where the agent
+supports MCP Apps (or in `p2pcg ui`):
+
+```yaml
+  - name: add_decision
+    kind: write
+    view: receipt             # what was written, with an undo button
+    undo: { tool: withdraw }  # calls withdraw with { id: result.id }
+```
+
+- `receipt` (write tools) shows the call's input and result. With `undo`, it
+  offers to call `undo.tool` with `{ [undo.arg]: result[undo.field] }`; `arg`
+  and `field` default to `id`. The undo tool must exist; it is only offered to
+  callers whose role allows it.
+- `conflicts` shows rows that hold two items (map values, such as
+  `a {.id, .text} AS claim, b {.id, .text} AS contradicts`) side by side,
+  with the row's other columns as details.
 
 ### Fragments
 

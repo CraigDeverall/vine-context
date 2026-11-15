@@ -33,6 +33,8 @@ tools:
   - name: add_claim
     title: Add a claim
     kind: write
+    view: receipt
+    undo: { tool: withdraw }
     description: >-
       Record one statement you or the person believe is true, in one or two
       sentences. Link it to existing claims it supports, contradicts or replaces,
@@ -97,6 +99,8 @@ tools:
   - name: ask_question
     title: Ask a question
     kind: write
+    view: receipt
+    undo: { tool: withdraw }
     description: >-
       Record something the group needs to find out. Link it to the claims or
       questions it is about. It stays open until a current claim answers it
@@ -131,6 +135,7 @@ tools:
   - name: link
     title: Link two items
     kind: write
+    view: receipt
     description: >-
       Link an existing claim to another claim (SUPPORTS, CONTRADICTS, REPLACES)
       or to a question it answers (ANSWERS). Use it when you notice a relation
@@ -273,6 +278,7 @@ tools:
   - name: conflicts
     title: Conflicts
     kind: read
+    view: conflicts
     description: >-
       List pairs of current claims where one contradicts the other: what a person
       needs to settle, by recording a claim that replaces one or both.

@@ -13,10 +13,12 @@ Commands:
   host [--graph NAME] [--model PACK] [--share] [--idle SECONDS]
                                       Run a graph's host in the foreground
   host stop [--graph NAME]            Stop a graph's host
+  ui [--graph NAME] [--port N] [--open]
+                                      Show the console, explorer and model studio in a browser
   status [--graph NAME]               Show a graph's host: sharing, link, peers
   whoami                              Show your name and key fingerprint
   doctor                              Check that this machine can run p2pcg
-  model list                          List the built-in model packs
+  model list                          List the model packs you can use
   model validate <dir>                Check a model pack, and try it on a scratch graph
   --version                           Print the version
 
@@ -31,11 +33,9 @@ Environment:
 const graphOpts = { graph: { type: "string" }, model: { type: "string" } } as const;
 const graphName = (v?: string) => v ?? process.env.P2PCG_GRAPH ?? "default";
 
-async function mcp(args: string[]) {
-  const { values } = parseArgs({ args, options: graphOpts });
-  const [{ Session }, { StdioServerTransport }, { ensureHost }, { defaultDataDir }, { loadIdentity, defaultName }, signal] = await Promise.all([
+async function sessionFactory(values: { graph?: string; model?: string }) {
+  const [{ Session }, { ensureHost }, { defaultDataDir }, { loadIdentity, defaultName }, signal] = await Promise.all([
     import("../mcp/server.js"),
-    import("@modelcontextprotocol/sdk/server/stdio.js"),
     import("../host/client.js"),
     import("../core/graph.js"),
     import("../core/identity.js"),
@@ -43,16 +43,52 @@ async function mcp(args: string[]) {
   ]);
   const dataDir = defaultDataDir();
   const graph = graphName(values.graph);
-  const session = new Session({
-    local: () => ensureHost({ dataDir, graph, model: values.model ?? process.env.P2PCG_MODEL }),
-    identity: () => loadIdentity(dataDir, defaultName()),
-    signal: signal.nostrSignaller,
-    ice: signal.iceServers(),
-    log: (m) => console.error(`p2pcg: ${m}`),
-  });
+  const log = (m: string) => console.error(`p2pcg: ${m}`);
+  let ui: Promise<{ url: string }> | undefined;
+  const make = (withBrowserView: boolean): InstanceType<typeof Session> =>
+    new Session({
+      local: () => ensureHost({ dataDir, graph, model: values.model ?? process.env.P2PCG_MODEL }),
+      openLocal: (g, model) => ensureHost({ dataDir, graph: g, model }),
+      dataDir,
+      identity: () => loadIdentity(dataDir, defaultName()),
+      signal: signal.nostrSignaller,
+      ice: signal.iceServers(),
+      log,
+      browserView: withBrowserView
+        ? async () => {
+            ui ??= import("../ui/server.js").then(({ startUi }) => startUi({ session: () => make(false), log }));
+            return (await ui).url;
+          }
+        : undefined,
+    });
+  return { make, graph, log };
+}
+
+async function mcp(args: string[]) {
+  const { values } = parseArgs({ args, options: graphOpts });
+  const { StdioServerTransport } = await import("@modelcontextprotocol/sdk/server/stdio.js");
+  const { make, graph, log } = await sessionFactory(values);
+  const session = make(true);
   await session.start();
   await session.server.connect(new StdioServerTransport());
-  console.error(`p2pcg: session on graph '${graph}' ready on stdio`);
+  log(`session on graph '${graph}' ready on stdio`);
+}
+
+async function ui(args: string[]): Promise<number> {
+  const { values } = parseArgs({ args, options: { ...graphOpts, port: { type: "string" }, open: { type: "boolean" } } });
+  const { make, log } = await sessionFactory(values);
+  const { startUi } = await import("../ui/server.js");
+  const server = await startUi({ session: () => make(false), port: values.port ? Number(values.port) : undefined, log });
+  console.log(`Open this on this machine (it acts as you; don't share it):\n${server.url}`);
+  if (values.open) {
+    const { spawn } = await import("node:child_process");
+    const cmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "explorer" : "xdg-open";
+    spawn(cmd, [server.url], { stdio: "ignore", detached: true }).unref();
+  }
+  const stop = () => void server.close().then(() => process.exit(0));
+  process.on("SIGINT", stop);
+  process.on("SIGTERM", stop);
+  return -1;
 }
 
 async function host(args: string[]): Promise<number> {
@@ -194,35 +230,19 @@ async function doctor(): Promise<number> {
 
 async function model(args: string[]): Promise<number> {
   const [sub, dir] = args;
-  const { listBuiltinPacks, loadPack, resolvePack, PackError } = await import("../core/pack.js");
+  const { listPacks, resolvePack } = await import("../core/pack.js");
   if (sub === "list") {
-    for (const name of listBuiltinPacks()) {
-      const p = resolvePack(name);
-      console.log(`${name}  ${p.model.title}: ${p.tools.length} tools`);
+    for (const entry of listPacks()) {
+      const p = resolvePack(entry.dir);
+      console.log(`${entry.name}  ${p.model.title}: ${p.tools.length} tools (${entry.source})`);
     }
     return 0;
   }
   if (sub === "validate" && dir) {
-    try {
-      const pack = loadPack(dir);
-      const { mkdtempSync, rmSync } = await import("node:fs");
-      const { tmpdir } = await import("node:os");
-      const { join } = await import("node:path");
-      const { Graph } = await import("../core/graph.js");
-      const scratch = mkdtempSync(join(tmpdir(), "p2pcg-validate-"));
-      try {
-        // Opening a scratch graph applies the model's constraints, indexes and migrations.
-        const g = await Graph.open({ name: "validate", dataDir: scratch, model: pack.dir });
-        console.log(`ok  ${pack.model.name} v${pack.model.version}: ${Object.keys(pack.model.nodes).length} node types, ${pack.tools.length} tools, schema applied`);
-        console.log(`    tools: ${g.tools.map((t) => `${t.name} (${t.kind})`).join(", ")}`);
-      } finally {
-        rmSync(scratch, { recursive: true, force: true });
-      }
-      return 0;
-    } catch (e) {
-      console.error(e instanceof PackError ? e.message : `error: ${(e as Error).message}`);
-      return 1;
-    }
+    const { validatePack, formatReport } = await import("../core/validate.js");
+    const report = await validatePack(dir);
+    console.log(formatReport(report));
+    return report.ok ? 0 : 1;
   }
   console.error("Usage: p2pcg model list | p2pcg model validate <dir>");
   return 2;
@@ -238,6 +258,11 @@ switch (command) {
     break;
   case "host": {
     const code = await host(rest);
+    if (code >= 0) process.exitCode = code;
+    break;
+  }
+  case "ui": {
+    const code = await ui(rest);
     if (code >= 0) process.exitCode = code;
     break;
   }

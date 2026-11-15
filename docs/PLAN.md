@@ -29,28 +29,33 @@ public STUN and a signalling relay that sees encrypted handshakes only.
 
 ## 2. How we will be judged
 
-The five criteria are weighted equally (Rules §5). Every milestone should move at
-least one of them, and the demo should show all five.
+The published rubric (devpost "Judging Criteria", 100 points). Every milestone
+should move at least one criterion, and the demo should show all five. Judges
+must be able to clone, run and see the graph without asking us anything.
 
-| Criterion | What judges look for | How we answer it | Proof in the submission |
-|---|---|---|---|
-| **Creativity** | An original idea and approach | Agents on different machines share one graph peer to peer, with no server. The graph's *model* is a pluggable pack that the skill can help write. | The demo opens with two laptops and no cloud. |
-| **Usefulness** | It solves a real problem | Teams' AI sessions are silos: what one person's agent learns, nobody else's sees. The shared graph keeps claims, questions and contradictions across people and over time. | A realistic scenario: three people investigating one problem. |
-| **Completeness** | It works end to end from the setup instructions | One install command, one command to host, one to join. CI runs a two-peer test on every push. | A judge follows the README on a clean machine in under 5 minutes. |
-| **Clarity** | The write-up, demo and visuals | A short README with a diagram, a 2-minute video, and MCP App screenshots. | Video ≤ 2 min, README "Quickstart" ≤ 10 lines. |
-| **Effective use of connected context** | Use of Relate's graph, retrieval and agent features | Relate's graph model, hybrid search (vector + full-text with `COMBINE`), temporal queries ("what did we believe on 1 Dec?"), and Relate's MCP surface for the host's own agent. | Each Relate feature used is listed in the README with the query that uses it. |
+| Criterion | Points | What judges look for | How we answer it | Proof in the submission |
+|---|---|---|---|---|
+| **Relate and connected context** | 30 | Relate's relationships carry the main use case; judges can follow the instructions, run it, and explore with Relate working as described | Relationships *are* the answers: SUPPORTS/CONTRADICTS/REPLACES give `beliefs` and `conflicts`; RESTS_ON/DEPENDS_ON/SUPERSEDES give `needs_review`. Hybrid search (`COMBINE` vector + full-text), record-time queries ("what did we believe on 1 Dec?"), the explorer's time slider, and a persistent directory store judges can open with Relate's own CLI | README "How it uses Relate" lists each feature with the query that uses it; a sample store in the repo |
+| **Functionality and completeness** | 25 | How much of the core use case works | Host, share, join, approve, roles, two model packs, five views, the localhost page; CI on every push | A judge reaches a first result from the README in under 5 minutes |
+| **Usefulness** | 20 | A real problem for a clear user, and the project shows it | Teams' AI sessions are silos: what one person's agent learns, nobody else's sees. The shared graph keeps claims, questions, decisions and contradictions across people and over time | A realistic scenario in the video: people investigating one incident |
+| **Documentation and reproducibility** | 15 | The README explains the project and how to try it | The devpost README template, followed section by section; one install command; `doctor`; no account, API key or model download | README Quickstart ≤ 10 lines |
+| **Creativity** | 10 | A fresh idea or an inventive use of Relate | Agents on different machines share one embedded graph peer to peer, with no server; the graph's model is a pluggable pack the skill helps write | The demo opens with two machines and no cloud |
 
-### Submission checklist (Rules §3–4)
+### Submission checklist (devpost rules and "Requirements")
 
-- [ ] Public GitHub repo, topic **`relate`** (required) and `relate-neo4j-hackathon`.
+- [ ] Public GitHub repo, topic **`relate`** (required: it's how entries are found) and `relate-neo4j-hackathon`.
 - [x] Open-source licence: Apache-2.0, the same as Relate.
-- [ ] Title and description: what it does and why it is useful.
-- [ ] Setup instructions a judge can run.
-- [ ] A demo video of up to 2 minutes, made by us and viewable without a login, plus screenshots.
+- [ ] Project description on devpost: the use case, and what connects to what.
+- [ ] README following the template: one-line pitch; Use case (which relationships matter); How it uses Relate (**mode: directory**, why, what the graph models); Setup and run; Where the data lives (path to the store in the repo).
+- [ ] **A persistent Relate store in the repo** (a directory judges can inspect, e.g. `examples/incident-graph/`), made by a script from the demo scenario, plus how to open it with the `relate` CLI.
+- [ ] Working code with Relate actually running (not prompts only).
+- [ ] A demo video of 1–2 minutes, made by us and viewable without a login, plus screenshots.
 - [ ] A statement of the Relate capabilities, third-party tools and **AI tools** used.
 - [ ] Disclosure of reused earlier code (see §3).
 - [ ] Use Relate's name and logo only to identify the product; no implied endorsement.
 - [ ] Submit before **Fri 11 Dec 2026, 6:00 PM PST** (Sat 12 Dec, 3:00 PM NZDT). Keep the repo public and tagged until winners are announced on 17 Dec.
+
+Links: [relatedb.ai](https://relatedb.ai/), [install](https://relatedb.ai/docs/get-started/install/), [github.com/relatedb/relate](https://github.com/relatedb/relate), [relate-ideas](https://github.com/jexp/relate-ideas).
 
 ## 3. Provenance and reused code
 
@@ -324,8 +329,20 @@ Decided:
 
 Open:
 
-1. **A semantic embedder.** M1 ships a hashing embedder (offline, no download,
-   word and fragment matches only) behind an `Embedder` interface. A local
-   MiniLM through transformers.js would make search match meaning, but it adds
-   about 100 MB of native dependencies. Decide in M3.
-2. The second model pack: `decision-log` or `research-notes`.
+- None blocking. Revisit after the hackathon: an optional semantic embedder.
+
+Decided in M3 (16 Nov):
+
+- **Embedder:** keep the offline `hash-256` embedder as the default. A local
+  MiniLM (transformers.js) would make search match meaning, but it adds about
+  100 MB of native dependencies and a model download on first run, which works
+  against "clone, run, see it without asking" (reproducibility, 15 points).
+  Hybrid search still uses both Relate indexes through `COMBINE`. The
+  `Embedder` interface stays, so a semantic embedder can be added later as an
+  opt-in without changing packs.
+- **Second pack:** `decision-log` (decisions, options, assumptions; `needs_review`
+  follows RESTS_ON and DEPENDS_ON to find decisions on stale foundations).
+- **MCP Apps:** ext-apps 1.7.5 (the line that targets MCP SDK 1.x). One React
+  bundle served as `ui://p2pcg/<view>`, run on Preact to keep it near 300 KB.
+  `p2pcg ui` / `browser_view` serve the same views on 127.0.0.1 for agents
+  without MCP Apps.

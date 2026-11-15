@@ -65,17 +65,41 @@ How it works:
 If two machines can't connect (some networks block direct connections), set a
 TURN server with `P2PCG_ICE=turn:user:pass@host:3478`.
 
+## See it
+
+Agents that support MCP Apps show views next to the tools:
+
+- **Console** (`open_console`): the join link, who is waiting with their key
+  fingerprint, who is connected, roles. Approve and remove people there.
+- **Explorer** (`explore_graph`): the graph as a picture, with a time slider
+  to see it as it stood at any moment.
+- **Model studio** (`model_studio`): the model, your packs and graphs; check,
+  install and switch.
+- **Receipts** on writes (with undo), and **conflicts** side by side.
+
+For agents without MCP Apps, `p2pcg ui --open` (or the `browser_view` tool)
+shows the same views in a browser tab, on 127.0.0.1 only, behind a one-time
+token.
+
 ## Context models
 
 A graph's **model pack** defines its node types, relationships and tools:
-parameterised Cypher, validated inputs, and instructions for agents. The
-built-in `temporal-claims` pack records dated claims that support,
-contradict, replace and answer each other, plus open questions. Every read
-tool can answer *as of* any past moment.
+parameterised Cypher, validated inputs, and instructions for agents. Two are
+built in:
+
+- **`temporal-claims`** (the default): dated claims that support, contradict,
+  replace and answer each other, plus open questions.
+- **`decision-log`**: decisions, the options weighed, and the assumptions they
+  rest on. `needs_review` follows the relationships to find decisions whose
+  assumptions turned out false or whose foundations were superseded.
+
+Every read tool can answer *as of* any past moment. Start a graph with a pack:
+`use_graph` (name, model), or `p2pcg mcp --graph decisions --model decision-log`.
 
 Write your own model with the help of the skill, or by hand. The format is in
 [plugin/skills/p2p-context-graph/references/model-packs.md](plugin/skills/p2p-context-graph/references/model-packs.md).
-Check a pack with `p2pcg model validate <dir>`.
+`validate_model` (or `p2pcg model validate <dir>`) checks a pack and runs
+every tool once on a scratch graph; `install_model` makes it available by name.
 
 ## Relate features used
 
@@ -87,6 +111,7 @@ Check a pack with `p2pcg model validate <dir>`.
 | Hybrid search, `SEARCH … COMBINE … USING WRRF` (preview `hybrid-search`) | the `search` tool |
 | Temporal types and `EXISTS {}` subqueries | the *as of* reads: `beliefs`, `open_questions`, `conflicts` |
 | Transactions (`begin`/`commit`/`rollback`) | every tool call is one transaction |
+| Pattern comprehensions and relationship traversal | `needs_review`, `decisions`, `history`; the explorer's snapshot |
 
 ## Licence
 

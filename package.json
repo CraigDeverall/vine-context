@@ -28,14 +28,15 @@
     "agent-skill"
   ],
   "scripts": {
-    "build": "tsup",
-    "typecheck": "tsc --noEmit",
+    "build": "tsup && node scripts/build-apps.mjs",
+    "typecheck": "tsc --noEmit && tsc -p apps",
     "test": "vitest run",
     "check": "npm run typecheck && npm test && npm run build",
     "spike:relate": "tsx spikes/relate-embedded.ts .data/spike-c",
     "spike:follower": "tsx spikes/relate-live-follower.ts .data/spike-b",
     "spike:host": "tsx spikes/p2p-star.ts host",
-    "spike:join": "tsx spikes/p2p-star.ts join"
+    "spike:join": "tsx spikes/p2p-star.ts join",
+    "build:apps": "node scripts/build-apps.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",
@@ -47,8 +48,15 @@
     "zod": "^4.6.7"
   },
   "devDependencies": {
+    "@modelcontextprotocol/ext-apps": "1.7.5",
     "@types/node": "^22.20.5",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
     "@types/ws": "^8.18.2",
+    "esbuild": "0.28.2",
+    "preact": "10.29.8",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
     "tsup": "^8.5.1",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",

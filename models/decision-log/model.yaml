@@ -1,0 +1,85 @@
+name: decision-log
+version: 1
+title: Decision Log
+description: >-
+  The decisions a group makes about a piece of work, why, what else was
+  considered, and what each decision assumes. Decisions supersede and depend on
+  each other. When an assumption turns out wrong, or a decision a later one
+  depends on is superseded, the graph shows which decisions need another look.
+  Nothing is deleted, so you can ask what was decided at any moment.
+
+nodes:
+  Decision:
+    description: One thing the group decided, with why. Current until superseded or withdrawn.
+    key: id
+    properties:
+      id: { type: id, required: true }
+      text: { type: string, required: true, description: What was decided, in one sentence }
+      rationale: { type: string, description: Why, in a sentence or two }
+      decided_by: { type: string, description: Who made the call (a person or a meeting), if not the recorder }
+      decided_on: { type: date, description: The day it was decided, if not the day it was recorded }
+      source: { type: string, description: Where it was decided or written down (a URL, a doc, a meeting) }
+      recorded_at: { type: datetime, required: true }
+      recorded_by: { type: string, required: true }
+      withdrawn_at: { type: datetime }
+      withdrawn_by: { type: string }
+      withdraw_reason: { type: string }
+
+  Option:
+    description: An alternative that was considered for a decision, and chosen or rejected.
+    key: id
+    properties:
+      id: { type: id, required: true }
+      text: { type: string, required: true }
+      recorded_at: { type: datetime, required: true }
+      recorded_by: { type: string, required: true }
+      withdrawn_at: { type: datetime }
+      withdrawn_by: { type: string }
+      withdraw_reason: { type: string }
+
+  Assumption:
+    description: >-
+      Something a decision takes to be true. If it turns out false, it is
+      invalidated, and the decisions that rest on it need review.
+    key: id
+    properties:
+      id: { type: id, required: true }
+      text: { type: string, required: true }
+      recorded_at: { type: datetime, required: true }
+      recorded_by: { type: string, required: true }
+      invalidated_at: { type: datetime, description: When it was found to be false }
+      invalidated_by: { type: string }
+      invalidated_because: { type: string }
+      withdrawn_at: { type: datetime }
+      withdrawn_by: { type: string }
+      withdraw_reason: { type: string }
+
+relationships:
+  SUPERSEDES:
+    description: The first decision replaces the second from the moment it was recorded.
+    from: [Decision]
+    to: [Decision]
+  DEPENDS_ON:
+    description: The first decision only makes sense while the second stands.
+    from: [Decision]
+    to: [Decision]
+  RESTS_ON:
+    description: The decision assumes this is true.
+    from: [Decision]
+    to: [Assumption]
+  CHOSE:
+    description: The decision picked this option.
+    from: [Decision]
+    to: [Option]
+  REJECTED:
+    description: The decision turned this option down. Carries the reason.
+    from: [Decision]
+    to: [Option]
+
+search:
+  labels: [Decision, Option, Assumption]
+  text: text
+
+time:
+  recorded: recorded_at
+  ended: withdrawn_at

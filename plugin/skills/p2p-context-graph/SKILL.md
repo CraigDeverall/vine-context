@@ -18,10 +18,35 @@ The tools are on the `p2p-context-graph` MCP server. Two are always there:
 - `model_guide`: the model's own instructions. **Call it once before you first
   write in a conversation, and follow it.** It overrides general habits.
 
-The rest come from the model. For `temporal-claims` they are `add_claim`,
-`ask_question`, `link`, `withdraw`, `search`, `beliefs`, `open_questions`,
-`conflicts`, `history` and `recent`. When you join someone else's graph,
-these become *their* model's tools, limited by the role they gave you.
+The rest come from the model. Two models are built in:
+
+- `temporal-claims`: `add_claim`, `ask_question`, `link`, `withdraw`,
+  `search`, `beliefs`, `open_questions`, `conflicts`, `history`, `recent`.
+- `decision-log`: `record_decision`, `add_option`, `add_assumption`, `link`,
+  `invalidate_assumption`, `withdraw`, `search`, `decisions`, `needs_review`,
+  `history`, `recent`.
+
+When you join someone else's graph, these become *their* model's tools,
+limited by the role they gave you.
+
+## Views
+
+Some tools show an interactive view next to their result, where the agent
+supports MCP Apps:
+
+- `open_console`: sharing, the join link, who is waiting (with fingerprints),
+  roles. The person can approve and remove people there themselves.
+- `explore_graph`: the graph as a picture, at any moment in its history. You
+  get only a summary; it's for the person to look at.
+- `model_studio`: the current model, the packs and graphs on this machine,
+  and checking and installing a pack.
+- Write tools such as `add_claim` show a receipt with an undo button, and
+  `conflicts` / `needs_review` show the two sides together.
+
+Offer the console when the person shares or someone is waiting, and the
+explorer when they want to see the graph. If this agent can't show views, call
+`browser_view` and give the person the link: the same views in a browser tab
+on this machine. Tell them not to share that link; it acts as them.
 
 ## Sharing and joining
 
@@ -64,24 +89,38 @@ People can define their own models: the node types, relationships, and the
 tools agents get. When asked to create or change one, follow
 [references/model-packs.md](references/model-packs.md):
 
-1. **Interview** briefly. What is the work? What do people need to look up
-   later? What changes over time, and does the history matter? Who writes:
-   agents, people, or both?
-2. **Draft** the pack: `model.yaml` (shape), `tools.yaml` (operations, with
-   parameterised Cypher), and `instructions.md` (when and how agents use it).
-   Start from `temporal-claims` when the work is about findings and questions.
-   Keep tools few and task-shaped, like `add_decision` and `open_risks`, not
-   generic CRUD.
-3. **Validate**: `npx p2p-context-graph model validate <dir>`. It checks the
-   files and applies the schema to a scratch graph. Fix every error it lists.
-4. **Try it**: open a test graph with the pack
-   (`P2PCG_GRAPH=try-<name> P2PCG_MODEL=<dir>`), call each tool once, and read
-   the results.
-5. Show the person the model and the tool list before they use it on a real
-   graph. A graph keeps the model it was created with.
+1. **Check the built-ins first.** If `temporal-claims` (findings and
+   questions) or `decision-log` (decisions, options, assumptions) fits, use it.
+   A new model is worth it when people need to look things up in a shape
+   neither has.
+2. **Interview** briefly, one question at a time. What is the work? What will
+   people need to look up later, as questions they'd ask? Which relationships
+   answer those questions? What changes over time, and does the history
+   matter? Who writes: agents, people, or both?
+3. **Sketch it back** in a few lines before writing files: node types, the
+   relationships between them, and the 6–10 tools, each named for a task
+   (`record_decision`, `open_risks`), not generic CRUD. Include at least one
+   read that only a graph answers well, by following relationships (like
+   `needs_review`). Get the person's yes.
+4. **Write the pack** in a folder of the person's choosing: `model.yaml`,
+   `tools.yaml`, `instructions.md`. Copy the closest built-in pack as a
+   starting point (its folder is in `model_studio`'s pack list) and change it.
+   Give nodes `recorded_at`/`recorded_by` and a `time:` section so the
+   explorer can show history. Give write tools `view: receipt` and an `undo`.
+5. **Check it** with `validate_model` (absolute path). It checks the files and
+   runs every tool once on a scratch graph. Fix every failure and check again.
+   "Sample refused" only means the tool's own checks refused made-up input.
+6. **Install and try**: `install_model`, then `use_graph` with a new graph name
+   and the pack's name. Call the main tools once with realistic input and show
+   the person the results, or open `model_studio` / `explore_graph`.
+7. A graph keeps the model it was created with. To change a pack later, bump
+   its `version`, add migrations if existing data must change, and install it
+   again.
 
 ## Troubleshooting
 
+- `npx p2p-context-graph model validate <dir>` is the same check as
+  `validate_model`, from a terminal.
 - `npx p2p-context-graph doctor` checks Node, Relate, WebRTC support, the model
   packs and the data folder.
 - Each graph has one host process on this machine (`p2pcg status` shows it,

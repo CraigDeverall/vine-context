@@ -149,6 +149,8 @@ export class Host {
         return this.call(this.me, p.tool, p.args);
       case "info":
         return { ...(await this.graph.info()), host: this.o.user, sharing: this.sharingSummary() };
+      case "snapshot":
+        return this.graph.snapshot(p);
       case "share":
         return this.share();
       case "unshare":
@@ -176,6 +178,7 @@ export class Host {
     const p = (req.params ?? {}) as Record<string, any>;
     if (req.method === "describe") return this.graph.describe(this.o.user, caller);
     if (req.method === "info") return this.graph.info();
+    if (req.method === "snapshot") return this.graph.snapshot(p); // a read: every role may
     return this.call(caller, p.tool, p.args);
   }
 

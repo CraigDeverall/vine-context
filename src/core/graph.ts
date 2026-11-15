@@ -6,13 +6,13 @@
 // `_error` column, in any step, rolls the call back and becomes the error.
 
 import { mkdirSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { randomInt } from "node:crypto";
 import { z } from "zod";
 import { contentWords, makeEmbedder, type Embedder } from "./embed.js";
 import { resolvePack, type InputSpecT, type Model, type Pack, type ToolSpec } from "./pack.js";
 import { loadRelate, type Connection, type Database, type RelateModule } from "./relate.js";
+import { defaultDataDir } from "./paths.js";
 import { toJson } from "./values.js";
 import type { GraphDescription } from "../p2p/protocol.js";
 
@@ -28,9 +28,10 @@ export interface Caller {
 /** A failure the agent should see and can act on. */
 export class ToolError extends Error {}
 
-export function defaultDataDir(): string {
-  return process.env.P2PCG_DATA_DIR ?? join(process.env.XDG_DATA_HOME ?? join(homedir(), ".local", "share"), "p2p-context-graph");
-}
+/** Relate refused a tool's Cypher: a bug in the pack, not in the caller's input. */
+export class QueryError extends ToolError {}
+
+export { defaultDataDir } from "./paths.js";
 
 const ID_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789";
 function newId(prefix: string): string {
@@ -104,6 +105,48 @@ interface Store {
 }
 const openStores = new Map<string, Store>();
 
+export interface SnapshotSchema {
+  nodes: {
+    label: string;
+    description: string;
+    key: string | null;
+    title: string | null;
+    properties: { name: string; type: string; required: boolean; description: string | null }[];
+  }[];
+  relationships: { type: string; description: string; from: string[]; to: string[] }[];
+  time: { recorded: string; ended?: string } | null;
+}
+export interface SnapshotNode {
+  /** Label:key, unique across labels. */
+  id: string;
+  key: string;
+  label: string;
+  title: string;
+  /** Ended (for example withdrawn) at or before the snapshot's time. */
+  ended: boolean;
+  props: Record<string, unknown>;
+}
+export interface SnapshotEdge {
+  type: string;
+  source: string;
+  target: string;
+  props: Record<string, unknown>;
+}
+export interface Snapshot {
+  graph: string;
+  model: string;
+  at: string;
+  schema: SnapshotSchema;
+  nodes: SnapshotNode[];
+  edges: SnapshotEdge[];
+  truncated: boolean;
+}
+
+function recordedOf(n: SnapshotNode, time: Model["time"]): number {
+  const v = time ? n.props[time.recorded] : undefined;
+  return typeof v === "string" ? Date.parse(v) : 0;
+}
+
 export class Graph {
   private validators = new Map<string, z.ZodType>();
 
@@ -150,7 +193,7 @@ export class Graph {
 
     const found = conn.query("MATCH (m:_P2pcgMeta {key: 'meta'}) RETURN m {.*} AS m").rows[0]?.m as Meta | undefined;
     const modelRef = opts.model ?? found?.model ?? process.env.P2PCG_MODEL ?? "temporal-claims";
-    const pack = resolvePack(modelRef);
+    const pack = resolvePack(modelRef, opts.dataDir);
     if (found && found.model !== pack.model.name)
       throw new ToolError(`Graph '${name}' uses the model '${found.model}', not '${pack.model.name}'.`);
     if (found && found.embedder !== embedder.name)
@@ -261,7 +304,7 @@ export class Graph {
       } catch (e) {
         this.conn.rollback();
         if (e instanceof ToolError) throw e;
-        if (e instanceof this.R.RelateError) throw new ToolError(`The graph refused the query: ${e.message}`);
+        if (e instanceof this.R.RelateError) throw new QueryError(`The graph refused the query: ${e.message}`);
         throw e;
       }
     });
@@ -292,9 +335,94 @@ export class Graph {
       host,
       model: { name: model.name, version: model.version, title: model.title, description: model.description },
       guide: this.guide(),
-      tools: this.tools.map((t) => ({ name: t.name, title: t.title, description: t.description, kind: t.kind, role: t.role, input: t.input })),
+      schema: this.schema(),
+      tools: this.tools.map((t) => ({
+        name: t.name,
+        title: t.title,
+        description: t.description,
+        kind: t.kind,
+        role: t.role,
+        input: t.input,
+        ...(t.view ? { view: t.view } : {}),
+        ...(t.undo ? { undo: t.undo } : {}),
+      })),
       you,
     };
+  }
+
+  /** The model's shape, for views: labels with their title property, and relationship types. */
+  schema(): SnapshotSchema {
+    const { model } = this;
+    return {
+      nodes: Object.entries(model.nodes).map(([label, n]) => ({
+        label,
+        description: n.description,
+        key: n.key ?? null,
+        title: n.title ?? (model.search && n.properties[model.search.text] ? model.search.text : (n.key ?? null)),
+        properties: Object.entries(n.properties).map(([name, p]) => ({ name, type: p.type, required: p.required, description: p.description ?? null })),
+      })),
+      relationships: Object.entries(model.relationships).map(([type, r]) => ({ type, description: r.description, from: r.from, to: r.to })),
+      time: model.time ?? null,
+    };
+  }
+
+  /**
+   * The graph as it stood at `at` (default now): its nodes, newest first, and
+   * the relationships between them. Works for any model: it reads the labels
+   * and relationship types from model.yaml, and the time properties from its
+   * `time` section if it has one.
+   */
+  async snapshot(o: { at?: string; limit?: number } = {}): Promise<Snapshot> {
+    const at = o.at ?? new Date().toISOString();
+    if (Number.isNaN(Date.parse(at))) throw new ToolError(`'at' must be an ISO 8601 date-time: '${at}'.`);
+    const limit = Math.min(Math.max(Math.trunc(o.limit ?? 200), 1), 1000);
+    const schema = this.schema();
+    const time = this.model.time;
+    return this.serial(async () => {
+      const nodes: SnapshotNode[] = [];
+      for (const n of schema.nodes) {
+        if (!n.key) continue; // nodes without a key can't be linked to in a view
+        const when = time ? `WHERE n.${time.recorded} IS NULL OR n.${time.recorded} <= datetime($at)` : "";
+        const order = time ? `ORDER BY n.${time.recorded} DESC` : "";
+        const r = await this.conn.queryAsync(`MATCH (n:${n.label}) ${when} RETURN n {.*} AS n ${order} LIMIT $limit`, { at, limit } as never);
+        for (const row of r.rows) {
+          const props = toJson(row.n, this.R) as Record<string, unknown>;
+          const ended = time?.ended ? (props[time.ended] as string | undefined) : undefined;
+          nodes.push({
+            id: `${n.label}:${String(props[n.key])}`,
+            key: String(props[n.key]),
+            label: n.label,
+            title: String(props[n.title ?? n.key] ?? props[n.key]),
+            ended: Boolean(ended && Date.parse(ended) <= Date.parse(at)),
+            props,
+          });
+        }
+      }
+      nodes.sort((a, b) => recordedOf(b, time) - recordedOf(a, time));
+      const kept = nodes.slice(0, limit);
+      const ids = new Set(kept.map((n) => n.id));
+      const edges: SnapshotEdge[] = [];
+      const keyOf = new Map(schema.nodes.map((n) => [n.label, n.key]));
+      for (const rel of schema.relationships)
+        for (const from of rel.from)
+          for (const to of rel.to) {
+            const fk = keyOf.get(from);
+            const tk = keyOf.get(to);
+            if (!fk || !tk) continue;
+            const when = time ? `WHERE r.${time.recorded} IS NULL OR r.${time.recorded} <= datetime($at)` : "";
+            const r = await this.conn.queryAsync(
+              `MATCH (a:${from})-[r:${rel.type}]->(b:${to}) ${when} RETURN a.${fk} AS a, b.${tk} AS b, r {.*} AS r`,
+              { at } as never,
+            );
+            for (const row of r.rows) {
+              const source = `${from}:${String(row.a)}`;
+              const target = `${to}:${String(row.b)}`;
+              if (ids.has(source) && ids.has(target))
+                edges.push({ type: rel.type, source, target, props: toJson(row.r, this.R) as Record<string, unknown> });
+            }
+          }
+      return { graph: this.name, model: this.model.name, at, schema, nodes: kept, edges, truncated: nodes.length > kept.length };
+    });
   }
 
   /** The model, its tools and the size of the graph. */

@@ -94,3 +94,23 @@ describe("fragments", () => {
     expect(() => expandFragments("{{a}}", { a: "{{a}}" })).toThrow(/nest/);
   });
 });
+
+describe("view hints in packs", () => {
+  const model = "name: hints\nversion: 1\ntitle: Hints\ndescription: x\nnodes:\n  Note:\n    description: A note\n    key: id\n    title: body\n    properties:\n      id: { type: id, required: true }\n      body: { type: string }\n";
+  const tool = (extra: string) =>
+    `tools:\n  - name: add_note\n    kind: write\n    description: Adds one note to the graph\n${extra}    steps:\n      - cypher: RETURN 1 AS id\n`;
+
+  it("accepts a receipt view with an undo tool that exists", () => {
+    const dir = writePack({
+      "model.yaml": model,
+      "tools.yaml": tool("    view: receipt\n    undo: { tool: add_note }\n"),
+    });
+    expect(loadPack(dir).tools[0]).toMatchObject({ view: "receipt", undo: { tool: "add_note", arg: "id", field: "id" } });
+  });
+
+  it("refuses an undo tool that isn't defined, and a title or time property that isn't there", () => {
+    expect(() => loadPack(writePack({ "model.yaml": model, "tools.yaml": tool("    undo: { tool: remove_note }\n") }))).toThrow(/undo tool remove_note is not defined/);
+    expect(() => loadPack(writePack({ "model.yaml": model.replace("title: body", "title: missing"), "tools.yaml": tool("") }))).toThrow(/missing is not one of its properties/);
+    expect(() => loadPack(writePack({ "model.yaml": model, "tools.yaml": tool("    view: chart\n") }))).toThrow(/view/);
+  });
+});
