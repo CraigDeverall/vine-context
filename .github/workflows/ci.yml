@@ -26,3 +26,6 @@ jobs:
       - run: npm test
       - run: npm run build
       - run: node dist/cli.js --version
+      # Loads the native Relate and node-datachannel builds for this OS.
+      - run: node dist/cli.js doctor
+      - run: node dist/cli.js model validate models/temporal-claims

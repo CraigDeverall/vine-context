@@ -1,0 +1,71 @@
+name: temporal-claims
+version: 1
+title: Claims and Questions
+description: >-
+  What a group knows about a piece of work, as dated claims and open questions.
+  Claims support, contradict or replace each other, and answer questions.
+  Nothing is deleted: a replaced or withdrawn claim stays in the graph, so you
+  can ask what the group believed at any moment.
+
+nodes:
+  Claim:
+    description: >-
+      One statement someone believes is true, in one or two sentences. It may be
+      about a period of time (about_from..about_to, the valid time).
+    key: id
+    properties:
+      id: { type: id, required: true }
+      text: { type: string, required: true, description: The statement itself }
+      source: { type: string, description: Where it came from (a URL, a file, a meeting, a person) }
+      about_from: { type: date, description: First day the statement is about }
+      about_to: { type: date, description: Last day the statement is about }
+      recorded_at: { type: datetime, required: true, description: When the graph learned it (record time) }
+      recorded_by: { type: string, required: true }
+      withdrawn_at: { type: datetime, description: When its author took it back }
+      withdrawn_by: { type: string }
+      withdraw_reason: { type: string }
+
+  Question:
+    description: >-
+      Something the group needs to find out. It is answered when a current
+      claim ANSWERS it.
+    key: id
+    properties:
+      id: { type: id, required: true }
+      text: { type: string, required: true }
+      recorded_at: { type: datetime, required: true }
+      recorded_by: { type: string, required: true }
+      withdrawn_at: { type: datetime }
+      withdrawn_by: { type: string }
+      withdraw_reason: { type: string }
+
+relationships:
+  SUPPORTS:
+    description: The first claim is evidence for the second.
+    from: [Claim]
+    to: [Claim]
+  CONTRADICTS:
+    description: The two claims cannot both be true. A person should settle it.
+    from: [Claim]
+    to: [Claim]
+  REPLACES:
+    description: >-
+      The first claim is the newer version of the second. From the moment it was
+      recorded, the second is no longer current.
+    from: [Claim]
+    to: [Claim]
+  ANSWERS:
+    description: The claim answers the question.
+    from: [Claim]
+    to: [Question]
+  ABOUT:
+    description: The question asks about this claim or question.
+    from: [Question]
+    to: [Claim, Question]
+
+# Every relationship also carries recorded_at and recorded_by, so the graph
+# can be read as it stood at any time.
+
+search:
+  labels: [Claim, Question]
+  text: text

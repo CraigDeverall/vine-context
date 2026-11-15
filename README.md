@@ -13,8 +13,46 @@ No cloud service is involved. The graph stays on the host's disk, and traffic
 travels over encrypted WebRTC data channels.
 
 > **Status:** early proof of concept, built for the
-> [Relate by Neo4j Hackathon](https://relate.devpost.com/). Not usable yet.
-> See [docs/PLAN.md](docs/PLAN.md).
+> [Relate by Neo4j Hackathon](https://relate.devpost.com/). Single-player
+> works; peer-to-peer sharing is next. See [docs/PLAN.md](docs/PLAN.md).
+
+## Try it (from source, single player)
+
+Needs Node 20 or later. Tested on macOS arm64, and on Linux x64 and macOS in CI.
+
+```bash
+git clone https://github.com/CraigDeverall/p2p-context-graph && cd p2p-context-graph
+npm install && npm run build
+node dist/cli.js doctor
+claude mcp add p2p-context-graph -- node "$PWD/dist/cli.js" mcp
+```
+
+Then ask Claude Code something like *"record in the context graph that the
+nightly WAN drop lasts 6 minutes"* or *"what open questions are in the
+graph?"*.
+
+## Context models
+
+A graph's **model pack** defines its node types, relationships and tools:
+parameterised Cypher, validated inputs, and instructions for agents. The
+built-in `temporal-claims` pack records dated claims that support,
+contradict, replace and answer each other, plus open questions. Every read
+tool can answer *as of* any past moment.
+
+Write your own model with the help of the skill, or by hand. The format is in
+[plugin/skills/p2p-context-graph/references/model-packs.md](plugin/skills/p2p-context-graph/references/model-packs.md).
+Check a pack with `p2pcg model validate <dir>`.
+
+## Relate features used
+
+| Feature | Where |
+|---|---|
+| Embedded store (`@relate/relate`, Node via the C ABI) | every graph: one directory store per graph |
+| Uniqueness constraints | each node type's `key` |
+| Vector index + full-text index across labels | `search` in `model.yaml` |
+| Hybrid search, `SEARCH … COMBINE … USING WRRF` (preview `hybrid-search`) | the `search` tool |
+| Temporal types and `EXISTS {}` subqueries | the *as of* reads: `beliefs`, `open_questions`, `conflicts` |
+| Transactions (`begin`/`commit`/`rollback`) | every tool call is one transaction |
 
 ## Licence
 

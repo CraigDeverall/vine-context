@@ -274,6 +274,12 @@ Cut order if we're late: model studio UI (keep the CLI and skill authoring) →
 conflicts view → Windows → QR code. Never cut: the two-machine demo, the second
 model pack, setup instructions.
 
+**Known M1 limit:** a graph can be open in one process at a time, because
+Relate holds a writer lease and `@relate/relate` 1.0.1 can't close a store.
+Two Claude Code sessions on the same graph therefore conflict. M2's host
+daemon fixes this: the store lives in one long-running host process, and
+every session's MCP server is a client of it.
+
 ## 7. Demo (≤ 2 minutes)
 
 1. 0:00. The problem: three people, three AI sessions, nothing shared.
@@ -313,4 +319,8 @@ Decided:
 
 Open:
 
-1. The second model pack: `decision-log` or `research-notes`.
+1. **A semantic embedder.** M1 ships a hashing embedder (offline, no download,
+   word and fragment matches only) behind an `Embedder` interface. A local
+   MiniLM through transformers.js would make search match meaning, but it adds
+   about 100 MB of native dependencies. Decide in M3.
+2. The second model pack: `decision-log` or `research-notes`.
