@@ -135,3 +135,9 @@ th { font-weight: 500; color: var(--fg2); }
 @media (max-width: 560px) { .pair { grid-template-columns: 1fr; } .pair .vs { justify-self: center; } }
 .pair .vs { align-self: center; font-size: 12px; color: var(--bad); font-weight: 600; }
 .side-item { border: 1px solid var(--line2); border-radius: 6px; padding: 8px 10px; background: var(--bg2); }
+
+.you { margin: 4px 0 12px; }
+.you p { margin: 0; }
+.you .row { gap: 8px; align-items: center; }
+.you input { min-width: 14em; }
+button.link { background: none; border: 0; padding: 0; color: var(--accent); cursor: pointer; font: inherit; text-decoration: underline; }

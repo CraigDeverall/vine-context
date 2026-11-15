@@ -13,7 +13,8 @@ import { inputShape, type Role, type Snapshot } from "../core/graph.js";
 import { listPacks, loadPack, resolvePack } from "../core/pack.js";
 import { defaultDataDir, userPacksDir } from "../core/paths.js";
 import { validatePack } from "../core/validate.js";
-import { fingerprint, type Identity } from "../core/identity.js";
+import { spawn } from "node:child_process";
+import { fingerprint, nameSource, setName, type Identity } from "../core/identity.js";
 import { packageInfo } from "../core/package-root.js";
 import type { LocalHost } from "../host/client.js";
 import { parseLink } from "../p2p/link.js";
@@ -29,6 +30,21 @@ const text = (value: unknown): Content => ({
   content: [{ type: "text", text: typeof value === "string" ? value : JSON.stringify(value, null, 1) }],
 });
 const failure = (message: string): Content => ({ ...text(message), isError: true });
+
+/** New graphs are shared straight away unless P2PCG_AUTO_SHARE is off. */
+const autoShare = () => !/^(0|off|false|no)$/i.test(process.env.P2PCG_AUTO_SHARE ?? "");
+
+/** Opens a URL in the default browser; false where that isn't possible or is turned off. */
+function openInBrowser(url: string): boolean {
+  if (process.env.P2PCG_NO_OPEN) return false;
+  const cmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "explorer" : "xdg-open";
+  try {
+    spawn(cmd, [url], { stdio: "ignore", detached: true }).on("error", () => undefined).unref();
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 export interface SessionOptions {
   /** Connects to (and if needed starts) this machine's host for the graph. */
@@ -147,6 +163,7 @@ export class Session {
           try {
             const result = await this.backend().request("call", { tool: tool.name, args });
             const out = text(result);
+            out.content.push({ type: "text", text: `(on ${this.where()})` });
             if (tool.view)
               out.structuredContent = { view: tool.view, tool: tool.name, title: tool.title ?? tool.name, input: args, result, undo: undo ?? null, where: this.where() };
             return out;
@@ -194,7 +211,13 @@ export class Session {
             next: r.state === "pending" ? "Wait for approval; the graph tools switch automatically." : "Call join_graph with the link again, or leave_graph.",
           };
         }
-        return { using: this.where(), ...((await this.backend().request("info")) as object), you: this.active?.you };
+        const info = (await this.backend().request("info")) as Record<string, unknown>;
+        const identity = this.o.identity();
+        return {
+          using: this.where(),
+          ...info,
+          you: { ...this.active?.you, name: this.remote ? this.active?.you.id : identity.name, fingerprint: fingerprint(identity.publicKey) },
+        };
       }),
     );
 
@@ -209,6 +232,34 @@ export class Session {
     );
 
     this.server.registerTool(
+      "set_my_name",
+      {
+        title: "Set your name",
+        description:
+          "Set the name other people see for you in shared graphs, and that goes on what you record from now on (for example 'Craig Deverall'). " +
+          "Ask the person what they want to be called; don't invent it. Your key fingerprint, not your name, is what proves who you are.",
+        inputSchema: { name: z.string().min(1).max(40).describe("1–40 letters, digits, spaces, dots, dashes or underscores") },
+        annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      },
+      wrap(async ({ name }: { name: string }) => {
+        if (process.env.P2PCG_USER) throw new Error(`Your name is set by P2PCG_USER ('${process.env.P2PCG_USER}') in this agent's configuration; change it there.`);
+        const n = setName(this.dataDir, name);
+        try {
+          await (await this.local()).request("rename", { name: n });
+        } catch {
+          // no host running yet: it uses the new name when it starts
+        }
+        return {
+          name: n,
+          fingerprint: fingerprint(this.o.identity().publicKey),
+          note: this.remote
+            ? "In the graph you joined you keep the name you joined with until you join again."
+            : "Your graphs use it from now on. What you recorded before keeps the old name.",
+        };
+      }),
+    );
+
+    this.server.registerTool(
       "share_graph",
       {
         title: "Share your graph",
@@ -219,9 +270,11 @@ export class Session {
       },
       wrap(async () => {
         const r = await admin<{ link: string; already: boolean }>("share");
+        const identity = this.o.identity();
         return {
           link: r.link,
           already_sharing: r.already,
+          shared_as: { name: identity.name, fingerprint: fingerprint(identity.publicKey) },
           next: "Send the link privately (not in a public channel). When someone joins, approve them with approve_peer; sharing_status shows who is waiting.",
         };
       }),
@@ -330,7 +383,13 @@ export class Session {
         you: { name: identity.name, fingerprint: fingerprint(identity.publicKey) },
       };
     }
-    return { mode: "host", using: this.where(), ...((await (await this.local()).request("status")) as object) };
+    const identity = this.o.identity();
+    return {
+      mode: "host",
+      using: this.where(),
+      ...((await (await this.local()).request("status")) as object),
+      you: { name: identity.name, fingerprint: fingerprint(identity.publicKey), name_from: nameSource(this.dataDir) },
+    };
   }
 
   private localGraphs(): string[] {
@@ -449,7 +508,17 @@ export class Session {
             "Give the person the link to open; it works only on this machine and while this session runs. The browser page shows your own graph, not one you joined.",
           annotations: ro,
         },
-        run(async () => text({ url: await this.o.browserView!(), note: "Open it in a browser on this machine. Don't share it: it acts as you." })),
+        run(async () => {
+          const url = await this.o.browserView!();
+          const opened = openInBrowser(url);
+          return text({
+            url,
+            opened,
+            note: opened
+              ? "Opened in the default browser. If no tab appeared, open the link on this machine. Don't share it: it acts as you."
+              : "Open it in a browser on this machine. Don't share it: it acts as you.",
+          });
+        }),
       );
 
     this.server.registerTool(
@@ -526,6 +595,7 @@ export class Session {
         if (this.remote) throw new Error("You are in someone else's graph. Call leave_graph first.");
         if (!this.o.openLocal) throw new Error("This session can't switch graphs.");
         if (model) resolvePack(model, this.dataDir); // fails early with the list of packs
+        const isNew = !this.localGraphs().includes(name);
         const host = await this.o.openLocal(name, model);
         const d = await host.request<{ model: { name: string } }>("describe");
         if (model && d.model.name !== resolvePack(model, this.dataDir).model.name) {
@@ -537,6 +607,19 @@ export class Session {
         this.o.local = () => this.o.openLocal!(name);
         old?.close();
         await this.useLocal();
+        if (isNew && autoShare()) {
+          const { link } = await host.request<{ link: string }>("share");
+          const identity = this.o.identity();
+          return text({
+            created: this.where(),
+            model: this.active?.model.title,
+            link,
+            shared_as: { name: identity.name, fingerprint: fingerprint(identity.publicKey) },
+            next:
+              "Show the person this join link now, and say: send it privately to the people you want to work with; anyone with it can ask to join, and you approve each person (open_console, or approve_peer). " +
+              "stop_sharing turns it off. Then call model_guide before writing.",
+          });
+        }
         return text({ using: this.where(), model: this.active?.model.title, next: "Call model_guide before writing to it." });
       }),
     );

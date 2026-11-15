@@ -10,7 +10,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { ToolListChangedNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
 import { afterAll, describe, expect, it } from "vitest";
-import { loadIdentity } from "../src/core/identity.js";
+import { defaultName, loadIdentity, nameSource } from "../src/core/identity.js";
 import { loadPack } from "../src/core/pack.js";
 import { LocalHost } from "../src/host/client.js";
 import { Host } from "../src/host/host.js";
@@ -30,7 +30,7 @@ afterAll(async () => {
 });
 
 /** An agent's session on its own machine (data folder), with graph switching. */
-async function agent(user: string, graph = "main") {
+async function agent(user: string, graph = "main", opts: { storedName?: boolean } = {}) {
   const dataDir = tempDir();
   const started = new Map<string, Host>();
   const open = async (name: string, model?: string) => {
@@ -47,7 +47,7 @@ async function agent(user: string, graph = "main") {
       local: () => open(graph),
       openLocal: open,
       dataDir,
-      identity: () => loadIdentity(dataDir, user),
+      identity: () => (opts.storedName ? loadIdentity(dataDir) : loadIdentity(dataDir, user)),
       signal,
       ice,
       joinWaitMs: 3000,
@@ -266,5 +266,49 @@ describe("the localhost page", () => {
     const r: any = await client.callTool({ name: "open_console", arguments: {} });
     expect(r.structuredContent).toMatchObject({ mode: "host", graph: "main" });
     await client.close();
+  });
+});
+
+describe("names, auto-share and which graph", () => {
+  it("saves a chosen name with the key, and the host records under it from then on", async () => {
+    const before = process.env.P2PCG_USER;
+    delete process.env.P2PCG_USER;
+    try {
+      const me = await agent("first", "main", { storedName: true });
+      const r = await me.call("set_my_name", { name: "Craig Deverall" });
+      expect(r).toMatchObject({ name: "Craig Deverall", fingerprint: expect.stringMatching(/^[0-9a-f]{4}-/) });
+      expect(defaultName(me.dataDir)).toBe("Craig Deverall");
+      expect(nameSource(me.dataDir)).toBe("set_my_name");
+      const c = await me.call("add_claim", { text: "Recorded after the rename" });
+      expect(await me.call("history", { id: c.result.id })).toMatchObject({ item: { recorded_by: "Craig Deverall" } });
+      expect(await me.call("open_console")).toMatchObject({ you: { name: "Craig Deverall", name_from: "set_my_name" } });
+      expect((await me.raw("set_my_name", { name: "<script>" })).isError).toBe(true);
+    } finally {
+      if (before !== undefined) process.env.P2PCG_USER = before;
+    }
+  });
+
+  it("shares a new graph straight away and returns its link", async () => {
+    const me = await agent("alice");
+    process.env.P2PCG_AUTO_SHARE = "on";
+    try {
+      const r = await me.call("use_graph", { name: "planning", model: "decision-log" });
+      expect(r).toMatchObject({ created: "your graph 'planning'", link: expect.stringMatching(/^p2pcg:\/\/join\//), shared_as: { name: "alice" } });
+      expect(await me.call("graph_info")).toMatchObject({ sharing: { sharing: true, link: r.link } });
+      // Switching back to an existing graph doesn't share it.
+      const back = await me.call("use_graph", { name: "main" });
+      expect(back).not.toHaveProperty("link");
+      await me.call("use_graph", { name: "planning" });
+      await me.call("stop_sharing");
+    } finally {
+      process.env.P2PCG_AUTO_SHARE = "off";
+    }
+  });
+
+  it("says which graph each model tool acted on", async () => {
+    const me = await agent("alice");
+    const r = await me.raw("add_claim", { text: "Where did this go?" });
+    expect(r.content.at(-1).text).toBe("(on your graph 'main')");
+    expect(JSON.parse(r.content[0].text).id).toMatch(/^c_/);
   });
 });

@@ -13,6 +13,7 @@ Commands:
   host [--graph NAME] [--model PACK] [--share] [--idle SECONDS]
                                       Run a graph's host in the foreground
   host stop [--graph NAME]            Stop a graph's host
+  demo [--port N] [--no-open]         Open the views on two example graphs (a copy; nothing of yours changes)
   ui [--graph NAME] [--port N] [--open]
                                       Show the console, explorer and model studio in a browser
   status [--graph NAME]               Show a graph's host: sharing, link, peers
@@ -23,7 +24,7 @@ Commands:
   --version                           Print the version
 
 Environment:
-  P2PCG_USER        Your name in graphs (default: your login name)
+  P2PCG_USER        Your name in graphs (default: the name you set with set_my_name, else git's user.name, else your login name)
   P2PCG_GRAPH       The graph to use (default: default)
   P2PCG_MODEL       The model pack for a new graph (default: temporal-claims)
   P2PCG_DATA_DIR    Where graphs live (default: ~/.local/share/p2p-context-graph)
@@ -50,7 +51,7 @@ async function sessionFactory(values: { graph?: string; model?: string }) {
       local: () => ensureHost({ dataDir, graph, model: values.model ?? process.env.P2PCG_MODEL }),
       openLocal: (g, model) => ensureHost({ dataDir, graph: g, model }),
       dataDir,
-      identity: () => loadIdentity(dataDir, defaultName()),
+      identity: () => loadIdentity(dataDir, defaultName(dataDir)),
       signal: signal.nostrSignaller,
       ice: signal.iceServers(),
       log,
@@ -72,6 +73,65 @@ async function mcp(args: string[]) {
   await session.start();
   await session.server.connect(new StdioServerTransport());
   log(`session on graph '${graph}' ready on stdio`);
+}
+
+async function demo(args: string[]): Promise<number> {
+  const { values } = parseArgs({ args, options: { port: { type: "string" }, "no-open": { type: "boolean" } } });
+  const [{ cpSync, existsSync, mkdtempSync }, { tmpdir }, { join }, { packageRoot }] = await Promise.all([
+    import("node:fs"),
+    import("node:os"),
+    import("node:path"),
+    import("../core/package-root.js"),
+  ]);
+  const examples = join(packageRoot(), "examples", "data");
+  if (!existsSync(join(examples, "graphs"))) {
+    console.error(`The example graphs aren't in this install (${examples}).`);
+    return 1;
+  }
+  // A copy, so the demo never changes the examples that ship with the package.
+  const dataDir = mkdtempSync(join(tmpdir(), "p2pcg-demo-"));
+  cpSync(examples, dataDir, { recursive: true });
+  process.env.P2PCG_DATA_DIR = dataDir;
+  process.env.P2PCG_USER ??= "alice";
+  const { make, log } = await sessionFactory({ graph: "incident" });
+  const { startUi } = await import("../ui/server.js");
+  const server = await startUi({ session: () => make(false), port: values.port ? Number(values.port) : undefined, log });
+  console.log(`p2p-context-graph demo: two example graphs, copied to ${dataDir}
+  incident   (temporal-claims) three people investigating a checkout slowdown
+  decisions  (decision-log)    what they decided to do about it
+
+Open this on this machine (it acts as you; don't share it):
+${server.url}
+
+In the browser: Explore the graph (drag the time slider), Conflicts, and
+Model studio > Packs and graphs to switch to 'decisions' (then "Decisions that
+need review"). To point an agent at the same data:
+  P2PCG_DATA_DIR=${dataDir} p2pcg mcp --graph incident
+
+Ctrl-C stops the demo.`);
+  if (!values["no-open"]) {
+    const { spawn } = await import("node:child_process");
+    const cmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "explorer" : "xdg-open";
+    spawn(cmd, [server.url], { stdio: "ignore", detached: true }).on("error", () => undefined).unref();
+  }
+  const stop = async () => {
+    await server.close();
+    for (const g of ["incident", "decisions"]) {
+      try {
+        const { LocalHost } = await import("../host/client.js");
+        const { socketPath } = await import("../host/state.js");
+        const c = await LocalHost.connect(socketPath(dataDir, g));
+        await c.request("shutdown");
+        c.close();
+      } catch {
+        // not running
+      }
+    }
+    process.exit(0);
+  };
+  process.on("SIGINT", () => void stop());
+  process.on("SIGTERM", () => void stop());
+  return -1;
 }
 
 async function ui(args: string[]): Promise<number> {
@@ -122,7 +182,7 @@ async function host(args: string[]): Promise<number> {
       dataDir: defaultDataDir(),
       graph: graphName(values.graph),
       model: values.model ?? process.env.P2PCG_MODEL,
-      user: defaultName(),
+      user: defaultName(defaultDataDir()),
       idleSeconds: values.idle ? Number(values.idle) : 0,
       log,
       onStop: () => process.exit(0),
@@ -165,7 +225,7 @@ async function whoami(): Promise<number> {
     import("../core/identity.js"),
     import("../core/graph.js"),
   ]);
-  const id = loadIdentity(defaultDataDir(), defaultName());
+  const id = loadIdentity(defaultDataDir(), defaultName(defaultDataDir()));
   console.log(`${id.name}  ${fingerprint(id.publicKey)}`);
   return 0;
 }
@@ -258,6 +318,11 @@ switch (command) {
     break;
   case "host": {
     const code = await host(rest);
+    if (code >= 0) process.exitCode = code;
+    break;
+  }
+  case "demo": {
+    const code = await demo(rest);
     if (code >= 0) process.exitCode = code;
     break;
   }

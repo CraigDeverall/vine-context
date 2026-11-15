@@ -9,8 +9,8 @@ them.
 
 - **A claim** is one statement someone believes is true: a finding, a decision,
   a fact about the system, a measurement, a commitment. Keep it to one or two
-  sentences, and make it stand alone. Write "The nightly ONT restart at 03:00
-  drops the WAN link for about 4 minutes", not "it drops for 4 minutes".
+  sentences, and make it stand alone. Write "The orders database pool hit its
+  limit of 50 connections at 13:57 on 10 Nov", not "the pool ran out".
 - **A question** is something the group needs to find out. Record it when the
   person raises it or when you hit an unknown that matters to others.
 - Add a `source` when there is one: a URL, a file path, a ticket, a meeting, a

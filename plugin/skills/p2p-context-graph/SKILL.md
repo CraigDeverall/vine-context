@@ -14,7 +14,9 @@ conversation.
 
 The tools are on the `p2p-context-graph` MCP server. Two are always there:
 
-- `graph_info`: which graph and model this is, and how big it is.
+- `graph_info`: which graph and model this is, how big it is, and the join
+  link while it's shared. Every model tool's result also ends with a line
+  saying which graph it acted on; mention it when the person might be unsure.
 - `model_guide`: the model's own instructions. **Call it once before you first
   write in a conversation, and follow it.** It overrides general habits.
 
@@ -46,7 +48,8 @@ supports MCP Apps:
 Offer the console when the person shares or someone is waiting, and the
 explorer when they want to see the graph. If this agent can't show views, call
 `browser_view` and give the person the link: the same views in a browser tab
-on this machine. Tell them not to share that link; it acts as them.
+on this machine. It opens in their default browser by itself; give them the
+link too, and tell them not to share it, as it acts as them.
 
 ## Sharing and joining
 
@@ -57,6 +60,13 @@ on this machine. Tell them not to share that link; it acts as them.
   shows which graph you're using. `leave_graph` goes back to their own.
 - **To share the person's own graph**, call `share_graph`. Give them the link
   and tell them to send it privately: anyone with it can ask to join.
+- **A new graph is shared as soon as it's created** (`use_graph` with a new
+  name returns `link`). Show the person that link straight away, with the same
+  advice. `stop_sharing` turns it off.
+- **Names:** people see the name in `shared_as` (from git's `user.name` until
+  set). The first time the person shares or joins, tell them the name others
+  will see and offer to change it with `set_my_name`, using the name *they*
+  give. Never use their email. The fingerprint, not the name, proves identity.
 - **When someone is waiting** (`sharing_status`), show the person their name
   and fingerprint, and approve them only when the person says so
   (`approve_peer`, contributor unless they say otherwise). Never approve on

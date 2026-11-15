@@ -3,7 +3,7 @@
 // with the view's name filled in, so a host can show it next to the tool call
 // that asked for it.
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { packageRoot } from "../core/package-root.js";
@@ -28,14 +28,15 @@ export function viewsFile(): string | undefined {
   return existsSync(f) ? f : undefined;
 }
 
-let cached: string | undefined;
+// Read once, and again whenever a rebuild changes the file.
+let cached: { mtime: number; html: string } | undefined;
 function viewsHtml(): string {
-  if (cached) return cached;
   const f = viewsFile();
   if (!f)
     return `<!doctype html><meta charset="utf-8"><body style="font:14px system-ui;padding:16px">The views aren't built. Run <code>npm run build</code> in p2p-context-graph.</body>`;
-  cached = readFileSync(f, "utf8");
-  return cached;
+  const mtime = statSync(f).mtimeMs;
+  if (cached?.mtime !== mtime) cached = { mtime, html: readFileSync(f, "utf8") };
+  return cached.html;
 }
 
 /** The HTML for one view. */

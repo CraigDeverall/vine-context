@@ -71,7 +71,7 @@ export function layout(nodes: SNode[], edges: SEdge[], prev: Pos, w: number, h: 
   });
   const ids = nodes.map((n) => n.id);
   const links = edges.filter((e) => pos.has(e.source) && pos.has(e.target));
-  const k = Math.sqrt((w * h) / Math.max(nodes.length, 1)) * 0.4;
+  const k = Math.sqrt((w * h) / Math.max(nodes.length, 1)) * 0.6;
   const cutoff = (2.5 * k) ** 2;
   const fresh = nodes.some((n) => !prev.has(n.id));
   const rounds = fresh ? 260 : 60;
@@ -124,8 +124,8 @@ export function layout(nodes: SNode[], edges: SEdge[], prev: Pos, w: number, h: 
     const maxX = Math.max(...ps.map((p) => p.x));
     const minY = Math.min(...ps.map((p) => p.y));
     const maxY = Math.max(...ps.map((p) => p.y));
-    const mx = 110; // room for labels to the right
-    const my = 30;
+    const mx = 120; // room for labels to the right
+    const my = 36; // and above the zoom buttons
     const s = Math.min((w - 2 * mx) / Math.max(maxX - minX, 1), (h - 2 * my) / Math.max(maxY - minY, 1), 1.5);
     const ox = (w - (maxX - minX) * s) / 2;
     const oy = (h - (maxY - minY) * s) / 2;
@@ -159,13 +159,16 @@ export function Explorer({ b }: { b: Bridge }) {
     if (b.data) setSnap(b.data as Snapshot);
   }, [b.data]);
 
-  // The time range: from the oldest item in the first snapshot to now.
+  // The time range: the history in the latest "now" snapshot, from its first
+  // event to its last (so old data isn't squeezed into a corner of the slider).
   useEffect(() => {
-    if (!snap || range) return;
-    const rec = snap.schema.time?.recorded;
-    const times = rec ? snap.nodes.map((n) => Date.parse(String(n.props[rec] ?? ""))).filter((t) => !Number.isNaN(t)) : [];
-    if (times.length) setRange({ min: Math.min(...times), max: Date.now() });
-  }, [snap, range]);
+    if (!snap || at) return;
+    const t = snap.schema.time;
+    const times = t
+      ? snap.nodes.flatMap((n) => [n.props[t.recorded], t.ended ? n.props[t.ended] : undefined]).map((v) => Date.parse(String(v ?? ""))).filter((v) => !Number.isNaN(v))
+      : [];
+    if (times.length) setRange({ min: Math.min(...times), max: Math.max(...times) });
+  }, [snap, at]);
 
   const palette = dark ? SERIES_DARK : SERIES_LIGHT;
   const labelColor = useMemo(() => {
@@ -205,7 +208,6 @@ export function Explorer({ b }: { b: Bridge }) {
     try {
       const next = await b.call<Snapshot>("explore_graph", when ? { at: new Date(when).toISOString() } : {});
       setSnap(next);
-      if (!when) setRange((r) => (r ? { ...r, max: Date.now() } : r));
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -331,8 +333,18 @@ export function Explorer({ b }: { b: Bridge }) {
                           strokeDasharray={n.ended ? "2 2" : undefined}
                         />
                         {(isSel || neighbours.has(n.id) || (q && matches(n)) || snap.nodes.length <= 24) && (
-                          <text x={11} y={4} fontSize={11} fill="var(--fg2)" style={{ pointerEvents: "none" }} className={n.ended ? "ended" : ""}>
-                            {short(n.title)}
+                          <text
+                            x={11}
+                            y={4}
+                            fontSize={11}
+                            fill="var(--fg2)"
+                            stroke="var(--bg2)"
+                            strokeWidth={3}
+                            paintOrder="stroke"
+                            style={{ pointerEvents: "none" }}
+                            className={n.ended ? "ended" : ""}
+                          >
+                            {short(n.title, isSel ? 48 : 22)}
                           </text>
                         )}
                       </g>

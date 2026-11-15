@@ -251,7 +251,12 @@ export class Graph {
     return run;
   }
 
-  async call(toolName: string, args: unknown, caller: Caller): Promise<unknown> {
+  /**
+   * Runs one of the model's tools. `opts.now` backdates the call: it exists for
+   * building example graphs with a history, and nothing that a client or peer
+   * sends can reach it.
+   */
+  async call(toolName: string, args: unknown, caller: Caller, opts: { now?: string } = {}): Promise<unknown> {
     const tool = this.pack.tools.find((t) => t.name === toolName);
     if (!tool) throw new ToolError(`No tool '${toolName}' in the model '${this.model.name}'.`);
     if (RANK[caller.role] < RANK[tool.role]) throw new ToolError(`'${toolName}' needs the ${tool.role} role; you are a ${caller.role}.`);
@@ -262,7 +267,7 @@ export class Graph {
 
     const params: Record<string, unknown> = {};
     for (const name of Object.keys(tool.input)) params[name] = input[name] ?? null;
-    params.now = new Date().toISOString();
+    params.now = opts.now ?? new Date().toISOString();
     params.by = caller.id;
     params.role = caller.role;
     for (const [name, d] of Object.entries(tool.derive)) {

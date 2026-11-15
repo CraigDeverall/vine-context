@@ -14,6 +14,7 @@
     "dist",
     "plugin",
     "models",
+    "examples",
     "LICENSE",
     "README.md"
   ],
@@ -36,7 +37,8 @@
     "spike:follower": "tsx spikes/relate-live-follower.ts .data/spike-b",
     "spike:host": "tsx spikes/p2p-star.ts host",
     "spike:join": "tsx spikes/p2p-star.ts join",
-    "build:apps": "node scripts/build-apps.mjs"
+    "build:apps": "node scripts/build-apps.mjs",
+    "examples": "tsx scripts/make-examples.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",

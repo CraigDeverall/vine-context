@@ -23,6 +23,7 @@ interface HostState {
   connected: Peer[];
   waiting: Peer[];
   approved: Peer[];
+  you: { name: string; fingerprint: string; name_from: "P2PCG_USER" | "set_my_name" | "git" | "login" };
 }
 interface PeerState {
   mode: "peer";
@@ -61,6 +62,11 @@ export function Console({ b }: { b: Bridge }) {
   const [error, setError] = useState<string>();
   const [copied, setCopied] = useState(false);
   const [pick, setPick] = useState<Record<string, Role>>({});
+  const [naming, setNaming] = useState<string>();
+  const saveName = async () => {
+    await act("name", "set_my_name", { name: naming!.trim() });
+    setNaming(undefined);
+  };
 
   useEffect(() => {
     if (b.data) setState(b.data as State);
@@ -158,6 +164,45 @@ export function Console({ b }: { b: Bridge }) {
           <button className="primary" disabled={!!busy} onClick={() => act("share", "share_graph")}>
             Share this graph
           </button>
+        )}
+      </div>
+
+      <div className="you">
+        {naming === undefined ? (
+          <p>
+            People see you as <strong>{state.you.name}</strong> <span className="fp">{state.you.fingerprint}</span>{" "}
+            {state.you.name_from !== "P2PCG_USER" && (
+              <button className="link" onClick={() => setNaming(state.you.name)}>
+                Change
+              </button>
+            )}
+            <span className="faint">
+              {" "}
+              {state.you.name_from === "git" ? "(from git's user.name)" : state.you.name_from === "login" ? "(your login name)" : state.you.name_from === "P2PCG_USER" ? "(set by P2PCG_USER)" : ""}
+            </span>
+          </p>
+        ) : (
+          // Not a <form>: views run sandboxed without allow-forms, which blocks submits.
+          <div className="row" role="group" aria-label="Change your name">
+            <label htmlFor="p2pcg-name">Your name</label>
+            <input
+              id="p2pcg-name"
+              value={naming}
+              maxLength={40}
+              onInput={(e) => setNaming(e.currentTarget.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && naming.trim()) void saveName();
+                if (e.key === "Escape") setNaming(undefined);
+              }}
+              autoFocus
+            />
+            <button className="primary" type="button" onClick={() => void saveName()} disabled={!!busy || !naming.trim()}>
+              Save
+            </button>
+            <button type="button" onClick={() => setNaming(undefined)}>
+              Cancel
+            </button>
+          </div>
         )}
       </div>
 

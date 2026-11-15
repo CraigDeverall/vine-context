@@ -9,7 +9,7 @@ import { chmodSync, existsSync, mkdirSync, unlinkSync } from "node:fs";
 import { createConnection, createServer, type Server, type Socket } from "node:net";
 import { dirname } from "node:path";
 import { Graph, type Caller, type Role } from "../core/graph.js";
-import { fingerprint } from "../core/identity.js";
+import { fingerprint, NAME_RE } from "../core/identity.js";
 import { Hub } from "../p2p/hub.js";
 import { PEER_METHODS, lineReader, type Event, type Message, type Request } from "../p2p/protocol.js";
 import { iceServers, nostrSignaller, type SignalFactory } from "../p2p/signal.js";
@@ -148,11 +148,13 @@ export class Host {
       case "call":
         return this.call(this.me, p.tool, p.args);
       case "info":
-        return { ...(await this.graph.info()), host: this.o.user, sharing: this.sharingSummary() };
+        return { ...(await this.graph.info()), host: this.o.user, sharing: { ...this.sharingSummary(), link: this.hub?.url ?? null } };
       case "snapshot":
         return this.graph.snapshot(p);
       case "share":
         return this.share();
+      case "rename":
+        return this.rename(p.name);
       case "unshare":
         return this.unshare();
       case "status":
@@ -184,8 +186,11 @@ export class Host {
 
   share(): { link: string; already: boolean } {
     if (this.hub) return { link: this.hub.url, already: true };
+    const o = this.o;
     this.hub = new Hub({
-      hostName: this.o.user,
+      get hostName() {
+        return o.user; // follows rename
+      },
       store: this.store,
       signal: this.o.signal ?? nostrSignaller,
       ice: this.o.ice ?? iceServers(),
@@ -196,6 +201,15 @@ export class Host {
     this.armIdle();
     this.log(`sharing graph '${this.o.graph}'`);
     return { link: this.hub.url, already: false };
+  }
+
+  /** Your new display name: what you record from now on, and what peers see. */
+  rename(name: unknown): { name: string } {
+    if (typeof name !== "string" || !NAME_RE.test(name)) throw new Error("Names are 1–40 letters, digits, spaces, dots, dashes or underscores.");
+    this.o.user = name;
+    this.me = { id: name, role: "admin" };
+    this.log(`your name is now '${name}'`);
+    return { name };
   }
 
   unshare(): { stopped: boolean } {

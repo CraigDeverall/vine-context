@@ -1,0 +1,225 @@
+{
+  "format_version": 5,
+  "next_node_id": 11,
+  "next_rel_id": 7,
+  "checkpoint_lsn": 17,
+  "commit_ts": 17,
+  "node_parts": [
+    {
+      "path": "nodes/0-262144-833275441f32aeecb10a8084a546989c.parquet",
+      "id_lo": 0,
+      "id_hi": 262144,
+      "rows": 11,
+      "bytes": 8384
+    }
+  ],
+  "rel_parts": [
+    {
+      "path": "relationships/0-262144-2c564ccab399811c749ade4025c50155.parquet",
+      "id_lo": 0,
+      "id_hi": 262144,
+      "rows": 7,
+      "bytes": 1724
+    }
+  ],
+  "bytes_per_node": 1338.8227272727272,
+  "bytes_per_rel": 246.28571428571428,
+  "codec": "parquet",
+  "indexes": [
+    {
+      "name": "assumption_id_key",
+      "label": "Assumption",
+      "property": "id#RANGE#assumption_id_key"
+    },
+    {
+      "name": "decision_id_key",
+      "label": "Decision",
+      "property": "id#RANGE#decision_id_key"
+    },
+    {
+      "name": "option_id_key",
+      "label": "Option",
+      "property": "id#RANGE#option_id_key"
+    },
+    {
+      "name": "search_embedding",
+      "label": "Decision",
+      "property": "embedding#VECTOR#search_embedding"
+    },
+    {
+      "name": "search_text",
+      "label": "Decision",
+      "property": "text#FULLTEXT#search_text"
+    }
+  ],
+  "constraints": [
+    {
+      "name": "assumption_id_key",
+      "relationship": false,
+      "label": "Assumption",
+      "properties": [
+        "id"
+      ],
+      "kind": "unique",
+      "property_type": null
+    },
+    {
+      "name": "decision_id_key",
+      "relationship": false,
+      "label": "Decision",
+      "properties": [
+        "id"
+      ],
+      "kind": "unique",
+      "property_type": null
+    },
+    {
+      "name": "option_id_key",
+      "relationship": false,
+      "label": "Option",
+      "properties": [
+        "id"
+      ],
+      "kind": "unique",
+      "property_type": null
+    }
+  ],
+  "theater": {
+    "databases": {
+      "neo4j": [
+        25,
+        false
+      ],
+      "system": [
+        25,
+        false
+      ],
+      "system_ontologies": [
+        25,
+        false
+      ]
+    },
+    "index_details": {
+      "assumption_id_key": {
+        "kind": "Range",
+        "relationship": false,
+        "labels": [
+          "Assumption"
+        ],
+        "properties": [
+          "id"
+        ],
+        "with_properties": []
+      },
+      "decision_id_key": {
+        "kind": "Range",
+        "relationship": false,
+        "labels": [
+          "Decision"
+        ],
+        "properties": [
+          "id"
+        ],
+        "with_properties": []
+      },
+      "option_id_key": {
+        "kind": "Range",
+        "relationship": false,
+        "labels": [
+          "Option"
+        ],
+        "properties": [
+          "id"
+        ],
+        "with_properties": []
+      },
+      "search_embedding": {
+        "kind": "Vector",
+        "relationship": false,
+        "labels": [
+          "Decision",
+          "Option",
+          "Assumption"
+        ],
+        "properties": [
+          "embedding"
+        ],
+        "with_properties": []
+      },
+      "search_text": {
+        "kind": "Fulltext",
+        "relationship": false,
+        "labels": [
+          "Decision",
+          "Option",
+          "Assumption"
+        ],
+        "properties": [
+          "text"
+        ],
+        "with_properties": []
+      }
+    },
+    "index_options": {
+      "assumption_id_key": {},
+      "decision_id_key": {},
+      "option_id_key": {},
+      "search_embedding": {
+        "indexConfig": {
+          "t": "map",
+          "v": {
+            "vector.default_search_expansion_factor": {
+              "t": "float",
+              "v": 3.0
+            },
+            "vector.dimensions": {
+              "t": "int",
+              "v": 256
+            },
+            "vector.hnsw.ef_construction": {
+              "t": "int",
+              "v": 100
+            },
+            "vector.hnsw.m": {
+              "t": "int",
+              "v": 16
+            },
+            "vector.quantization.type": {
+              "t": "string",
+              "v": "BINARY"
+            },
+            "vector.similarity_function": {
+              "t": "string",
+              "v": "COSINE"
+            }
+          }
+        }
+      },
+      "search_text": {
+        "indexConfig": {
+          "t": "map",
+          "v": {
+            "fulltext.analyzer": {
+              "t": "string",
+              "v": "standard-no-stop-words"
+            },
+            "fulltext.eventually_consistent": {
+              "t": "bool",
+              "v": false
+            }
+          }
+        }
+      }
+    },
+    "graph_types": {},
+    "current_graph_type": {
+      "node_types": [],
+      "edge_types": [],
+      "constraints": [],
+      "drop_constraint_names": []
+    },
+    "derived_constraints": {}
+  },
+  "query_engine": "in-memory",
+  "write_engine": "local"
+}

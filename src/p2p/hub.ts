@@ -9,7 +9,7 @@
 
 import { randomBytes } from "node:crypto";
 import nodeDataChannel, { type PeerConnection } from "node-datachannel";
-import { fingerprint, verifySignature } from "../core/identity.js";
+import { fingerprint, NAME_RE, verifySignature } from "../core/identity.js";
 import type { Role } from "../core/graph.js";
 import type { ApprovedPeer, PeerStore } from "../host/state.js";
 import { FramedChannel } from "./channel.js";
@@ -17,7 +17,6 @@ import { b64u, checkProof, formatLink, newLink, type Link } from "./link.js";
 import type { Event, Request } from "./protocol.js";
 import type { SignalFactory, Signaller } from "./signal.js";
 
-const NAME_RE = /^[\p{L}\p{N}][\p{L}\p{N} ._-]{0,39}$/u;
 const MAX_PEERS = 30;
 const MAX_PENDING = 20;
 const PROVE_WITHIN_MS = 15_000;
