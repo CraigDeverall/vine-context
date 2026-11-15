@@ -14,6 +14,7 @@ import { contentWords, makeEmbedder, type Embedder } from "./embed.js";
 import { resolvePack, type InputSpecT, type Model, type Pack, type ToolSpec } from "./pack.js";
 import { loadRelate, type Connection, type Database, type RelateModule } from "./relate.js";
 import { toJson } from "./values.js";
+import type { GraphDescription } from "../p2p/protocol.js";
 
 export type Role = "reader" | "contributor" | "admin";
 const RANK: Record<Role, number> = { reader: 0, contributor: 1, admin: 2 };
@@ -68,9 +69,9 @@ function scalar(type: string, spec: Pick<InputSpecT, "max_length" | "min" | "max
 }
 
 /** The zod shape of a tool's input, for MCP tool listings and for validation. */
-export function inputShape(tool: ToolSpec): Record<string, z.ZodType> {
+export function inputShape(input: Record<string, InputSpecT>): Record<string, z.ZodType> {
   const shape: Record<string, z.ZodType> = {};
-  for (const [name, spec] of Object.entries(tool.input)) {
+  for (const [name, spec] of Object.entries(input)) {
     let s: z.ZodType =
       spec.type === "enum"
         ? z.enum(spec.values as [string, ...string[]])
@@ -116,7 +117,7 @@ export class Graph {
     private R: RelateModule,
     private store: Store,
   ) {
-    for (const t of pack.tools) this.validators.set(t.name, z.object(inputShape(t)).strict());
+    for (const t of pack.tools) this.validators.set(t.name, z.object(inputShape(t.input)).strict());
   }
 
   get model(): Model {
@@ -264,6 +265,36 @@ export class Graph {
         throw e;
       }
     });
+  }
+
+  /** The model summary and its instructions, for agents (the model_guide tool). */
+  guide(): string {
+    const { model } = this;
+    const shape = [
+      `# Model: ${model.title} (${model.name} v${model.version})`,
+      "",
+      model.description,
+      "",
+      "## Nodes",
+      ...Object.entries(model.nodes).map(([l, n]) => `- **${l}**: ${n.description}`),
+      "",
+      "## Relationships",
+      ...Object.entries(model.relationships).map(([t, r]) => `- **${t}** (${r.from.join("|")} → ${r.to.join("|")}): ${r.description}`),
+    ].join("\n");
+    return `${shape}\n\n${this.pack.instructions}`.trim();
+  }
+
+  /** Everything a client needs to offer this graph's tools, for one caller. */
+  describe(host: string, you: Caller): GraphDescription {
+    const { model } = this;
+    return {
+      graph: this.name,
+      host,
+      model: { name: model.name, version: model.version, title: model.title, description: model.description },
+      guide: this.guide(),
+      tools: this.tools.map((t) => ({ name: t.name, title: t.title, description: t.description, kind: t.kind, role: t.role, input: t.input })),
+      you,
+    };
   }
 
   /** The model, its tools and the size of the graph. */

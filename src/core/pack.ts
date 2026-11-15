@@ -103,7 +103,18 @@ export const ToolSchema = z.object({
 export const SERVER_PARAMS = ["now", "by", "role"] as const;
 
 /** Tool names the server provides itself. */
-export const RESERVED_TOOL_NAMES = ["graph_info", "model_guide"] as const;
+export const RESERVED_TOOL_NAMES = [
+  "graph_info",
+  "model_guide",
+  "share_graph",
+  "stop_sharing",
+  "sharing_status",
+  "approve_peer",
+  "set_peer_role",
+  "remove_peer",
+  "join_graph",
+  "leave_graph",
+] as const;
 
 export const ToolsFileSchema = z.object({
   fragments: z.record(identifier, z.string()).default({}),

@@ -274,11 +274,16 @@ Cut order if we're late: model studio UI (keep the CLI and skill authoring) →
 conflicts view → Windows → QR code. Never cut: the two-machine demo, the second
 model pack, setup instructions.
 
-**Known M1 limit:** a graph can be open in one process at a time, because
-Relate holds a writer lease and `@relate/relate` 1.0.1 can't close a store.
-Two Claude Code sessions on the same graph therefore conflict. M2's host
-daemon fixes this: the store lives in one long-running host process, and
-every session's MCP server is a client of it.
+**M1's one-process limit is fixed in M2.** Each graph has one host process
+that owns the store, and every session's MCP server is a client of it over a
+local socket. Relate's writer lease and the missing `close()` in
+`@relate/relate` 1.0.1 no longer matter.
+
+**M2 status (2026-11-15):** the star works between processes on one machine
+over the public relays. That covers the host, link, approval, roles,
+forwarded tools and events. It is covered by in-process tests on real
+loopback data channels. **Still to do for M2's "done when":** a second
+machine on a different network, and a case that needs TURN.
 
 ## 7. Demo (≤ 2 minutes)
 

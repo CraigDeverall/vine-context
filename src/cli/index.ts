@@ -1,4 +1,3 @@
-import { userInfo } from "node:os";
 import { parseArgs } from "node:util";
 import { packageInfo } from "../core/package-root.js";
 
@@ -10,34 +9,129 @@ const USAGE = `p2pcg ${pkg.version}: share a Relate context graph with other peo
 Usage: p2pcg <command> [options]
 
 Commands:
-  mcp [--graph NAME] [--model PACK]   Run the MCP server on stdio
+  mcp [--graph NAME] [--model PACK]   Run the MCP server on stdio (starts the graph's host if needed)
+  host [--graph NAME] [--model PACK] [--share] [--idle SECONDS]
+                                      Run a graph's host in the foreground
+  host stop [--graph NAME]            Stop a graph's host
+  status [--graph NAME]               Show a graph's host: sharing, link, peers
+  whoami                              Show your name and key fingerprint
   doctor                              Check that this machine can run p2pcg
   model list                          List the built-in model packs
   model validate <dir>                Check a model pack, and try it on a scratch graph
   --version                           Print the version
 
 Environment:
-  P2PCG_USER        Your name in the graph (default: your login name)
-  P2PCG_GRAPH       The graph to open (default: default)
+  P2PCG_USER        Your name in graphs (default: your login name)
+  P2PCG_GRAPH       The graph to use (default: default)
   P2PCG_MODEL       The model pack for a new graph (default: temporal-claims)
-  P2PCG_DATA_DIR    Where graphs are stored (default: ~/.local/share/p2p-context-graph)`;
+  P2PCG_DATA_DIR    Where graphs live (default: ~/.local/share/p2p-context-graph)
+  P2PCG_RELAYS      Nostr relays for signalling, comma-separated
+  P2PCG_ICE         STUN/TURN servers, comma-separated (turn:user:pass@host:port)`;
 
-function me(): string {
-  return process.env.P2PCG_USER ?? userInfo().username;
-}
+const graphOpts = { graph: { type: "string" }, model: { type: "string" } } as const;
+const graphName = (v?: string) => v ?? process.env.P2PCG_GRAPH ?? "default";
 
 async function mcp(args: string[]) {
-  const { values } = parseArgs({ args, options: { graph: { type: "string" }, model: { type: "string" } } });
-  const [{ Graph }, { createMcpServer }, { StdioServerTransport }] = await Promise.all([
-    import("../core/graph.js"),
+  const { values } = parseArgs({ args, options: graphOpts });
+  const [{ Session }, { StdioServerTransport }, { ensureHost }, { defaultDataDir }, { loadIdentity, defaultName }, signal] = await Promise.all([
     import("../mcp/server.js"),
     import("@modelcontextprotocol/sdk/server/stdio.js"),
+    import("../host/client.js"),
+    import("../core/graph.js"),
+    import("../core/identity.js"),
+    import("../p2p/signal.js"),
   ]);
-  const graph = await Graph.open({ name: values.graph, model: values.model });
-  // Single player: the person running the server owns the graph.
-  const server = createMcpServer(graph, { id: me(), role: "admin" });
-  await server.connect(new StdioServerTransport());
-  console.error(`p2pcg: graph '${graph.name}' (${graph.model.name}) ready on stdio as ${me()}`);
+  const dataDir = defaultDataDir();
+  const graph = graphName(values.graph);
+  const session = new Session({
+    local: () => ensureHost({ dataDir, graph, model: values.model ?? process.env.P2PCG_MODEL }),
+    identity: () => loadIdentity(dataDir, defaultName()),
+    signal: signal.nostrSignaller,
+    ice: signal.iceServers(),
+    log: (m) => console.error(`p2pcg: ${m}`),
+  });
+  await session.start();
+  await session.server.connect(new StdioServerTransport());
+  console.error(`p2pcg: session on graph '${graph}' ready on stdio`);
+}
+
+async function host(args: string[]): Promise<number> {
+  if (args[0] === "stop") {
+    const { values } = parseArgs({ args: args.slice(1), options: { graph: { type: "string" } } });
+    const [{ LocalHost }, { socketPath }, { defaultDataDir }] = await Promise.all([
+      import("../host/client.js"),
+      import("../host/state.js"),
+      import("../core/graph.js"),
+    ]);
+    try {
+      const c = await LocalHost.connect(socketPath(defaultDataDir(), graphName(values.graph)));
+      await c.request("shutdown");
+      c.close();
+      console.log("Host stopped.");
+      return 0;
+    } catch {
+      console.log("No host is running for that graph.");
+      return 1;
+    }
+  }
+  const { values } = parseArgs({ args, options: { ...graphOpts, share: { type: "boolean" }, idle: { type: "string" } } });
+  const [{ Host, HostRunningError }, { defaultDataDir }, { defaultName }] = await Promise.all([
+    import("../host/host.js"),
+    import("../core/graph.js"),
+    import("../core/identity.js"),
+  ]);
+  const log = (m: string) => console.error(`[${new Date().toISOString()}] ${m}`);
+  try {
+    const h = await Host.start({
+      dataDir: defaultDataDir(),
+      graph: graphName(values.graph),
+      model: values.model ?? process.env.P2PCG_MODEL,
+      user: defaultName(),
+      idleSeconds: values.idle ? Number(values.idle) : 0,
+      log,
+      onStop: () => process.exit(0),
+    });
+    log(`host for graph '${h.graph.name}' (${h.graph.model.name}) on ${h.socket}`);
+    if (values.share) console.log(h.share().link);
+    const stop = () => h.stop();
+    process.on("SIGINT", stop);
+    process.on("SIGTERM", stop);
+    return -1; // keep running
+  } catch (e) {
+    if (e instanceof HostRunningError) {
+      console.error(e.message);
+      return 3;
+    }
+    throw e;
+  }
+}
+
+async function status(args: string[]): Promise<number> {
+  const { values } = parseArgs({ args, options: { graph: { type: "string" } } });
+  const [{ LocalHost }, { socketPath }, { defaultDataDir }] = await Promise.all([
+    import("../host/client.js"),
+    import("../host/state.js"),
+    import("../core/graph.js"),
+  ]);
+  try {
+    const c = await LocalHost.connect(socketPath(defaultDataDir(), graphName(values.graph)));
+    console.log(JSON.stringify(await c.request("status"), null, 2));
+    c.close();
+    return 0;
+  } catch {
+    console.log("No host is running for that graph.");
+    return 1;
+  }
+}
+
+async function whoami(): Promise<number> {
+  const [{ loadIdentity, defaultName, fingerprint }, { defaultDataDir }] = await Promise.all([
+    import("../core/identity.js"),
+    import("../core/graph.js"),
+  ]);
+  const id = loadIdentity(defaultDataDir(), defaultName());
+  console.log(`${id.name}  ${fingerprint(id.publicKey)}`);
+  return 0;
 }
 
 async function doctor(): Promise<number> {
@@ -141,6 +235,17 @@ switch (command) {
     break;
   case "mcp":
     await mcp(rest);
+    break;
+  case "host": {
+    const code = await host(rest);
+    if (code >= 0) process.exitCode = code;
+    break;
+  }
+  case "status":
+    process.exitCode = await status(rest);
+    break;
+  case "whoami":
+    process.exitCode = await whoami();
     break;
   case "doctor":
     process.exitCode = await doctor();

@@ -13,7 +13,7 @@
 
 import { createCipheriv, createDecipheriv, createHash, createHmac, hkdfSync, randomBytes, timingSafeEqual } from "node:crypto";
 import nodeDataChannel, { type DataChannel, type PeerConnection } from "node-datachannel";
-import { RelaySet } from "./nostr-lite.ts";
+import { RelaySet } from "../src/p2p/nostr.ts";
 
 const RELAYS = (process.env.P2PCG_RELAYS ?? "wss://relay.primal.net,wss://offchain.pub,wss://relay.snort.social,wss://relay.nostr.net,wss://nos.lol").split(",");
 const ICE = (process.env.P2PCG_ICE ?? "stun:stun.l.google.com:19302,stun:stun.cloudflare.com:3478").split(",");
