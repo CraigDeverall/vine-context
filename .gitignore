@@ -5,3 +5,4 @@ dist/
 .env*
 /.data/
 /spikes/.out/
+!examples/data/**/*.log
