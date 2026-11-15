@@ -1,0 +1,56 @@
+{
+  "name": "p2p-context-graph",
+  "version": "0.0.0",
+  "description": "Share a Relate context graph with other people's AI agents, peer to peer. An AI skill plus a local MCP server.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "p2pcg": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "plugin",
+    "models",
+    "LICENSE",
+    "README.md"
+  ],
+  "keywords": [
+    "relate",
+    "neo4j",
+    "mcp",
+    "context-graph",
+    "p2p",
+    "webrtc",
+    "claude-code",
+    "agent-skill"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "check": "npm run typecheck && npm test && npm run build",
+    "spike:relate": "tsx spikes/relate-embedded.ts .data/spike-c",
+    "spike:follower": "tsx spikes/relate-live-follower.ts .data/spike-b",
+    "spike:host": "tsx spikes/p2p-star.ts host",
+    "spike:join": "tsx spikes/p2p-star.ts join"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "@relate/relate": "1.0.1",
+    "node-datachannel": "^0.33.6",
+    "nostr-tools": "^2.26.0",
+    "ws": "^8.23.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "@types/ws": "^8.18.2",
+    "tsup": "^8.5.1",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.0"
+  }
+}
