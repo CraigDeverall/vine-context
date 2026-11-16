@@ -89,6 +89,23 @@ Then ask things like:
 
 Agents that support MCP Apps show the views inline. In other agents, ask for the *browser view*: the same views on 127.0.0.1.
 
+**Or install the plugin** (skills, the `/p2p-context-graph:join` command and the MCP server, in one):
+
+```bash
+claude plugin marketplace add CraigDeverall/p2p-context-graph
+claude plugin install p2p-context-graph@p2p-context-graph
+```
+
+**In Codex**, the same `plugin/` folder is a Codex plugin (skills and the MCP server; Codex has no plugin slash commands, so joining is the `join-context-graph` skill: paste the code):
+
+```bash
+codex plugin marketplace add CraigDeverall/p2p-context-graph
+codex plugin add p2p-context-graph@p2p-context-graph
+```
+
+The plugin runs `p2pcg mcp` if `p2pcg` is installed, otherwise `npx -y p2p-context-graph mcp`. From a clone, run `npm link` once to install `p2pcg`.
+Several context-graph servers can sit side by side (for example a second identity with its own `P2PCG_DATA_DIR` and `P2PCG_USER`, for testing joins); each is a separate person.
+
 To use the example data instead of a new graph, add `P2PCG_DATA_DIR=<the folder demo printed>` and `--graph incident`.
 
 **3. Share it.**
