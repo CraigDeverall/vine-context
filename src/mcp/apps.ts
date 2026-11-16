@@ -12,7 +12,7 @@ import { packageRoot } from "../core/package-root.js";
 export const APP_MIME = "text/html;profile=mcp-app";
 
 export const VIEWS = {
-  console: "Sharing console: the join link, who is waiting, who is connected, and their roles",
+  console: "Sharing console: the join codes, who is waiting, who is connected, and their roles",
   explorer: "Graph explorer: the graph as it stood at any moment, with search",
   studio: "Model studio: the graph's model, the packs you can use, and checking a new pack",
   receipt: "Receipt: what your agent just wrote, with undo",

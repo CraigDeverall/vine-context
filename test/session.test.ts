@@ -1,5 +1,5 @@
 // Two agents' MCP sessions: Alice shares her graph, Bob joins it with the
-// link, and Bob's tools switch to Alice's graph once she approves him.
+// code, and Bob's tools switch to Alice's graph once she approves him.
 
 import { EventEmitter } from "node:events";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -25,6 +25,7 @@ async function agent(user: string, graph: string) {
   const session = new Session({
     local: () => LocalHost.connect(host.socket),
     identity: () => loadIdentity(dataDir, user),
+    dataDir,
     signal,
     ice,
     joinWaitMs: 3000,
@@ -68,8 +69,9 @@ describe("MCP sessions across the star", () => {
     await bob.call("add_claim", { text: "Bob's private note" });
     expect((await bob.call("graph_info")).using).toMatch(/your graph 'bobs-notes'/);
 
-    const { link } = await alice.call("share_graph");
-    const pending = await bob.call("join_graph", { link: `Here you go: ${link} thanks` });
+    const shared = await alice.call("share_graph", { label: "for Bob" });
+    expect(shared.send).toBe(`Join my context graph: /p2p-context-graph:join ${shared.code}`);
+    const pending = await bob.call("join_graph", { code: `Here you go: ${shared.code} thanks` });
     expect(pending.waiting).toMatch(/waiting for them to approve/);
     expect(pending.your_fingerprint).toMatch(/^[0-9a-f-]{14}$/);
 
@@ -97,13 +99,17 @@ describe("MCP sessions across the star", () => {
     // Leaving puts Bob back on his own graph.
     expect(await bob.call("leave_graph")).toMatch(/back on your graph 'bobs-notes'/);
     expect((await bob.call("beliefs")).map((b: any) => b.text)).toEqual(["Bob's private note"]);
+
+    // Bob's machine kept the code: join_graph with no code rejoins, without approval.
+    const back = await bob.call("join_graph", {});
+    expect(back.joined).toBe("alice's graph 'team'");
   });
 
   it("tells the agent clearly when the host stops sharing", async () => {
     const alice = await agent("alice", "brief");
     const bob = await agent("bob", "own");
-    const { link } = await alice.call("share_graph");
-    await bob.call("join_graph", { link });
+    const { code } = await alice.call("share_graph");
+    await bob.call("join_graph", { code });
     await alice.call("approve_peer", { name: "bob", role: "contributor" });
     await waitFor(async () => (await bob.call("graph_info")).using.includes("alice's graph"));
     await alice.call("stop_sharing");
@@ -117,8 +123,11 @@ describe("MCP sessions across the star", () => {
     });
   });
 
-  it("rejects text that isn't a join link", async () => {
+  it("rejects text that isn't a join code, and says what to do with an old link", async () => {
     const bob = await agent("bob", "solo");
-    await expect(bob.call("join_graph", { link: "https://example.com/not-a-link" })).rejects.toThrow(/not a p2pcg join link/);
+    await expect(bob.call("join_graph", { code: "https://example.com/not-a-code" })).rejects.toThrow(/not a p2pcg join code/);
+    await expect(bob.call("join_graph", { code: "p2pcg://join/abcdefghijklmnopqrstuv#abcdefghijklmnopqrstuvwxyzabcdefghijklmnopq" })).rejects.toThrow(/old p2pcg:\/\/ join link/);
+    const zed = await agent("zed", "zeds-own"); // has never joined anything
+    await expect(zed.call("join_graph", {})).rejects.toThrow(/haven't joined a graph/);
   });
 });

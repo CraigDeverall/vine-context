@@ -143,7 +143,7 @@ describe("MCP App views", () => {
     const alice = await agent("alice");
     expect(await alice.call("open_console")).toMatchObject({ mode: "host", sharing: false, waiting: [], connected: [] });
     await alice.call("share_graph");
-    expect(await alice.call("open_console")).toMatchObject({ mode: "host", sharing: true, link: expect.stringMatching(/^p2pcg:\/\/join\//) });
+    expect(await alice.call("open_console")).toMatchObject({ mode: "host", sharing: true, invites: [expect.objectContaining({ state: "open", code: expect.stringMatching(/^p2pcg1_/) })] });
     await alice.call("stop_sharing");
   });
 
@@ -151,8 +151,8 @@ describe("MCP App views", () => {
     const alice = await agent("alice", "team");
     const bob = await agent("bob", "own");
     await alice.call("add_claim", { text: "Alice's finding about the build" });
-    const { link } = await alice.call("share_graph");
-    await bob.call("join_graph", { link });
+    const { code } = await alice.call("share_graph");
+    await bob.call("join_graph", { code });
     await alice.call("approve_peer", { name: "bob", role: "reader" });
     let state: any;
     for (let i = 0; i < 100 && state?.state !== "active"; i++) {
@@ -288,16 +288,16 @@ describe("names, auto-share and which graph", () => {
     }
   });
 
-  it("shares a new graph straight away and returns its link", async () => {
+  it("shares a new graph straight away and returns a join code", async () => {
     const me = await agent("alice");
     process.env.P2PCG_AUTO_SHARE = "on";
     try {
       const r = await me.call("use_graph", { name: "planning", model: "decision-log" });
-      expect(r).toMatchObject({ created: "your graph 'planning'", link: expect.stringMatching(/^p2pcg:\/\/join\//), shared_as: { name: "alice" } });
-      expect(await me.call("graph_info")).toMatchObject({ sharing: { sharing: true, link: r.link } });
+      expect(r).toMatchObject({ created: "your graph 'planning'", code: expect.stringMatching(/^p2pcg1_/), send: expect.stringContaining(r.code), shared_as: { name: "alice" } });
+      expect(await me.call("graph_info")).toMatchObject({ sharing: { sharing: true } });
       // Switching back to an existing graph doesn't share it.
       const back = await me.call("use_graph", { name: "main" });
-      expect(back).not.toHaveProperty("link");
+      expect(back).not.toHaveProperty("code");
       await me.call("use_graph", { name: "planning" });
       await me.call("stop_sharing");
     } finally {

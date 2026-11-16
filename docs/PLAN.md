@@ -13,8 +13,8 @@ peer, with a few other people and their AI agents.
 
 - The **host** (the person who starts it) runs a Relate graph and is the centre
   of a star network.
-- The host shares a link (`p2pcg://join/<room>#<secret>`). Users B, C and D paste
-  it into their agent, or click it, and their agent joins the star.
+- The host sends each person a join code (`p2pcg1_<room>.<secret>`). Users B, C and D paste
+  it into their agent, or runs `/p2p-context-graph:join <code>`, and their agent joins the star.
 - Everyone's agent can then read and write the shared graph. They do it through
   tools that the graph's **context model** defines, not through raw Cypher.
 - The context model can be chosen and authored. The project ships a default,
@@ -170,9 +170,11 @@ models/temporal-claims/
 - Host-star topology over **node-datachannel** (libdatachannel, prebuilt N-API
   binaries).
 - Default public STUN, with flags or config for custom STUN/TURN.
-- Link `p2pcg://join/<roomId>#<secret>`. The fragment never leaves the joining
-  machine. The room hash is used for signalling, and an HMAC challenge proves
-  the secret over the data channel before any other frame is accepted.
+- Join code `p2pcg1_<room>.<secret>`, one per invite (this replaced the
+  single reusable `p2pcg://join/<room>#<secret>` link on 16 Nov). The secret
+  never leaves the two machines. The room hash is used for signalling, and an
+  HMAC challenge proves the secret over the data channel before any other
+  frame is accepted.
 - Typed frames on the channel: `control` (hello, auth, heartbeat, join/leave,
   roles, session-closed), `rpc` (tool call and result), and `event` (graph
   changed, so views update live).
@@ -181,21 +183,25 @@ models/temporal-claims/
 **Change:**
 
 - **The graph is durable, the session is not.** Unlike the Gemini plan, the
-  graph lives on the host's disk across sessions. Only the links, the peer list
-  and the connections are temporary. A new session issues a new link.
+  graph lives on the host's disk across sessions, and so do the invites and
+  the approved keys. Only the connections are temporary.
 - **No CRDT.** The host is the single writer and the authority, so there's no
   need for one. This removes a whole area of risk.
 - **Identity:** each install has an Ed25519 key. The host sees "Bob (key
   ab12…) wants to join" in the console app and approves him as reader,
-  contributor or admin. Approved keys can rejoin later sessions without asking
-  again.
+  contributor or admin. Approving binds the invite's code to that key: the
+  same machine rejoins with it later without asking, and any other key using
+  it is turned away. An unused code expires (24 h by default), and refusing
+  the person waiting on a code cancels it.
 
 **Drop for the hackathon (could be added later):**
 
 - The `proxy` channel (HTTP port tunnelling).
-- Registering the `p2pcg://` scheme with the OS. Instead, the link works when
-  pasted into an agent chat, because the skill recognises it. We could also
-  offer an `https://` landing page that shows the link and the install command.
+- Registering a URL scheme, or an `https://` landing page. A code gets pasted
+  into an agent anyway, so a clickable link saves no steps. The code works
+  pasted into any agent chat, and with `/p2p-context-graph:join <code>`.
+- Short code words (`p2pcg2_`), which need a password-authenticated key
+  exchange.
 - Copy-paste-only signalling, which needs a manual round trip and is slow in a
   demo. We keep it as a fallback flag only if it costs little.
 

@@ -1,9 +1,21 @@
 // The host's side of the star: answers WebRTC offers that arrive through
 // signalling, checks each peer, and routes approved peers' requests to the host.
 //
+// The hub listens on one signalling room per live invite. The room an offer
+// arrives on says which invite (and so which secret) the peer must prove.
+//
+// Invite rules, checked once the peer has proved the secret and its key:
+// - A bound invite lets in only the key it is bound to; any other key is told
+//   the code was used on another machine.
+// - An open invite with someone already waiting on it turns others away.
+// - Approving the waiting peer binds the invite to their key. Refusing them
+//   revokes the invite: a refusal usually means the code reached the wrong
+//   person, so the owner sends a fresh one.
+// - An unused invite stops working when it expires.
+//
 // A peer's first frames, in order:
 //   host → {t:"challenge", nonce}
-//   peer → {t:"auth", proof, name, key, sig}   proof = HMAC(link secret), sig = Ed25519 over the nonce
+//   peer → {t:"auth", proof, name, key, sig}   proof = HMAC(invite secret), sig = Ed25519 over the nonce
 //   host → {t:"welcome", role, host} | {t:"pending", host} | {t:"denied", reason}
 // Nothing else is accepted before "welcome".
 
@@ -11,9 +23,9 @@ import { randomBytes } from "node:crypto";
 import nodeDataChannel, { type PeerConnection } from "node-datachannel";
 import { fingerprint, NAME_RE, verifySignature } from "../core/identity.js";
 import type { Role } from "../core/graph.js";
-import type { ApprovedPeer, PeerStore } from "../host/state.js";
+import { inviteLink, isLive, type ApprovedPeer, type Invite, type InviteStore, type PeerStore } from "../host/state.js";
 import { FramedChannel } from "./channel.js";
-import { b64u, checkProof, formatLink, newLink, type Link } from "./link.js";
+import { b64u, checkProof } from "./link.js";
 import type { Event, Request } from "./protocol.js";
 import type { SignalFactory, Signaller } from "./signal.js";
 
@@ -33,7 +45,10 @@ export interface PeerInfo {
 }
 
 interface Peer {
+  /** Map key: the invite and the peer's signalling id. */
+  id: string;
   from: string;
+  invite: string;
   pc: PeerConnection;
   ch?: FramedChannel;
   answer?: { sdp: string; sdpType: string };
@@ -47,6 +62,7 @@ interface Peer {
 export interface HubOptions {
   hostName: string;
   store: PeerStore;
+  invites: InviteStore;
   signal: SignalFactory;
   ice: string[];
   /** Handles an active peer's request; the caller is the peer's name and role. */
@@ -57,18 +73,50 @@ export interface HubOptions {
 }
 
 export class Hub {
-  readonly link: Link;
   private peers = new Map<string, Peer>();
-  private signaller: Signaller;
+  /** One signaller per live invite, by invite id. */
+  private rooms = new Map<string, Signaller>();
+  private sweep: NodeJS.Timeout;
   private stopped = false;
 
   constructor(private o: HubOptions) {
-    this.link = newLink();
-    this.signaller = o.signal(this.link, (m) => void this.onSignal(m));
+    for (const inv of o.invites.live()) this.listen(inv);
+    // Stop listening for invites that expire unused.
+    this.sweep = setInterval(() => this.closeDead(), 60_000);
+    this.sweep.unref();
   }
 
-  get url(): string {
-    return formatLink(this.link);
+  /** Makes a new invite and starts listening for it. */
+  invite(opts: { label?: string; hours?: number } = {}): Invite {
+    const inv = this.o.invites.create(opts);
+    this.listen(inv);
+    this.log(`new invite ${inv.id}${inv.label ? ` (${inv.label})` : ""}`);
+    return inv;
+  }
+
+  /** Cancels an invite: its code stops working and anyone on it is disconnected. */
+  revoke(id: string, reason = "The host cancelled this join code."): boolean {
+    const inv = this.o.invites.revoke(id, reason);
+    for (const p of this.peers.values()) if (p.invite === id) this.drop(p, reason);
+    this.unlisten(id);
+    return Boolean(inv);
+  }
+
+  private listen(inv: Invite): void {
+    if (this.rooms.has(inv.id) || this.stopped) return;
+    this.rooms.set(inv.id, this.o.signal(inviteLink(inv), (m) => void this.onSignal(inv.id, m)));
+  }
+
+  private unlisten(id: string): void {
+    this.rooms.get(id)?.close();
+    this.rooms.delete(id);
+  }
+
+  private closeDead(): void {
+    for (const id of this.rooms.keys()) {
+      const inv = this.o.invites.get(id);
+      if (!inv || !isLive(inv)) this.unlisten(id);
+    }
   }
 
   list(): PeerInfo[] {
@@ -83,16 +131,21 @@ export class Hub {
     if (!p) throw new Error(`No one named '${name}' is waiting to join.`);
     const approved: ApprovedPeer = { name, key: p.key!, role, approved_at: new Date().toISOString() };
     this.o.store.put(approved);
+    this.o.invites.bind(p.invite, p.key!, name);
     this.activate(p, role);
     return approved;
   }
 
-  /** Refuses a waiting peer, or disconnects a connected one. */
+  /** Refuses a waiting peer (which revokes the invite they used), or disconnects a connected one. */
   disconnect(name: string, reason: string): boolean {
     let found = false;
     for (const p of this.peers.values())
       if (p.name === name) {
         found = true;
+        if (p.state === "pending") {
+          this.o.invites.revoke(p.invite, `refused ${name}`);
+          this.unlisten(p.invite);
+        }
         this.drop(p, reason);
       }
     return found;
@@ -114,40 +167,45 @@ export class Hub {
   stop(): void {
     if (this.stopped) return;
     this.stopped = true;
+    clearInterval(this.sweep);
     for (const p of this.peers.values()) this.drop(p, "The host stopped sharing.", { t: "closed" });
-    this.signaller.close();
+    for (const id of [...this.rooms.keys()]) this.unlisten(id);
   }
 
   private log(m: string) {
     this.o.log?.(m);
   }
 
-  private async onSignal(m: any): Promise<void> {
+  private async onSignal(invite: string, m: any): Promise<void> {
     if (this.stopped || m?.type !== "offer" || typeof m.from !== "string" || typeof m.sdp !== "string") return;
-    const existing = this.peers.get(m.from);
+    const signaller = this.rooms.get(invite);
+    const inv = this.o.invites.get(invite);
+    if (!signaller || !inv || !isLive(inv)) return this.unlisten(invite);
+    const id = `${invite}:${m.from}`;
+    const existing = this.peers.get(id);
     if (existing) {
       // The peer retries its offer when our answer got lost: send the same answer again.
-      if (existing.answer) await this.signaller.send({ type: "answer", to: m.from, ...existing.answer });
+      if (existing.answer) await signaller.send({ type: "answer", to: m.from, ...existing.answer });
       return;
     }
     if (this.peers.size >= MAX_PEERS) return this.log(`ignoring offer from ${m.from}: ${MAX_PEERS} peers already`);
 
     const pc = new nodeDataChannel.PeerConnection(`p2pcg-host-${m.from}`, { iceServers: this.o.ice });
-    const peer: Peer = { from: m.from, pc, state: "connecting", since: new Date().toISOString() };
-    this.peers.set(m.from, peer);
+    const peer: Peer = { id, from: m.from, invite, pc, state: "connecting", since: new Date().toISOString() };
+    this.peers.set(id, peer);
     pc.onStateChange((s) => {
       if (s === "failed" || s === "closed" || s === "disconnected") this.forget(peer);
     });
     pc.onDataChannel((dc) => this.onChannel(peer, new FramedChannel(dc)));
     setTimeout(() => {
-      if (peer.state === "connecting" && this.peers.get(peer.from) === peer) this.drop(peer, "Took too long to connect.");
+      if (peer.state === "connecting" && this.peers.get(peer.id) === peer) this.drop(peer, "Took too long to connect.");
     }, PROVE_WITHIN_MS + 15_000).unref();
 
     try {
       pc.setRemoteDescription(m.sdp, m.sdpType);
       const local = await gathered(pc);
       peer.answer = { sdp: local.sdp, sdpType: local.type };
-      await this.signaller.send({ type: "answer", to: m.from, ...peer.answer });
+      await signaller.send({ type: "answer", to: m.from, ...peer.answer });
     } catch (e) {
       this.log(`offer from ${m.from} failed: ${(e as Error).message}`);
       this.forget(peer);
@@ -157,7 +215,7 @@ export class Hub {
   private onChannel(peer: Peer, ch: FramedChannel): void {
     peer.ch = ch;
     const nonce = b64u(randomBytes(16));
-    const proveTimer = setTimeout(() => peer.state === "connecting" && this.drop(peer, "No proof of the link received."), PROVE_WITHIN_MS);
+    const proveTimer = setTimeout(() => peer.state === "connecting" && this.drop(peer, "No proof of the join code received."), PROVE_WITHIN_MS);
     proveTimer.unref();
     ch.onClose(() => this.forget(peer));
     ch.onMessage(async (m: any) => {
@@ -181,14 +239,28 @@ export class Hub {
   }
 
   private onAuth(peer: Peer, nonce: string, m: any): void {
-    if (m?.t !== "auth" || !checkProof(this.link.secret, nonce, peer.from, m.proof)) return this.drop(peer, "Wrong or missing link secret.");
+    const inv = this.o.invites.get(peer.invite);
+    if (!inv || !isLive(inv)) return this.drop(peer, "This join code no longer works. Ask for a new one.");
+    if (m?.t !== "auth" || !checkProof(inviteLink(inv).secret, nonce, peer.from, m.proof)) return this.drop(peer, "Wrong or missing join code secret.");
     if (typeof m.key !== "string" || !verifySignature(m.key, `p2pcg-id-v1:${nonce}:${peer.from}`, m.sig))
       return this.drop(peer, "Identity signature did not verify.");
     if (typeof m.name !== "string" || !NAME_RE.test(m.name)) return this.drop(peer, "Names are 1–40 letters, digits, spaces, dots, dashes or underscores.");
     peer.key = m.key;
 
+    if (inv.bound && inv.bound.key !== m.key) return this.drop(peer, "This code has already been used on another machine. Ask for a new code of your own.");
     const known = this.o.store.get(m.key);
+    if (inv.bound) {
+      // The machine this code belongs to, rejoining.
+      if (!known) return this.drop(peer, "The host removed you from this graph. Ask for a new code.");
+      peer.name = known.name;
+      return this.activate(peer, known.role);
+    }
+    const waiting = [...this.peers.values()].find((p) => p !== peer && p.invite === peer.invite && p.state === "pending");
+    if (waiting && waiting.key !== m.key) return this.drop(peer, "Someone else is already waiting to join with this code. Ask for a new code of your own.");
+    if (waiting) this.drop(waiting, "You connected again from another session."); // same machine, a fresh attempt
     if (known) {
+      // Someone the host already approved, with a fresh code: it becomes theirs.
+      this.o.invites.bind(inv.id, m.key, known.name);
       peer.name = known.name;
       return this.activate(peer, known.role);
     }
@@ -201,7 +273,7 @@ export class Hub {
     peer.name = m.name;
     peer.state = "pending";
     this.sendTo(peer, { t: "pending", host: this.o.hostName });
-    this.log(`${m.name} (${fingerprint(m.key)}) is waiting for approval`);
+    this.log(`${m.name} (${fingerprint(m.key)}) is waiting for approval (invite ${inv.id}${inv.label ? `, ${inv.label}` : ""})`);
     this.o.onChange();
   }
 
@@ -235,8 +307,8 @@ export class Hub {
   }
 
   private forget(peer: Peer): void {
-    if (this.peers.get(peer.from) !== peer) return;
-    this.peers.delete(peer.from);
+    if (this.peers.get(peer.id) !== peer) return;
+    this.peers.delete(peer.id);
     if (peer.name) this.log(`${peer.name} left`);
     this.o.onChange();
   }

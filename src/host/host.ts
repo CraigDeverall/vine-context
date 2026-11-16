@@ -11,9 +11,10 @@ import { dirname } from "node:path";
 import { Graph, type Caller, type Role } from "../core/graph.js";
 import { fingerprint, NAME_RE } from "../core/identity.js";
 import { Hub } from "../p2p/hub.js";
+import { formatCode } from "../p2p/link.js";
 import { PEER_METHODS, lineReader, type Event, type Message, type Request } from "../p2p/protocol.js";
 import { iceServers, nostrSignaller, type SignalFactory } from "../p2p/signal.js";
-import { PeerStore, hostDir, socketPath } from "./state.js";
+import { InviteStore, PeerStore, hostDir, inviteLink, socketPath } from "./state.js";
 
 const ROLES = new Set<Role>(["reader", "contributor", "admin"]);
 
@@ -54,6 +55,7 @@ export class Host {
   private clients = new Set<Socket>();
   private hub?: Hub;
   private store: PeerStore;
+  private invites: InviteStore;
   private idleTimer?: NodeJS.Timeout;
   private stopped = false;
   private me: Caller;
@@ -64,6 +66,7 @@ export class Host {
   ) {
     this.socket = socketPath(o.dataDir, o.graph);
     this.store = new PeerStore(hostDir(o.dataDir, o.graph));
+    this.invites = new InviteStore(hostDir(o.dataDir, o.graph));
     this.me = { id: o.user, role: "admin" };
   }
 
@@ -148,11 +151,13 @@ export class Host {
       case "call":
         return this.call(this.me, p.tool, p.args);
       case "info":
-        return { ...(await this.graph.info()), host: this.o.user, sharing: { ...this.sharingSummary(), link: this.hub?.url ?? null } };
+        return { ...(await this.graph.info()), host: this.o.user, sharing: this.sharingSummary() };
       case "snapshot":
         return this.graph.snapshot(p);
       case "share":
-        return this.share();
+        return this.share(p);
+      case "revoke_invite":
+        return this.revokeInvite(p.id);
       case "rename":
         return this.rename(p.name);
       case "unshare":
@@ -184,14 +189,26 @@ export class Host {
     return this.call(caller, p.tool, p.args);
   }
 
-  share(): { link: string; already: boolean } {
-    if (this.hub) return { link: this.hub.url, already: true };
+  /** Starts sharing if needed, and makes a new invite: one join code for one person's machine. */
+  share(opts: { label?: unknown; expires_hours?: unknown } = {}) {
+    const label = opts.label === undefined || opts.label === null || opts.label === "" ? undefined : String(opts.label).slice(0, 60);
+    const hours = opts.expires_hours === undefined || opts.expires_hours === null ? undefined : Number(opts.expires_hours);
+    const already = Boolean(this.hub);
+    const hub = this.startSharing();
+    const inv = hub.invite({ label, hours });
+    return { ...this.invites.summary(inv), code: formatCode(inviteLink(inv)), already_sharing: already };
+  }
+
+  /** Starts listening for every live invite, without making a new one. */
+  startSharing(): Hub {
+    if (this.hub) return this.hub;
     const o = this.o;
     this.hub = new Hub({
       get hostName() {
         return o.user; // follows rename
       },
       store: this.store,
+      invites: this.invites,
       signal: this.o.signal ?? nostrSignaller,
       ice: this.o.ice ?? iceServers(),
       onRequest: (peer, req) => this.handlePeer(peer, req),
@@ -200,7 +217,17 @@ export class Host {
     });
     this.armIdle();
     this.log(`sharing graph '${this.o.graph}'`);
-    return { link: this.hub.url, already: false };
+    return this.hub;
+  }
+
+  revokeInvite(id: unknown) {
+    const inv = typeof id === "string" ? this.invites.get(id) : undefined;
+    if (!inv) throw new Error(`No invite '${String(id)}'. sharing_status lists them.`);
+    if (inv.revoked) return { revoked: inv.id, already: true };
+    if (this.hub) this.hub.revoke(inv.id);
+    else this.invites.revoke(inv.id, "The host cancelled this join code.");
+    this.broadcastLocal({ t: "evt", event: "peers", data: this.status() });
+    return { revoked: inv.id, label: inv.label ?? null, was_for: inv.bound?.name ?? null };
   }
 
   /** Your new display name: what you record from now on, and what peers see. */
@@ -236,7 +263,11 @@ export class Host {
       graph: this.o.graph,
       host: this.o.user,
       sharing: Boolean(this.hub),
-      link: this.hub?.url ?? null,
+      invites: this.invites
+        .all()
+        .filter((i) => !i.revoked || Date.now() - Date.parse(i.revoked.at) < 24 * 3600_000)
+        .sort((a, b) => b.created_at.localeCompare(a.created_at))
+        .map((i) => this.invites.summary(i)),
       connected: live.filter((p) => p.state === "active").map(({ name, fingerprint, role, since }) => ({ name, fingerprint, role, since })),
       waiting: live.filter((p) => p.state === "pending").map(({ name, fingerprint, since }) => ({ name, fingerprint, since })),
       approved: this.store.all().map((p) => ({ name: p.name, fingerprint: fingerprint(p.key), role: p.role, approved_at: p.approved_at })),
@@ -266,6 +297,7 @@ export class Host {
   remove(name: string) {
     const p = this.store.byName(name);
     const removed = p ? this.store.remove(p.key) : false;
+    if (p) for (const inv of this.invites.revokeForKey(p.key, `removed ${name}`)) this.hub?.revoke(inv.id, "The host removed you from this graph.");
     const dropped = this.hub?.disconnect(name, "The host removed you from this graph.") ?? false;
     if (!removed && !dropped) throw new Error(`No peer named '${name}'.`);
     return { removed: name, was_approved: removed, was_connected: dropped };

@@ -37,13 +37,21 @@ describe("p2pcg mcp", () => {
     const { tools } = await client.listTools();
     const names = tools.map((t) => t.name);
     expect(names).toEqual(
-      expect.arrayContaining(["add_claim", "search", "beliefs", "graph_info", "model_guide", "share_graph", "join_graph", "approve_peer"]),
+      expect.arrayContaining(["add_claim", "search", "beliefs", "graph_info", "model_guide", "share_graph", "revoke_invite", "join_graph", "approve_peer"]),
     );
     const add = tools.find((t) => t.name === "add_claim")!;
     expect(add.inputSchema.required).toEqual(["text"]);
     expect(add.annotations?.readOnlyHint).toBe(false);
     expect(tools.find((t) => t.name === "search")!.annotations?.readOnlyHint).toBe(true);
     expect(client.getInstructions()).toMatch(/model_guide/);
+  });
+
+  it("offers a join prompt that passes the code to join_graph", async () => {
+    const { prompts } = await client.listPrompts();
+    expect(prompts.map((p) => p.name)).toContain("join");
+    const r = await client.getPrompt({ name: "join", arguments: { code: "p2pcg1_abc.def" } });
+    expect((r.messages[0]!.content as { text: string }).text).toMatch(/join_graph with the code exactly as given[\s\S]*fingerprint/);
+    expect(((r.messages[0]!.content as { text: string }).text)).toContain("p2pcg1_abc.def");
   });
 
   it("records and finds a claim as the server's user", async () => {

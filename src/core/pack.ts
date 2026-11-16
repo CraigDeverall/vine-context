@@ -125,6 +125,7 @@ export const RESERVED_TOOL_NAMES = [
   "share_graph",
   "stop_sharing",
   "sharing_status",
+  "revoke_invite",
   "approve_peer",
   "set_peer_role",
   "remove_peer",

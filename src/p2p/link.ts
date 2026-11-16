@@ -1,11 +1,13 @@
-// Join links and the cryptography around them.
+// Join codes and the cryptography around them.
 //
-//   p2pcg://join/<room>#<secret>
+//   p2pcg1_<room>.<secret>
 //
-// The room (16 random bytes) names the signalling topic. The secret (32 random
-// bytes) is in the #fragment and never leaves the joining machine: signalling
-// is encrypted with a key derived from it, and a peer proves it holds it with
-// an HMAC over the host's challenge before any other message is accepted.
+// Each invite has its own code. The room (16 random bytes) names the
+// signalling topic and tells the host which invite is being used. The secret
+// (32 random bytes) never leaves the two machines: signalling is encrypted with
+// a key derived from it, and a peer proves it holds it with an HMAC over the
+// host's challenge before any other message is accepted. The "1" is the format
+// version; "p2pcg2_" is kept for a later format (short code words).
 
 import { createCipheriv, createDecipheriv, createHash, createHmac, hkdfSync, randomBytes, timingSafeEqual } from "node:crypto";
 
@@ -21,19 +23,27 @@ export function newLink(): Link {
   return { room: b64u(randomBytes(16)), secret: randomBytes(32) };
 }
 
-export function formatLink(l: Link): string {
-  return `p2pcg://join/${l.room}#${b64u(l.secret)}`;
+export const CODE_PREFIX = "p2pcg1_";
+
+export function formatCode(l: Link): string {
+  return `${CODE_PREFIX}${l.room}.${b64u(l.secret)}`;
 }
 
-const LINK_RE = /p2pcg:\/\/join\/([A-Za-z0-9_-]{16,64})#([A-Za-z0-9_-]{32,128})/;
+const CODE_RE = /(?<![A-Za-z0-9_-])p2pcg1_([A-Za-z0-9_-]{22})\.([A-Za-z0-9_-]{43})(?![A-Za-z0-9_-])/;
+const DAMAGED_RE = /p2pcg1_[A-Za-z0-9_.-]*/;
+const OLD_LINK_RE = /p2pcg:\/\/join\//;
 
-/** Finds a join link in text (it may be pasted with other words around it). */
-export function parseLink(text: string): Link {
-  const m = LINK_RE.exec(text.trim());
-  if (!m) throw new Error("That is not a p2pcg join link. It looks like p2pcg://join/<room>#<secret>.");
-  const secret = unb64u(m[2]!);
-  if (secret.length !== 32) throw new Error("The link's secret is damaged: copy the whole link again.");
-  return { room: m[1]!, secret };
+/** Finds a join code in text (it may be pasted with other words around it). */
+export function parseCode(text: string): Link {
+  const t = text.trim();
+  const m = CODE_RE.exec(t);
+  if (m) {
+    const secret = unb64u(m[2]!);
+    if (b64u(unb64u(m[1]!)) === m[1] && unb64u(m[1]!).length === 16 && secret.length === 32 && b64u(secret) === m[2]) return { room: m[1]!, secret };
+  }
+  if (m || DAMAGED_RE.test(t)) throw new Error("That join code is damaged or cut short: copy the whole code (p2pcg1_ then two parts joined by a dot) again.");
+  if (OLD_LINK_RE.test(t)) throw new Error("That is an old p2pcg:// join link, which no longer works. Ask the person for a new join code (it starts p2pcg1_).");
+  throw new Error("That is not a p2pcg join code. It looks like p2pcg1_<room>.<secret>.");
 }
 
 export function roomKeys(l: Link): { tag: string; key: Buffer } {

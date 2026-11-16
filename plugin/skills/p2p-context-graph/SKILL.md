@@ -1,6 +1,6 @@
 ---
 name: p2p-context-graph
-description: Use a shared context graph (p2p-context-graph, the p2pcg tools) to record and look up what a group knows, such as claims, questions, decisions and findings; to share it with other people or join someone else's; and to design new context models for it. Use when the p2p-context-graph MCP tools are available and the work produces or needs knowledge others would want, when the person pastes a p2pcg:// link, asks to share their graph or approve someone, mentions a context graph, shared context, claims, open questions or what the team believes, or asks to create, change or validate a context model or model pack.
+description: Use a shared context graph (p2p-context-graph, the p2pcg tools) to record and look up what a group knows, such as claims, questions, decisions and findings; to share it with other people or join someone else's; and to design new context models for it. Use when the p2p-context-graph MCP tools are available and the work produces or needs knowledge others would want, when the person pastes a p2pcg1_ join code or uses /p2p-context-graph:join, asks to share their graph or approve someone, mentions a context graph, shared context, claims, open questions or what the team believes, or asks to create, change or validate a context model or model pack.
 ---
 
 # p2p-context-graph
@@ -14,8 +14,8 @@ conversation.
 
 The tools are on the `p2p-context-graph` MCP server. Two are always there:
 
-- `graph_info`: which graph and model this is, how big it is, and the join
-  link while it's shared. Every model tool's result also ends with a line
+- `graph_info`: which graph and model this is, how big it is, and whether
+  it's shared. Every model tool's result also ends with a line
   saying which graph it acted on; mention it when the person might be unsure.
 - `model_guide`: the model's own instructions. **Call it once before you first
   write in a conversation, and follow it.** It overrides general habits.
@@ -36,7 +36,7 @@ limited by the role they gave you.
 Some tools show an interactive view next to their result, where the agent
 supports MCP Apps:
 
-- `open_console`: sharing, the join link, who is waiting (with fingerprints),
+- `open_console`: sharing, the join codes, who is waiting (with fingerprints),
   roles. The person can approve and remove people there themselves.
 - `explore_graph`: the graph as a picture, at any moment in its history. You
   get only a summary; it's for the person to look at.
@@ -53,16 +53,30 @@ link too, and tell them not to share it, as it acts as them.
 
 ## Sharing and joining
 
-- **When the person pastes a `p2pcg://join/…` link**, call `join_graph` with
-  it. Then tell them their name and key fingerprint, and that the host must
-  approve them. Once approved, the graph tools act on the host's graph. Call
+- **Join codes:** each invite is one code, `p2pcg1_<room>.<secret>`, for one
+  person's machine. The first person approved with it is tied to it and can
+  rejoin with it later without asking again; anyone else using it is turned
+  away. An unused code expires (24 hours unless set). Old `p2pcg://` links no
+  longer work: ask for a new code.
+- **When the person pastes a join code** (or runs `/p2p-context-graph:join`),
+  call `join_graph` with it. Then tell them their name and key fingerprint,
+  and that the host must approve them after checking that fingerprint with
+  them. Once approved, the graph tools act on the host's graph. Call
   `model_guide` again, because it may use a different model. `graph_info`
   shows which graph you're using. `leave_graph` goes back to their own.
-- **To share the person's own graph**, call `share_graph`. Give them the link
-  and tell them to send it privately: anyone with it can ask to join.
+  In a later session, `join_graph` with no code rejoins the last graph they
+  joined.
+- **To invite someone**, call `share_graph`, with a `label` such as
+  "for Sam" if the person says who it's for. Give them the `send` line and
+  tell them to send it privately to that one person. Call it again for each
+  other person: never hand one code to several people.
 - **A new graph is shared as soon as it's created** (`use_graph` with a new
-  name returns `link`). Show the person that link straight away, with the same
-  advice. `stop_sharing` turns it off.
+  name returns a `code` and `send` line). Show the person that straight away,
+  with the same advice. `stop_sharing` turns sharing off; codes work again
+  when they share again.
+- `sharing_status` lists the invites: open, used (and by whom), expired or
+  revoked. `revoke_invite` cancels one. Refusing someone who is waiting
+  (`remove_peer`) also cancels the code they used.
 - **Names:** people see the name in `shared_as` (from git's `user.name` until
   set). The first time the person shares or joins, tell them the name others
   will see and offer to change it with `set_my_name`, using the name *they*

@@ -1,5 +1,6 @@
-// The sharing console. As host: the link, who is waiting (with the key
-// fingerprint to check), who is connected, and their roles. As a peer: your
+// The sharing console. As host: the invites (one join code per person), who
+// is waiting (with the key fingerprint to check), who is connected, and their
+// roles. As a peer: your
 // connection to someone else's graph.
 
 import { useCallback, useEffect, useState } from "react";
@@ -13,13 +14,22 @@ interface Peer {
   since?: string;
   approved_at?: string;
 }
+interface Invite {
+  id: string;
+  label: string | null;
+  state: "open" | "used" | "expired" | "revoked";
+  code: string | null;
+  for: { name: string; since: string } | null;
+  created_at: string;
+  expires_at: string | null;
+}
 interface HostState {
   mode: "host";
   using: string;
   graph: string;
   host: string;
   sharing: boolean;
-  link: string | null;
+  invites: Invite[];
   connected: Peer[];
   waiting: Peer[];
   approved: Peer[];
@@ -60,7 +70,8 @@ export function Console({ b }: { b: Bridge }) {
   const [state, setState] = useState<State | undefined>(b.data as State | undefined);
   const [busy, setBusy] = useState<string>();
   const [error, setError] = useState<string>();
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied] = useState<string>();
+  const [label, setLabel] = useState("");
   const [pick, setPick] = useState<Record<string, Role>>({});
   const [naming, setNaming] = useState<string>();
   const saveName = async () => {
@@ -135,16 +146,23 @@ export function Console({ b }: { b: Bridge }) {
     );
   }
 
-  const copy = async () => {
-    if (!state.link) return;
+  const sendLine = (code: string) => `Join my context graph: /p2p-context-graph:join ${code}`;
+  const copy = async (inv: Invite) => {
+    if (!inv.code) return;
     try {
-      await navigator.clipboard.writeText(state.link);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
+      await navigator.clipboard.writeText(sendLine(inv.code));
+      setCopied(inv.id);
+      setTimeout(() => setCopied(undefined), 1500);
     } catch {
-      (document.getElementById("p2pcg-link") as HTMLInputElement | null)?.select();
+      (document.getElementById(`p2pcg-code-${inv.id}`) as HTMLInputElement | null)?.select();
     }
   };
+  const invite = async () => {
+    await act("invite", "share_graph", label.trim() ? { label: label.trim() } : {});
+    setLabel("");
+  };
+  const open = state.invites.filter((i) => i.state === "open");
+  const used = state.invites.filter((i) => i.state === "used");
   const offline = state.approved.filter((a) => !state.connected.some((c) => c.name === a.name));
 
   return (
@@ -162,7 +180,7 @@ export function Console({ b }: { b: Bridge }) {
           </button>
         ) : (
           <button className="primary" disabled={!!busy} onClick={() => act("share", "share_graph")}>
-            Share this graph
+            Share and make a join code
           </button>
         )}
       </div>
@@ -206,14 +224,50 @@ export function Console({ b }: { b: Bridge }) {
         )}
       </div>
 
-      {state.sharing && state.link && (
+      {state.sharing && (
         <>
-          <h2>Join link</h2>
-          <div className="linkbox">
-            <input id="p2pcg-link" readOnly value={state.link} onFocus={(e) => e.currentTarget.select()} aria-label="Join link" />
-            <button onClick={copy}>{copied ? "Copied" : "Copy"}</button>
+          <h2>Invites</h2>
+          <p className="faint">
+            Each join code is for one person. It works on the first machine you approve with it (they rejoin with it later), and an unused one expires. Send it privately.
+          </p>
+          {open.length === 0 && <p className="empty">No open join codes.</p>}
+          <div className="list">
+            {open.map((i) => (
+              <div className="card" key={i.id}>
+                <div className="spread">
+                  <span>
+                    <strong>{i.label ?? "Join code"}</strong> <span className="faint">expires {when(i.expires_at!)}</span>
+                  </span>
+                  <button disabled={!!busy} onClick={() => act(`cancel ${i.id}`, "revoke_invite", { id: i.id })}>
+                    Cancel
+                  </button>
+                </div>
+                <div className="linkbox">
+                  <input id={`p2pcg-code-${i.id}`} readOnly value={sendLine(i.code!)} onFocus={(e) => e.currentTarget.select()} aria-label="Message to send" />
+                  <button onClick={() => void copy(i)}>{copied === i.id ? "Copied" : "Copy"}</button>
+                </div>
+              </div>
+            ))}
           </div>
-          <p className="faint">Send it privately. Anyone with it can ask to join; you approve each person here.</p>
+          {/* Not a <form>: views run sandboxed without allow-forms, which blocks submits. */}
+          <div className="row" role="group" aria-label="New join code" style={{ marginTop: 8 }}>
+            <input
+              value={label}
+              maxLength={60}
+              placeholder="Who it's for (optional)"
+              aria-label="Who the code is for"
+              onInput={(e) => setLabel(e.currentTarget.value)}
+              onKeyDown={(e) => e.key === "Enter" && void invite()}
+            />
+            <button disabled={!!busy} onClick={() => void invite()}>
+              New join code
+            </button>
+          </div>
+          {used.length > 0 && (
+            <p className="faint">
+              In use: {used.map((i) => `${i.label ? `${i.label}: ` : ""}${i.for!.name}`).join(", ")}
+            </p>
+          )}
         </>
       )}
 

@@ -16,7 +16,7 @@ Commands:
   demo [--port N] [--no-open]         Open the views on two example graphs (a copy; nothing of yours changes)
   ui [--graph NAME] [--port N] [--open]
                                       Show the console, explorer and model studio in a browser
-  status [--graph NAME]               Show a graph's host: sharing, link, peers
+  status [--graph NAME]               Show a graph's host: sharing, invites, peers
   whoami                              Show your name and key fingerprint
   doctor                              Check that this machine can run p2pcg
   model list                          List the model packs you can use
@@ -188,7 +188,7 @@ async function host(args: string[]): Promise<number> {
       onStop: () => process.exit(0),
     });
     log(`host for graph '${h.graph.name}' (${h.graph.model.name}) on ${h.socket}`);
-    if (values.share) console.log(h.share().link);
+    if (values.share) console.log(h.share().code);
     const stop = () => h.stop();
     process.on("SIGINT", stop);
     process.on("SIGTERM", stop);

@@ -21,7 +21,7 @@ go unnoticed, and a week later nobody can say what the team believed when it
 made a call.
 
 p2p-context-graph gives the group one shared graph. One person hosts it on
-their machine and shares a link; everyone else pastes the link into their
+their machine and sends each person a join code; they paste it into their
 agent, the host approves them, and from then on every agent reads and writes
 the same graph, through tools defined by the graph's **context model**.
 
@@ -92,12 +92,20 @@ Agents that support MCP Apps show the views inline. In other agents, ask for the
 To use the example data instead of a new graph, add `P2PCG_DATA_DIR=<the folder demo printed>` and `--graph incident`.
 
 **3. Share it.**
-1. **You:** create a graph (*"start a context graph called incident-42"*) or say *"share my context graph"*. Either gives you a `p2pcg://join/…` link straight away. Send it privately.
-   Others see you by your git name until you change it (*"set my name to …"*, or *Change* in the console).
-2. **Them:** paste the link into their agent. They see their name and a key fingerprint.
-3. **You:** check the fingerprint with them. Approve them in the console, or with *"approve bob as a contributor"*.
+1. **You:** create a graph (*"start a context graph called incident-42"*) or say *"invite Sam to my context graph"*. Either gives you a join code straight away, as a line to send:
+   `Join my context graph: /p2p-context-graph:join p2pcg1_…`
+   Send it privately, to that one person. Others see you by your git name until you change it (*"set my name to …"*, or *Change* in the console).
+2. **Them:** run that command, or paste the code into their agent. They see their name and a key fingerprint.
+3. **You:** check the fingerprint with them. Approve them in the console, or with *"approve sam as a contributor"*.
 
 From then on, their graph tools act on your graph, limited by their role (reader, contributor or admin).
+
+**Each code is for one person's machine.**
+- Approving someone ties the code to their key. They rejoin with it in later sessions without asking (*"rejoin the context graph"* calls `join_graph` with no code). Anyone else who uses it is turned away.
+- While someone is waiting on a code, anyone else using it is turned away.
+- Refusing the person waiting cancels the code, since it probably reached the wrong person: send a new one.
+- An unused code expires after 24 hours (*"invite Sam, valid for a week"* sets it).
+- `sharing_status` and the console list the invites; `revoke_invite` or *Cancel* stops one working.
 
 **Check your machine** with `node dist/cli.js doctor`.
 
@@ -139,9 +147,9 @@ flowchart LR
 
 - **One host process per graph** owns the Relate store. Every agent session on that machine is a client over a local socket, which only that user can open.
 - **The host is the centre of a star.** Peers connect straight to it over WebRTC.
-  - Only the connection handshake passes through public Nostr relays, sealed with a key derived from the link's secret.
-  - The secret stays after the `#` and is never sent anywhere.
-  - Joining needs both the secret (an HMAC proof) and an Ed25519 identity key, and the host approves each key once.
+  - A join code is `p2pcg1_<room>.<secret>`, one per invite. The room names a signalling topic; the secret never leaves the two machines.
+  - Only the connection handshake passes through public Nostr relays, sealed with a key derived from the code's secret.
+  - Joining needs both the secret (an HMAC proof) and an Ed25519 identity key. The host approves each key once, and that ties the code to the key.
 - **Peers only get the model's tools,** never raw Cypher or the host's admin operations. The host checks every call against the caller's role.
 - **Context models are packs:**
   - `model.yaml` holds the shape.

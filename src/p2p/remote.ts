@@ -1,5 +1,5 @@
-// The joining side of the star: connects to a host from a join link, proves
-// the link's secret and this install's identity, waits for approval, then
+// The joining side of the star: connects to a host from a join code, proves
+// the code's secret and this install's identity, waits for approval, then
 // forwards requests to the host.
 
 import { EventEmitter } from "node:events";
@@ -84,7 +84,7 @@ export class RemoteHost extends EventEmitter {
       if (this.state !== "connecting") return clearInterval(this.offerTimer);
       if (Date.now() - started > timeoutMs) {
         clearInterval(this.offerTimer);
-        return this.finish("closed", "No answer from the host. Check that the link is current and the host is still sharing.");
+        return this.finish("closed", "No answer from the host. Either the host is not sharing right now, or this join code has expired or was cancelled (then ask for a new one).");
       }
       const ok = await this.signaller.send(msg);
       if (!ok) this.o.log?.("no signalling relay accepted the offer; retrying");
