@@ -16,6 +16,7 @@ import { LocalHost } from "../src/host/client.js";
 import { Host } from "../src/host/host.js";
 import { APP_MIME, VIEWS } from "../src/mcp/apps.js";
 import { Session } from "../src/mcp/server.js";
+import { formatCode, newLink } from "../src/p2p/link.js";
 import { memorySignaller } from "../src/p2p/signal.js";
 import { startUi, type UiServer } from "../src/ui/server.js";
 import { pause, tempDir, writePack } from "./helpers.js";
@@ -303,6 +304,21 @@ describe("names, auto-share and which graph", () => {
     } finally {
       process.env.P2PCG_AUTO_SHARE = "off";
     }
+  });
+
+  it("gets back to its own graph with use_graph when a joined host doesn't answer", async () => {
+    const me = await agent("alice");
+    await me.call("add_claim", { text: "Mine, on main" });
+    // A code for a room nobody is hosting: the join waits, then gives up waiting.
+    expect(await me.call("join_graph", { code: formatCode(newLink()) })).toHaveProperty("waiting");
+    const info = await me.call("graph_info");
+    expect(info.using).toMatch(/connecting to|not connected to/);
+    expect(info.your_graphs).toContain("main");
+    // No leave_graph needed: use_graph leaves the dead join itself and says so.
+    const r = await me.call("use_graph", { name: "main" });
+    expect(r).toMatchObject({ using: "your graph 'main'", left: expect.stringMatching(/^Left .*graph \(it wasn't connected/) });
+    expect((await me.call("search", { query: "Mine" })).length).toBe(1);
+    expect((await me.call("graph_info")).your_graphs).toContain("main");
   });
 
   it("says which graph each model tool acted on", async () => {

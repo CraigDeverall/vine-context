@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import type { Bridge } from "../bridge";
+import type { Panel } from "../panel";
 
 interface ReceiptData {
   tool: string;
@@ -14,7 +15,7 @@ interface ReceiptData {
 
 const show = (v: unknown): string => (Array.isArray(v) ? v.join(", ") : typeof v === "object" && v ? JSON.stringify(v) : String(v));
 
-export function Receipt({ b }: { b: Bridge }) {
+export function Receipt({ b, open }: { b: Bridge; open?: (p: Panel) => void }) {
   const d = b.data as ReceiptData | undefined;
   const [undone, setUndone] = useState<string>();
   const [error, setError] = useState<string>();
@@ -65,7 +66,19 @@ export function Receipt({ b }: { b: Bridge }) {
           ))}
         </dl>
       )}
-      <p className="faint" style={{ marginTop: 6 }}>In {d.where}</p>
+      <div className="spread" style={{ marginTop: 6 }}>
+        <p className="faint" style={{ margin: 0 }}>In {d.where}</p>
+        {open && (
+          <div className="row">
+            <button className="link" onClick={() => open("explorer")}>
+              Explore graph
+            </button>
+            <button className="link" onClick={() => open("console")}>
+              Console
+            </button>
+          </div>
+        )}
+      </div>
       {undone && <p className="notice">{undone}</p>}
       {error && <p className="notice bad">{error}</p>}
     </div>

@@ -2,6 +2,11 @@
 // subscribe by tag, across several relays, with per-relay timeouts and
 // reconnects. nostr-tools is used only to sign (finalizeEvent).
 //
+// A host runs for hours, through sleeps and network drops, so each relay is
+// pinged; one that stops answering is dropped and reconnected, forever, with
+// the wait between tries capped. A connection that dies without closing
+// (common after a sleep) would otherwise look open while hearing nothing.
+//
 // Why not nostr-tools' SimplePool: in nostr-tools 2.26 a failed relay
 // connection overflows the stack (spike A, 2026-11-15).
 
@@ -20,7 +25,11 @@ export class RelaySet {
   private sk = generateSecretKey();
   readonly status = new Map<string, "connecting" | "open" | "down">();
 
-  constructor(private relays: string[], private timeoutMs = 4000) {
+  constructor(
+    private relays: string[],
+    private timeoutMs = 4000,
+    private keepalive: { pingMs: number; maxWaitMs: number } = { pingMs: 30_000, maxWaitMs: 60_000 },
+  ) {
     for (const url of relays) this.connect(url, 0);
   }
 
@@ -29,9 +38,19 @@ export class RelaySet {
     this.status.set(url, "connecting");
     const ws = new WebSocket(url, { handshakeTimeout: this.timeoutMs });
     this.sockets.set(url, ws);
+    let alive = true;
+    let ping: NodeJS.Timeout | undefined;
+    ws.on("pong", () => (alive = true));
     ws.on("open", () => {
+      attempt = 0;
       this.status.set(url, "open");
       for (const [id, s] of this.subs) ws.send(JSON.stringify(["REQ", id, s.filter]));
+      ping = setInterval(() => {
+        if (!alive) return ws.terminate(); // no pong since the last ping: dead
+        alive = false;
+        ws.ping();
+      }, this.keepalive.pingMs);
+      ping.unref();
     });
     ws.on("message", (data) => {
       let msg: unknown[];
@@ -49,11 +68,19 @@ export class RelaySet {
         this.waiting.get(url)?.get(msg[1] as string)?.(msg[2] === true);
       }
     });
+    let gone = false;
     const down = () => {
-      if (this.status.get(url) === "down" && this.sockets.get(url) !== ws) return;
+      // "error" and "close" both arrive for one failure; act once, and only for the current socket.
+      if (gone) return;
+      gone = true;
+      clearInterval(ping);
+      ws.removeAllListeners("message");
+      if (this.sockets.get(url) !== ws) return;
       this.status.set(url, "down");
       for (const resolve of this.waiting.get(url)?.values() ?? []) resolve(false);
-      if (!this.closed && attempt < 5) setTimeout(() => this.connect(url, attempt + 1), 500 * 2 ** attempt);
+      if (this.closed) return;
+      const wait = Math.min(500 * 2 ** attempt, this.keepalive.maxWaitMs);
+      setTimeout(() => this.connect(url, attempt + 1), wait).unref();
     };
     ws.on("error", down);
     ws.on("close", down);
@@ -102,6 +129,9 @@ export class RelaySet {
 
   close() {
     this.closed = true;
-    for (const ws of this.sockets.values()) ws.terminate();
+    for (const ws of this.sockets.values()) {
+      ws.on("error", () => undefined); // terminating a connecting socket emits an error
+      ws.terminate();
+    }
   }
 }

@@ -10,3 +10,6 @@ export function defaultDataDir(): string {
 export function userPacksDir(dataDir = defaultDataDir()): string {
   return join(dataDir, "models");
 }
+
+/** Graphs are shared by default (that's the point); P2PCG_AUTO_SHARE=off turns the default off. */
+export const autoShare = () => !/^(0|off|false|no)$/i.test(process.env.P2PCG_AUTO_SHARE ?? "");

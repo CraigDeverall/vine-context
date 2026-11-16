@@ -159,6 +159,44 @@ describe("the star", () => {
     expect((await bob2.request<any>("describe")).you.id).toBe("bob");
   });
 
+  it("keeps sharing across a host restart, so members get back in; stop_sharing stays off", async () => {
+    const { host, local, dataDir } = await startHost("alice");
+    const graph = `star${n}`;
+    const bobDir = tempDir();
+    const { code } = await local.request<{ code: string }>("share");
+    const bob1 = join(code, "bob", bobDir);
+    expect(await bob1.admitted).toBe("active");
+
+    // The host stops (a sleep, a reboot, an idle exit) and starts again: still sharing, and bob is let back in.
+    local.close();
+    host.stop();
+    await waitFor(() => bob1.state === "closed");
+    const again = await Host.start({ dataDir, graph, user: "alice", signal, ice });
+    hosts.push(again);
+    expect(again.status().sharing).toBe(true);
+    const bob2 = join(code, "bob", bobDir);
+    expect(await bob2.admitted).toBe("active");
+
+    // Turned off on purpose: it stays off after a restart.
+    again.unshare();
+    again.stop();
+    const third = await Host.start({ dataDir, graph, user: "alice", signal, ice });
+    hosts.push(third);
+    expect(third.status().sharing).toBe(false);
+  });
+
+  it("shares by default: a graph that was never turned off starts sharing", async () => {
+    const before = process.env.P2PCG_AUTO_SHARE;
+    delete process.env.P2PCG_AUTO_SHARE;
+    try {
+      const h = await Host.start({ dataDir: tempDir(), graph: "fresh", user: "alice", signal, ice });
+      hosts.push(h);
+      expect(h.status().sharing).toBe(true);
+    } finally {
+      process.env.P2PCG_AUTO_SHARE = before;
+    }
+  });
+
   it("refuses a name that is already taken", async () => {
     const { local } = await startHost("alice");
     const { code } = await local.request<{ code: string }>("share");

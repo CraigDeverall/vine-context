@@ -89,6 +89,12 @@ Then ask things like:
 
 Agents that support MCP Apps show the views inline. In other agents, ask for the *browser view*: the same views on 127.0.0.1.
 
+Where the views show:
+
+- **Claude** (Claude Code desktop and Claude desktop): in the chat, and the console can stay open beside it.
+- **Codex app** (in the ChatGPT desktop app): in the chat, with a button to expand to full screen. There's no panel that stays open beside the chat.
+- **Codex CLI and other terminal agents:** no views. Ask for the *browser view*.
+
 **Or install the plugin** (skills, the `/p2p-context-graph:join` command and the MCP server, in one):
 
 ```bash
@@ -122,6 +128,8 @@ From then on, their graph tools act on your graph, limited by the code's role (c
 - There's no approval step: the single-use code is the credential, so send it privately.
 - An unused code expires after 24 hours (*"invite Sam, valid for a week"* sets it).
 - `sharing_status` and the console list the invites; `revoke_invite` or *Cancel* stops one working.
+- **Sharing is on by default** and survives your host restarting (sleep, reboot), so members get back in with their codes. *"Stop sharing"* turns it off until you share again. `P2PCG_AUTO_SHARE=off` makes off the default.
+- **Your own graphs:** on the machine that hosts a graph, just *"use my rainy-eve graph"* (`use_graph`). Joining is for other people's graphs.
 
 **Check your machine** with `node dist/cli.js doctor`.
 

@@ -5,11 +5,12 @@
 // it is also the centre of the star: peers reach it over WebRTC, with the
 // role their invite gave them. Everyone is told when someone new joins.
 
-import { chmodSync, existsSync, mkdirSync, unlinkSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { createConnection, createServer, type Server, type Socket } from "node:net";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import { Graph, type Caller, type Role } from "../core/graph.js";
 import { fingerprint, NAME_RE } from "../core/identity.js";
+import { autoShare } from "../core/paths.js";
 import { Hub } from "../p2p/hub.js";
 import { formatCode } from "../p2p/link.js";
 import { PEER_METHODS, lineReader, type Event, type Message, type Request } from "../p2p/protocol.js";
@@ -76,6 +77,9 @@ export class Host {
     const graph = await Graph.open({ dataDir: o.dataDir, name: o.graph, model: o.model });
     const host = new Host(graph, o);
     await host.listen();
+    // Sharing is on by default and survives a restart (a sleep, a reboot, an idle exit), so
+    // members can come back with their codes. Only stop_sharing turns it off, and it stays off.
+    if (host.sharingWanted()) host.startSharing();
     host.armIdle();
     return host;
   }
@@ -198,9 +202,32 @@ export class Host {
     return { ...this.invites.summary(inv), code: formatCode(inviteLink(inv)), already_sharing: already };
   }
 
+  private get sharingFile(): string {
+    return join(hostDir(this.o.dataDir, this.o.graph), "sharing.json");
+  }
+
+  /** Sharing is on unless it was turned off with stop_sharing (or P2PCG_AUTO_SHARE is off and it was never turned on). */
+  private sharingWanted(): boolean {
+    try {
+      return JSON.parse(readFileSync(this.sharingFile, "utf8")).on === true;
+    } catch {
+      return autoShare();
+    }
+  }
+
+  private rememberSharing(on: boolean) {
+    try {
+      mkdirSync(dirname(this.sharingFile), { recursive: true, mode: 0o700 });
+      writeFileSync(this.sharingFile, JSON.stringify({ on }) + "\n", { mode: 0o600 });
+    } catch (e) {
+      this.log(`couldn't save the sharing setting: ${(e as Error).message}`);
+    }
+  }
+
   /** Starts listening for every live invite, without making a new one. */
   startSharing(): Hub {
     if (this.hub) return this.hub;
+    this.rememberSharing(true);
     const o = this.o;
     this.hub = new Hub({
       get hostName() {
@@ -245,7 +272,13 @@ export class Host {
     return { name };
   }
 
+  /** Stops sharing, and keeps it off across restarts. */
   unshare(): { stopped: boolean } {
+    this.rememberSharing(false);
+    return this.closeHub();
+  }
+
+  private closeHub(): { stopped: boolean } {
     if (!this.hub) return { stopped: false };
     this.hub.stop();
     this.hub = undefined;
@@ -335,7 +368,7 @@ export class Host {
     if (this.stopped) return;
     this.stopped = true;
     clearTimeout(this.idleTimer);
-    this.unshare();
+    this.closeHub(); // stopping the host isn't stopping sharing: it resumes on the next start
     for (const c of this.clients) c.destroy();
     this.server.close();
     if (process.platform !== "win32" && existsSync(this.socket)) unlinkSync(this.socket);

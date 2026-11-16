@@ -5,6 +5,12 @@ description: Join someone else's shared context graph (p2p-context-graph) with t
 
 # Join a shared context graph
 
+**First: is it their own graph?** If the person names a graph and gives no
+code, call `graph_info`: if that name is in its `your_graphs` (graphs on this
+machine), it's theirs. Call `use_graph` with that name instead of joining;
+joining is only for someone else's graph. `use_graph` also leaves any graph
+this session joined.
+
 1. Call `join_graph` on the p2p-context-graph MCP server with the code exactly
    as given (it may be inside other text). With no code, `join_graph` rejoins
    the last graph this machine joined.
@@ -17,6 +23,8 @@ description: Join someone else's shared context graph (p2p-context-graph) with t
    If it was already used and not by them, they should warn the host: the code
    may have leaked.
    An old `p2pcg://` link no longer works either.
+   If the host doesn't answer, it may not be sharing right now; to get back
+   to their own graph meanwhile, call `use_graph` (or `leave_graph`).
 
 **More than one context-graph server:** an agent can have several (for example
 a second identity set up for testing, such as `p2p-context-graph-bob`). Each

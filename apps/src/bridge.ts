@@ -40,7 +40,7 @@ export function useBridge(): Bridge | { error: string } | undefined {
   const [state, setState] = useState<{ app: App; input?: Record<string, unknown>; data?: unknown; failed?: string } | { error: string }>();
 
   useEffect(() => {
-    const app = new App({ name: "p2p-context-graph", version: "1" }, {}, { autoResize: true });
+    const app = new App({ name: "p2p-context-graph", version: "1" }, { availableDisplayModes: ["inline", "fullscreen", "pip"] }, { autoResize: true });
     app.ontoolinput = (p) => setState((s) => (s && "app" in s ? { ...s, input: p.arguments } : s));
     app.ontoolresult = (r) =>
       setState((s) => {

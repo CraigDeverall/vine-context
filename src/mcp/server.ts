@@ -11,7 +11,7 @@ import { McpServer, type RegisteredTool } from "@modelcontextprotocol/sdk/server
 import { z } from "zod";
 import { inputShape, type Role, type Snapshot } from "../core/graph.js";
 import { listPacks, loadPack, resolvePack } from "../core/pack.js";
-import { defaultDataDir, userPacksDir } from "../core/paths.js";
+import { autoShare, defaultDataDir, userPacksDir } from "../core/paths.js";
 import { validatePack } from "../core/validate.js";
 import { spawn } from "node:child_process";
 import { fingerprint, nameSource, setName, type Identity } from "../core/identity.js";
@@ -42,8 +42,6 @@ function joinNotice(p: Record<string, any>, where: string): string {
   return `News: ${p.name} joined ${where} as ${p.role}${via}, at ${p.joined_at}. Key fingerprint ${p.fingerprint}; ${agent}${extra ? ` (${extra})` : ""}.`;
 }
 
-/** New graphs are shared straight away unless P2PCG_AUTO_SHARE is off. */
-const autoShare = () => !/^(0|off|false|no)$/i.test(process.env.P2PCG_AUTO_SHARE ?? "");
 
 /** Opens a URL in the default browser; false where that isn't possible or is turned off. */
 function openInBrowser(url: string): boolean {
@@ -245,7 +243,7 @@ export class Session {
       "graph_info",
       {
         title: "Graph info",
-        description: "Which graph this session is using (yours, or one you joined), its model, how many of each node it holds, and your role.",
+        description: "Which graph this session is using (yours, or one you joined), its model, how many of each node it holds, your role, and the graphs on this machine (your_graphs: switch with use_graph).",
         annotations: ro,
       },
       wrap(async () => {
@@ -256,7 +254,11 @@ export class Session {
             using: r.state === "connecting" ? `connecting to ${host}'s graph` : `not connected to ${host}'s graph`,
             state: r.state,
             reason: r.reason,
-            next: r.state === "connecting" ? "Wait a moment; the graph tools switch automatically." : "Call join_graph again (with no code it rejoins the last graph you joined), or leave_graph.",
+            your_graphs: this.localGraphs(),
+            next:
+              r.state === "connecting"
+                ? "Wait a moment; the graph tools switch automatically."
+                : "Call join_graph again (with no code it rejoins the last graph you joined), or use_graph to switch to one of your own graphs.",
           };
         }
         const info = (await this.backend().request("info")) as Record<string, unknown>;
@@ -265,6 +267,7 @@ export class Session {
           using: this.where(),
           ...info,
           you: { ...this.active?.you, name: this.remote ? this.active?.you.id : identity.name, fingerprint: fingerprint(identity.publicKey) },
+          your_graphs: this.localGraphs(),
         };
       }),
     );
@@ -632,7 +635,7 @@ export class Session {
         title: "Switch to another of your graphs",
         description:
           "Switch this session to another graph on this machine, creating it if it doesn't exist. A new graph uses `model` (a pack name; default temporal-claims); an existing graph keeps the model it was made with. " +
-          "Leave a joined graph first.",
+          "If this session is in someone else's graph, it leaves it first (nothing is lost; join_graph with no code rejoins).",
         inputSchema: {
           name: z.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/).describe("Graph name: lower-case letters, digits and dashes"),
           model: z.string().optional().describe("Model pack for a new graph"),
@@ -640,14 +643,23 @@ export class Session {
         annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       },
       run(async ({ name, model }: { name: string; model?: string }) => {
-        if (this.remote) throw new Error("You are in someone else's graph. Call leave_graph first.");
         if (!this.o.openLocal) throw new Error("This session can't switch graphs.");
+        let left: string | undefined;
+        if (this.remote) {
+          left = `Left ${this.remote.hostName ?? "the host"}'s graph${this.remote.state === "active" ? "" : ` (it wasn't connected: ${this.remote.reason ?? this.remote.state})`}.`;
+          this.remote.close();
+          this.remote = undefined;
+        }
         if (model) resolvePack(model, this.dataDir); // fails early with the list of packs
         const isNew = !this.localGraphs().includes(name);
-        const host = await this.o.openLocal(name, model);
+        const host = await this.o.openLocal(name, model).catch(async (e) => {
+          if (left) await this.useLocal(); // back on the session's own graph, not the one it left
+          throw e;
+        });
         const d = await host.request<{ model: { name: string } }>("describe");
         if (model && d.model.name !== resolvePack(model, this.dataDir).model.name) {
           host.close();
+          if (left) await this.useLocal();
           throw new Error(`Graph '${name}' already exists with the model '${d.model.name}'. Pick another name for a '${model}' graph.`);
         }
         const old = this.localHost;
@@ -658,6 +670,7 @@ export class Session {
         if (isNew && autoShare()) {
           const inv = this.invited(await host.request<Record<string, any>>("share"));
           return text({
+            ...(left ? { left } : {}),
             created: this.where(),
             model: this.active?.model.title,
             ...inv,
@@ -666,7 +679,7 @@ export class Session {
               "Call share_graph for a code for each other person. stop_sharing turns sharing off. Then call model_guide before writing.",
           });
         }
-        return text({ using: this.where(), model: this.active?.model.title, next: "Call model_guide before writing to it." });
+        return text({ ...(left ? { left } : {}), using: this.where(), model: this.active?.model.title, next: "Call model_guide before writing to it." });
       }),
     );
   }
