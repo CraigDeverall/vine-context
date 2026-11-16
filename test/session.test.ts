@@ -1,5 +1,5 @@
 // Two agents' MCP sessions: Alice shares her graph, Bob joins it with the
-// code, and Bob's tools switch to Alice's graph once she approves him.
+// code, Bob's tools switch to Alice's graph at once, and Alice's agent is told he joined.
 
 import { EventEmitter } from "node:events";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -41,7 +41,7 @@ async function agent(user: string, graph: string) {
   await client.connect(b);
   const call = async (name: string, args: Record<string, unknown> = {}) => {
     const r: any = await client.callTool({ name, arguments: args });
-    const text = r.content[0].text as string;
+    const text = (r.content as { text: string }[]).find((c) => !c.text.startsWith("News: "))!.text;
     if (r.isError) throw new Error(text);
     try {
       return JSON.parse(text);
@@ -49,7 +49,10 @@ async function agent(user: string, graph: string) {
       return text;
     }
   };
-  return { client, call, changes: () => listChanges };
+  /** Every text item of a tool result, join notices included. */
+  const raw = async (name: string, args: Record<string, unknown> = {}) =>
+    ((await client.callTool({ name, arguments: args })) as any).content.map((c: { text: string }) => c.text).join("\n") as string;
+  return { client, call, raw, changes: () => listChanges };
 }
 
 const waitFor = async (cond: () => Promise<boolean> | boolean, ms = 10_000) => {
@@ -61,7 +64,7 @@ const waitFor = async (cond: () => Promise<boolean> | boolean, ms = 10_000) => {
 };
 
 describe("MCP sessions across the star", () => {
-  it("shares, joins, approves, switches tools, and leaves", async () => {
+  it("shares, joins, tells the host's agent, switches tools, and leaves", async () => {
     const alice = await agent("alice", "team");
     const bob = await agent("bob", "bobs-notes");
 
@@ -71,17 +74,13 @@ describe("MCP sessions across the star", () => {
 
     const shared = await alice.call("share_graph", { label: "for Bob" });
     expect(shared.send).toBe(`Join my context graph: /p2p-context-graph:join ${shared.code}`);
-    const pending = await bob.call("join_graph", { code: `Here you go: ${shared.code} thanks` });
-    expect(pending.waiting).toMatch(/waiting for them to approve/);
-    expect(pending.your_fingerprint).toMatch(/^[0-9a-f-]{14}$/);
+    const joined = await bob.call("join_graph", { code: `Here you go: ${shared.code} thanks` });
+    expect(joined).toMatchObject({ joined: "alice's graph 'team'", role: "contributor", told: expect.stringMatching(/Everyone/) });
+    expect(joined.your_fingerprint).toMatch(/^[0-9a-f-]{14}$/);
+    expect((await bob.call("graph_info")).using).toMatch(/alice's graph 'team'/);
 
-    const status = await alice.call("sharing_status");
-    expect(status.waiting).toEqual([expect.objectContaining({ name: "bob", fingerprint: pending.your_fingerprint })]);
-
-    const before = bob.changes();
-    await alice.call("approve_peer", { name: "bob", role: "contributor" });
-    await waitFor(() => bob.changes() > before);
-    await waitFor(async () => (await bob.call("graph_info")).using.includes("alice's graph 'team'"));
+    // Alice's agent hears about it on its next tool call, with what Bob's install said about itself.
+    await waitFor(async () => /News: bob joined your graph/.test(await alice.raw("sharing_status")));
 
     // Bob's add_claim now writes to Alice's graph, and his own note isn't there.
     const c = await bob.call("add_claim", { text: "Bob's finding for the team" });
@@ -110,7 +109,6 @@ describe("MCP sessions across the star", () => {
     const bob = await agent("bob", "own");
     const { code } = await alice.call("share_graph");
     await bob.call("join_graph", { code });
-    await alice.call("approve_peer", { name: "bob", role: "contributor" });
     await waitFor(async () => (await bob.call("graph_info")).using.includes("alice's graph"));
     await alice.call("stop_sharing");
     await waitFor(async () => {

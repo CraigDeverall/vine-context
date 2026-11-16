@@ -30,10 +30,18 @@ export interface ApprovedPeer {
   name: string;
   key: string;
   role: Role;
+  /** When they first joined. */
   approved_at: string;
+  /** The invite they first joined with. */
+  invite?: string;
+  /** What their install said about itself when they joined. */
+  agent?: string;
+  agent_version?: string;
+  p2pcg?: string;
+  platform?: string;
 }
 
-/** Peers the host approved, keyed by public key. Written atomically, readable only by the host's user. */
+/** People let into the graph, keyed by public key. Written atomically, readable only by the host's user. */
 export class PeerStore {
   private file: string;
   private peers = new Map<string, ApprovedPeer>();
@@ -75,15 +83,17 @@ export class PeerStore {
 }
 
 /**
- * One join code. It works for one machine: the first key the host approves
- * through it is bound to it, and from then on only that key gets in with it
- * (that is how the person rejoins in later sessions). An unused invite expires.
+ * One join code. It works for one machine: the first key that uses it is let
+ * in and bound to it, and from then on only that key gets in with it (that is
+ * how the person rejoins in later sessions). An unused invite expires.
  */
 export interface Invite {
   id: string;
   room: string;
   secret: string;
   label?: string;
+  /** The role the person gets when they first join (default contributor). */
+  role?: Role;
   created_at: string;
   /** Unused invites stop working after this; bound ones don't expire. */
   expires_at: string;
@@ -129,7 +139,7 @@ export class InviteStore {
     if (pruned) this.save();
   }
 
-  create(opts: { label?: string; hours?: number; now?: number } = {}): Invite {
+  create(opts: { label?: string; role?: Role; hours?: number; now?: number } = {}): Invite {
     const now = opts.now ?? Date.now();
     if (this.live(now).length >= MAX_LIVE_INVITES) throw new Error(`There are already ${MAX_LIVE_INVITES} live invites. Revoke some first.`);
     const hours = opts.hours ?? DEFAULT_INVITE_HOURS;
@@ -140,6 +150,7 @@ export class InviteStore {
       room,
       secret: b64u(randomBytes(32)),
       ...(opts.label ? { label: opts.label } : {}),
+      ...(opts.role ? { role: opts.role } : {}),
       created_at: new Date(now).toISOString(),
       expires_at: new Date(now + hours * 3600_000).toISOString(),
     };
@@ -187,6 +198,7 @@ export class InviteStore {
     return {
       id: i.id,
       label: i.label ?? null,
+      role: i.role ?? "contributor",
       state,
       // The code is shown only while someone can still take it up.
       code: state === "open" ? formatCode(inviteLink(i)) : null,

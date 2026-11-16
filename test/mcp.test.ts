@@ -37,7 +37,7 @@ describe("p2pcg mcp", () => {
     const { tools } = await client.listTools();
     const names = tools.map((t) => t.name);
     expect(names).toEqual(
-      expect.arrayContaining(["add_claim", "search", "beliefs", "graph_info", "model_guide", "share_graph", "revoke_invite", "join_graph", "approve_peer"]),
+      expect.arrayContaining(["add_claim", "search", "beliefs", "graph_info", "model_guide", "share_graph", "revoke_invite", "join_graph", "remove_peer"]),
     );
     const add = tools.find((t) => t.name === "add_claim")!;
     expect(add.inputSchema.required).toEqual(["text"]);

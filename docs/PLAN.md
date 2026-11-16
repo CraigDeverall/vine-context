@@ -36,7 +36,7 @@ must be able to clone, run and see the graph without asking us anything.
 | Criterion | Points | What judges look for | How we answer it | Proof in the submission |
 |---|---|---|---|---|
 | **Relate and connected context** | 30 | Relate's relationships carry the main use case; judges can follow the instructions, run it, and explore with Relate working as described | Relationships *are* the answers: SUPPORTS/CONTRADICTS/REPLACES give `beliefs` and `conflicts`; RESTS_ON/DEPENDS_ON/SUPERSEDES give `needs_review`. Hybrid search (`COMBINE` vector + full-text), record-time queries ("what did we believe on 1 Dec?"), the explorer's time slider, and a persistent directory store judges can open with Relate's own CLI | README "How it uses Relate" lists each feature with the query that uses it; a sample store in the repo |
-| **Functionality and completeness** | 25 | How much of the core use case works | Host, share, join, approve, roles, two model packs, five views, the localhost page; CI on every push | A judge reaches a first result from the README in under 5 minutes |
+| **Functionality and completeness** | 25 | How much of the core use case works | Host, share, join codes, join notices, roles, two model packs, five views, the localhost page; CI on every push | A judge reaches a first result from the README in under 5 minutes |
 | **Usefulness** | 20 | A real problem for a clear user, and the project shows it | Teams' AI sessions are silos: what one person's agent learns, nobody else's sees. The shared graph keeps claims, questions, decisions and contradictions across people and over time | A realistic scenario in the video: people investigating one incident |
 | **Documentation and reproducibility** | 15 | The README explains the project and how to try it | The devpost README template, followed section by section; one install command; `doctor`; no account, API key or model download | README Quickstart ≤ 10 lines |
 | **Creativity** | 10 | A fresh idea or an inventive use of Relate | Agents on different machines share one embedded graph peer to peer, with no server; the graph's model is a pluggable pack the skill helps write | The demo opens with two machines and no cloud |
@@ -184,15 +184,17 @@ models/temporal-claims/
 
 - **The graph is durable, the session is not.** Unlike the Gemini plan, the
   graph lives on the host's disk across sessions, and so do the invites and
-  the approved keys. Only the connections are temporary.
+  the people who joined. Only the connections are temporary.
 - **No CRDT.** The host is the single writer and the authority, so there's no
   need for one. This removes a whole area of risk.
-- **Identity:** each install has an Ed25519 key. The host sees "Bob (key
-  ab12…) wants to join" in the console app and approves him as reader,
-  contributor or admin. Approving binds the invite's code to that key: the
-  same machine rejoins with it later without asking, and any other key using
-  it is turned away. An unused code expires (24 h by default), and refusing
-  the person waiting on a code cancels it.
+- **Identity:** each install has an Ed25519 key. The first key to use a
+  join code is let in at once with the invite's role, and the code is bound to
+  it: the same machine rejoins with it later, and any other key using it is
+  turned away. Everyone in the graph is told who joined (name, fingerprint,
+  invite, agent, operating system). An unused code expires (24 h by default).
+  We dropped the approval step and the fingerprint check on 16 Nov: people
+  would compare fingerprints over the same channel the code went through,
+  which adds friction and little safety once codes are single-use.
 
 **Drop for the hackathon (could be added later):**
 
@@ -218,7 +220,7 @@ TURN may be needed.
 
 | App | Who sees it | Purpose |
 |---|---|---|
-| **Host console** | Host | Start and stop a session, show the link and a QR code, approve joins, set roles, show peers online |
+| **Host console** | Host | Start and stop a session, show join codes, show who joined, set roles, show peers online |
 | **Graph explorer** | Everyone | An interactive graph of the current model, filtered by time ("as of"), and search |
 | **Model studio** | Host | Pick, install or switch a model pack, view the schema, run validation, see the authoring wizard's output |
 | **Receipt** | Everyone | What my agent just wrote, with undo (withdraw) |
@@ -291,7 +293,7 @@ local socket. Relate's writer lease and the missing `close()` in
 `@relate/relate` 1.0.1 no longer matter.
 
 **M2 status (2026-11-15):** the star works between processes on one machine
-over the public relays. That covers the host, link, approval, roles,
+over the public relays. That covers the host, join codes, join notices, roles,
 forwarded tools and events. It is covered by in-process tests on real
 loopback data channels. **Still to do for M2's "done when":** a second
 machine on a different network, and a case that needs TURN.
@@ -300,7 +302,7 @@ machine on a different network, and a case that needs TURN.
 
 1. 0:00. The problem: three people, three AI sessions, nothing shared.
 2. 0:15. Alice: "share our context graph". The console app shows the link.
-3. 0:30. Bob pastes the link on another laptop, Alice approves him, and he's in.
+3. 0:30. Bob pastes the code on another laptop and is in at once; Alice's agent tells her who joined.
 4. 0:45. Bob's agent records a claim. It appears live in Alice's explorer.
 5. 1:00. Carol's agent records a contradicting claim, and the conflicts view
    flags it.

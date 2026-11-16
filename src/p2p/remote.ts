@@ -1,6 +1,6 @@
 // The joining side of the star: connects to a host from a join code, proves
-// the code's secret and this install's identity, waits for approval, then
-// forwards requests to the host.
+// the code's secret and this install's identity, then forwards requests to
+// the host.
 
 import { EventEmitter } from "node:events";
 import { randomBytes } from "node:crypto";
@@ -18,6 +18,8 @@ export type RemoteState = "connecting" | "pending" | "active" | "denied" | "clos
 export interface RemoteOptions {
   signal: SignalFactory;
   ice: string[];
+  /** What this install tells the host about itself (shown to everyone when it first joins). */
+  about?: Record<string, string | undefined>;
   /** Give up if the host hasn't answered the offer by then. */
   answerTimeoutMs?: number;
   log?(msg: string): void;
@@ -105,6 +107,7 @@ export class RemoteHost extends EventEmitter {
           name: this.identity.name,
           key: this.identity.publicKey,
           sig: this.identity.sign(`p2pcg-id-v1:${m.nonce}:${this.me}`),
+          about: this.o.about ?? {},
         });
         return;
       case "pending":

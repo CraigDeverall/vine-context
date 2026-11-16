@@ -7,16 +7,18 @@
 // Invite rules, checked once the peer has proved the secret and its key:
 // - A bound invite lets in only the key it is bound to; any other key is told
 //   the code was used on another machine.
-// - An open invite with someone already waiting on it turns others away.
-// - Approving the waiting peer binds the invite to their key. Refusing them
-//   revokes the invite: a refusal usually means the code reached the wrong
-//   person, so the owner sends a fresh one.
+// - The first key to use an open invite is let in at once, with the invite's
+//   role, and the invite is bound to it. Everyone in the graph is told who
+//   joined (onJoin). There is no approval step: the single-use code is the
+//   credential, and the host can remove anyone afterwards.
 // - An unused invite stops working when it expires.
 //
 // A peer's first frames, in order:
 //   host → {t:"challenge", nonce}
 //   peer → {t:"auth", proof, name, key, sig}   proof = HMAC(invite secret), sig = Ed25519 over the nonce
-//   host → {t:"welcome", role, host} | {t:"pending", host} | {t:"denied", reason}
+//   host → {t:"welcome", role, host} | {t:"denied", reason}
+// The auth frame may carry `about`: the joiner's agent, its version, the
+// p2pcg version and the operating system, shown to everyone when they join.
 // Nothing else is accepted before "welcome".
 
 import { randomBytes } from "node:crypto";
@@ -30,10 +32,9 @@ import type { Event, Request } from "./protocol.js";
 import type { SignalFactory, Signaller } from "./signal.js";
 
 const MAX_PEERS = 30;
-const MAX_PENDING = 20;
 const PROVE_WITHIN_MS = 15_000;
 
-export type PeerState = "connecting" | "pending" | "active";
+export type PeerState = "connecting" | "active";
 
 export interface PeerInfo {
   name: string;
@@ -59,6 +60,32 @@ interface Peer {
   since: string;
 }
 
+export interface About {
+  agent?: string;
+  agent_version?: string;
+  p2pcg?: string;
+  platform?: string;
+}
+
+export interface JoinedPerson extends About {
+  name: string;
+  fingerprint: string;
+  role: Role;
+  invite: { id: string; label: string | null };
+  joined_at: string;
+}
+
+/** Keeps only short, printable strings from what a peer says about itself. */
+export function cleanAbout(a: unknown): About {
+  const out: About = {};
+  if (!a || typeof a !== "object") return out;
+  for (const k of ["agent", "agent_version", "p2pcg", "platform"] as const) {
+    const v = (a as Record<string, unknown>)[k];
+    if (typeof v === "string" && v.trim()) out[k] = v.replace(/[^\x20-\x7e]/g, "").trim().slice(0, 60);
+  }
+  return out;
+}
+
 export interface HubOptions {
   hostName: string;
   store: PeerStore;
@@ -67,8 +94,10 @@ export interface HubOptions {
   ice: string[];
   /** Handles an active peer's request; the caller is the peer's name and role. */
   onRequest(peer: { name: string; role: Role }, req: Request): Promise<unknown>;
-  /** Called whenever the peer list changes (joins, approvals, leaves). */
+  /** Called whenever the peer list changes (joins, leaves). */
   onChange(): void;
+  /** Called when someone joins for the first time. */
+  onJoin(p: JoinedPerson): void;
   log?(msg: string): void;
 }
 
@@ -87,7 +116,7 @@ export class Hub {
   }
 
   /** Makes a new invite and starts listening for it. */
-  invite(opts: { label?: string; hours?: number } = {}): Invite {
+  invite(opts: { label?: string; role?: Role; hours?: number } = {}): Invite {
     const inv = this.o.invites.create(opts);
     this.listen(inv);
     this.log(`new invite ${inv.id}${inv.label ? ` (${inv.label})` : ""}`);
@@ -125,27 +154,12 @@ export class Hub {
       .map((p) => ({ name: p.name!, key: p.key!, fingerprint: fingerprint(p.key!), role: p.role, state: p.state, since: p.since }));
   }
 
-  /** Approves a waiting peer (by name) with a role. */
-  approve(name: string, role: Role): ApprovedPeer {
-    const p = [...this.peers.values()].find((x) => x.state === "pending" && x.name === name);
-    if (!p) throw new Error(`No one named '${name}' is waiting to join.`);
-    const approved: ApprovedPeer = { name, key: p.key!, role, approved_at: new Date().toISOString() };
-    this.o.store.put(approved);
-    this.o.invites.bind(p.invite, p.key!, name);
-    this.activate(p, role);
-    return approved;
-  }
-
-  /** Refuses a waiting peer (which revokes the invite they used), or disconnects a connected one. */
+  /** Disconnects a connected peer. */
   disconnect(name: string, reason: string): boolean {
     let found = false;
     for (const p of this.peers.values())
       if (p.name === name) {
         found = true;
-        if (p.state === "pending") {
-          this.o.invites.revoke(p.invite, `refused ${name}`);
-          this.unlisten(p.invite);
-        }
         this.drop(p, reason);
       }
     return found;
@@ -160,8 +174,8 @@ export class Hub {
       }
   }
 
-  broadcast(e: Event): void {
-    for (const p of this.peers.values()) if (p.state === "active") this.sendTo(p, e);
+  broadcast(e: Event, exceptKey?: string): void {
+    for (const p of this.peers.values()) if (p.state === "active" && p.key !== exceptKey) this.sendTo(p, e);
   }
 
   stop(): void {
@@ -247,7 +261,7 @@ export class Hub {
     if (typeof m.name !== "string" || !NAME_RE.test(m.name)) return this.drop(peer, "Names are 1–40 letters, digits, spaces, dots, dashes or underscores.");
     peer.key = m.key;
 
-    if (inv.bound && inv.bound.key !== m.key) return this.drop(peer, "This code has already been used on another machine. Ask for a new code of your own.");
+    if (inv.bound && inv.bound.key !== m.key) return this.drop(peer, "This code has already been used on another machine. If that wasn't you, tell the host: the code may have leaked. Ask for a new code of your own.");
     const known = this.o.store.get(m.key);
     if (inv.bound) {
       // The machine this code belongs to, rejoining.
@@ -255,11 +269,8 @@ export class Hub {
       peer.name = known.name;
       return this.activate(peer, known.role);
     }
-    const waiting = [...this.peers.values()].find((p) => p !== peer && p.invite === peer.invite && p.state === "pending");
-    if (waiting && waiting.key !== m.key) return this.drop(peer, "Someone else is already waiting to join with this code. Ask for a new code of your own.");
-    if (waiting) this.drop(waiting, "You connected again from another session."); // same machine, a fresh attempt
     if (known) {
-      // Someone the host already approved, with a fresh code: it becomes theirs.
+      // Someone the host already let in, with a fresh code: it becomes theirs.
       this.o.invites.bind(inv.id, m.key, known.name);
       peer.name = known.name;
       return this.activate(peer, known.role);
@@ -269,12 +280,18 @@ export class Hub {
       this.o.store.byName(m.name) !== undefined ||
       [...this.peers.values()].some((p) => p !== peer && p.name === m.name);
     if (taken) return this.drop(peer, `The name '${m.name}' is taken on this host. Set P2PCG_USER to another name and join again.`);
-    if ([...this.peers.values()].filter((p) => p.state === "pending").length >= MAX_PENDING) return this.drop(peer, "Too many people are waiting to join.");
+
+    // First use of an open code: let them in, tie the code to them, tell everyone.
+    const about = cleanAbout(m.about);
+    const role = inv.role ?? "contributor";
+    const joined_at = new Date().toISOString();
+    const person: ApprovedPeer = { name: m.name, key: m.key, role, approved_at: joined_at, invite: inv.id, ...about };
+    this.o.store.put(person);
+    this.o.invites.bind(inv.id, m.key, m.name);
     peer.name = m.name;
-    peer.state = "pending";
-    this.sendTo(peer, { t: "pending", host: this.o.hostName });
-    this.log(`${m.name} (${fingerprint(m.key)}) is waiting for approval (invite ${inv.id}${inv.label ? `, ${inv.label}` : ""})`);
-    this.o.onChange();
+    this.log(`${m.name} (${fingerprint(m.key)}) joined with invite ${inv.id}${inv.label ? ` (${inv.label})` : ""}`);
+    this.activate(peer, role);
+    this.o.onJoin({ name: m.name, fingerprint: fingerprint(m.key), role, invite: { id: inv.id, label: inv.label ?? null }, joined_at, ...about });
   }
 
   private activate(peer: Peer, role: Role): void {

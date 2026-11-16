@@ -65,12 +65,13 @@ async function agent(user: string, graph = "main", opts: { storedName?: boolean 
   const raw = (name: string, args: Record<string, unknown> = {}) => client.callTool({ name, arguments: args }) as Promise<any>;
   const call = async (name: string, args: Record<string, unknown> = {}) => {
     const r = await raw(name, args);
-    if (r.isError) throw new Error(r.content[0].text);
+    const first = (r.content as { text: string }[]).find((c) => !c.text.startsWith("News: "))!.text;
+    if (r.isError) throw new Error(first);
     if (r.structuredContent) return r.structuredContent;
     try {
-      return JSON.parse(r.content[0].text);
+      return JSON.parse(first);
     } catch {
-      return r.content[0].text;
+      return first;
     }
   };
   return { client, raw, call, dataDir, make, changes: () => listChanges };
@@ -141,7 +142,7 @@ describe("MCP App views", () => {
 
   it("opens the console with your sharing state", async () => {
     const alice = await agent("alice");
-    expect(await alice.call("open_console")).toMatchObject({ mode: "host", sharing: false, waiting: [], connected: [] });
+    expect(await alice.call("open_console")).toMatchObject({ mode: "host", sharing: false, people: [expect.objectContaining({ name: "alice", host: true })], connected: [] });
     await alice.call("share_graph");
     expect(await alice.call("open_console")).toMatchObject({ mode: "host", sharing: true, invites: [expect.objectContaining({ state: "open", code: expect.stringMatching(/^p2pcg1_/) })] });
     await alice.call("stop_sharing");
@@ -151,9 +152,8 @@ describe("MCP App views", () => {
     const alice = await agent("alice", "team");
     const bob = await agent("bob", "own");
     await alice.call("add_claim", { text: "Alice's finding about the build" });
-    const { code } = await alice.call("share_graph");
+    const { code } = await alice.call("share_graph", { role: "reader" });
     await bob.call("join_graph", { code });
-    await alice.call("approve_peer", { name: "bob", role: "reader" });
     let state: any;
     for (let i = 0; i < 100 && state?.state !== "active"; i++) {
       state = await bob.call("open_console");

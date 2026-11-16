@@ -1,5 +1,5 @@
-// The sharing console. As host: the invites (one join code per person), who
-// is waiting (with the key fingerprint to check), who is connected, and their
+// The sharing console. As host: the invites (one join code per person), and
+// everyone who has joined (key fingerprint, agent, online or not) with their
 // roles. As a peer: your
 // connection to someone else's graph.
 
@@ -23,6 +23,18 @@ interface Invite {
   created_at: string;
   expires_at: string | null;
 }
+interface Person {
+  name: string;
+  role: Role;
+  host?: boolean;
+  online: boolean;
+  fingerprint?: string;
+  joined_at?: string;
+  invite?: { id: string; label: string | null } | null;
+  agent?: string | null;
+  platform?: string | null;
+  p2pcg?: string | null;
+}
 interface HostState {
   mode: "host";
   using: string;
@@ -31,8 +43,7 @@ interface HostState {
   sharing: boolean;
   invites: Invite[];
   connected: Peer[];
-  waiting: Peer[];
-  approved: Peer[];
+  people: Person[];
   you: { name: string; fingerprint: string; name_from: "P2PCG_USER" | "set_my_name" | "git" | "login" };
 }
 interface PeerState {
@@ -72,7 +83,6 @@ export function Console({ b }: { b: Bridge }) {
   const [error, setError] = useState<string>();
   const [copied, setCopied] = useState<string>();
   const [label, setLabel] = useState("");
-  const [pick, setPick] = useState<Record<string, Role>>({});
   const [naming, setNaming] = useState<string>();
   const saveName = async () => {
     await act("name", "set_my_name", { name: naming!.trim() });
@@ -163,7 +173,7 @@ export function Console({ b }: { b: Bridge }) {
   };
   const open = state.invites.filter((i) => i.state === "open");
   const used = state.invites.filter((i) => i.state === "used");
-  const offline = state.approved.filter((a) => !state.connected.some((c) => c.name === a.name));
+  const members = state.people.filter((p) => !p.host);
 
   return (
     <div>
@@ -272,49 +282,26 @@ export function Console({ b }: { b: Bridge }) {
       )}
 
       <h2>
-        Waiting {state.waiting.length > 0 && <span className="pill warn">{state.waiting.length}</span>}
+        People <span className="faint">{members.filter((p) => p.online).length} online</span>
       </h2>
-      {state.waiting.length === 0 ? (
-        <p className="empty">{state.sharing ? "No one is waiting." : "Share the graph to let people ask to join."}</p>
-      ) : (
-        <div className="list">
-          {state.waiting.map((p) => (
-            <div className="card spread" key={p.name}>
-              <div className="grow">
-                <strong>{p.name}</strong> <span className="fp">{p.fingerprint}</span>
-                <p className="faint">Check this fingerprint with {p.name} by a channel you trust before approving.</p>
-              </div>
-              <div className="row">
-                <RolePicker value={pick[p.name] ?? "contributor"} onChange={(r) => setPick({ ...pick, [p.name]: r })} />
-                <button className="primary" disabled={!!busy} onClick={() => act(`approve ${p.name}`, "approve_peer", { name: p.name, role: pick[p.name] ?? "contributor" })}>
-                  Approve
-                </button>
-                <button disabled={!!busy} onClick={() => act(`refuse ${p.name}`, "remove_peer", { name: p.name })}>
-                  Refuse
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      <h2>Connected</h2>
-      {state.connected.length === 0 ? (
-        <p className="empty">No one is connected.</p>
+      {members.length === 0 ? (
+        <p className="empty">{state.sharing ? "No one has joined yet. Whoever uses a code first is let in, and everyone is told." : "Share the graph and send someone a join code."}</p>
       ) : (
         <table>
           <tbody>
-            {state.connected.map((p) => (
+            {members.map((p) => (
               <tr key={p.name}>
                 <td>
-                  <span className="dot on" aria-hidden /> <strong>{p.name}</strong>
+                  <span className={`dot ${p.online ? "on" : ""}`} aria-hidden /> <strong>{p.name}</strong>
+                  <div className="faint">
+                    {[p.agent, p.platform, p.invite?.label && `via '${p.invite.label}'`, p.joined_at && `joined ${when(p.joined_at)}`].filter(Boolean).join(" · ")}
+                  </div>
                 </td>
                 <td>
                   <span className="fp">{p.fingerprint}</span>
                 </td>
-                <td className="faint">{when(p.since)}</td>
                 <td>
-                  <RolePicker value={p.role ?? "reader"} disabled={!!busy} onChange={(r) => act(`role ${p.name}`, "set_peer_role", { name: p.name, role: r })} />
+                  <RolePicker value={p.role} disabled={!!busy} onChange={(r) => act(`role ${p.name}`, "set_peer_role", { name: p.name, role: r })} />
                 </td>
                 <td>
                   <button className="danger" disabled={!!busy} onClick={() => act(`remove ${p.name}`, "remove_peer", { name: p.name })}>
@@ -327,31 +314,6 @@ export function Console({ b }: { b: Bridge }) {
         </table>
       )}
 
-      {offline.length > 0 && (
-        <>
-          <h2>Approved, not connected</h2>
-          <table>
-            <tbody>
-              {offline.map((p) => (
-                <tr key={p.name}>
-                  <td>{p.name}</td>
-                  <td>
-                    <span className="fp">{p.fingerprint}</span>
-                  </td>
-                  <td>
-                    <RolePicker value={p.role ?? "reader"} disabled={!!busy} onChange={(r) => act(`role ${p.name}`, "set_peer_role", { name: p.name, role: r })} />
-                  </td>
-                  <td>
-                    <button className="danger" disabled={!!busy} onClick={() => act(`remove ${p.name}`, "remove_peer", { name: p.name })}>
-                      Forget
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </>
-      )}
       {error && <p className="notice bad">{error}</p>}
     </div>
   );

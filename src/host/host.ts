@@ -3,7 +3,7 @@
 // Every Claude Code session on this machine reaches it through a local socket
 // (they are the host's own user, so they get the admin role). While sharing,
 // it is also the centre of the star: peers reach it over WebRTC, with the
-// role the host approved them for.
+// role their invite gave them. Everyone is told when someone new joins.
 
 import { chmodSync, existsSync, mkdirSync, unlinkSync } from "node:fs";
 import { createConnection, createServer, type Server, type Socket } from "node:net";
@@ -151,7 +151,7 @@ export class Host {
       case "call":
         return this.call(this.me, p.tool, p.args);
       case "info":
-        return { ...(await this.graph.info()), host: this.o.user, sharing: this.sharingSummary() };
+        return { ...(await this.graph.info()), host: this.o.user, sharing: this.sharingSummary(), people: this.people() };
       case "snapshot":
         return this.graph.snapshot(p);
       case "share":
@@ -164,8 +164,6 @@ export class Host {
         return this.unshare();
       case "status":
         return this.status();
-      case "approve":
-        return this.approve(p.name, p.role);
       case "set_role":
         return this.setRole(p.name, p.role);
       case "remove":
@@ -178,24 +176,25 @@ export class Host {
     }
   }
 
-  /** Requests from approved peers. */
+  /** Requests from peers who joined. */
   async handlePeer(peer: { name: string; role: Role }, req: Request): Promise<unknown> {
     if (!PEER_METHODS.has(req.method)) throw new Error(`Peers can't call '${req.method}'.`);
     const caller: Caller = { id: peer.name, role: peer.role };
     const p = (req.params ?? {}) as Record<string, any>;
     if (req.method === "describe") return this.graph.describe(this.o.user, caller);
-    if (req.method === "info") return this.graph.info();
+    if (req.method === "info") return { ...(await this.graph.info()), host: this.o.user, people: this.people() };
     if (req.method === "snapshot") return this.graph.snapshot(p); // a read: every role may
     return this.call(caller, p.tool, p.args);
   }
 
   /** Starts sharing if needed, and makes a new invite: one join code for one person's machine. */
-  share(opts: { label?: unknown; expires_hours?: unknown } = {}) {
+  share(opts: { label?: unknown; role?: unknown; expires_hours?: unknown } = {}) {
     const label = opts.label === undefined || opts.label === null || opts.label === "" ? undefined : String(opts.label).slice(0, 60);
+    const role = opts.role === undefined || opts.role === null ? undefined : this.checkRole(opts.role);
     const hours = opts.expires_hours === undefined || opts.expires_hours === null ? undefined : Number(opts.expires_hours);
     const already = Boolean(this.hub);
     const hub = this.startSharing();
-    const inv = hub.invite({ label, hours });
+    const inv = hub.invite({ label, role, hours });
     return { ...this.invites.summary(inv), code: formatCode(inviteLink(inv)), already_sharing: already };
   }
 
@@ -213,6 +212,13 @@ export class Host {
       ice: this.o.ice ?? iceServers(),
       onRequest: (peer, req) => this.handlePeer(peer, req),
       onChange: () => this.broadcastLocal({ t: "evt", event: "peers", data: this.status() }),
+      onJoin: (person) => {
+        // Everyone in the graph hears about a newcomer: this machine's sessions and every peer but them.
+        const e: Event = { t: "evt", event: "joined", data: person };
+        this.broadcastLocal(e);
+        const key = this.store.byName(person.name)?.key;
+        this.hub?.broadcast(e, key);
+      },
       log: (m) => this.log(m),
     });
     this.armIdle();
@@ -253,7 +259,6 @@ export class Host {
     return {
       sharing: Boolean(this.hub),
       connected: peers.filter((p) => p.state === "active").length,
-      waiting: peers.filter((p) => p.state === "pending").length,
     };
   }
 
@@ -269,8 +274,7 @@ export class Host {
         .sort((a, b) => b.created_at.localeCompare(a.created_at))
         .map((i) => this.invites.summary(i)),
       connected: live.filter((p) => p.state === "active").map(({ name, fingerprint, role, since }) => ({ name, fingerprint, role, since })),
-      waiting: live.filter((p) => p.state === "pending").map(({ name, fingerprint, since }) => ({ name, fingerprint, since })),
-      approved: this.store.all().map((p) => ({ name: p.name, fingerprint: fingerprint(p.key), role: p.role, approved_at: p.approved_at })),
+      people: this.people(),
     };
   }
 
@@ -279,16 +283,29 @@ export class Host {
     return role as Role;
   }
 
-  approve(name: string, role: unknown) {
-    if (!this.hub) throw new Error("Not sharing: no one can be waiting.");
-    const approved = this.hub.approve(name, this.checkRole(role));
-    return { approved: name, role: approved.role, fingerprint: fingerprint(approved.key) };
+  /** Everyone in the graph: the host, and each person who joined, with what we know about them. */
+  people() {
+    const online = new Set((this.hub?.list() ?? []).filter((p) => p.state === "active").map((p) => p.key));
+    return [
+      { name: this.o.user, role: "admin" as Role, host: true, online: true },
+      ...this.store.all().map((p) => ({
+        name: p.name,
+        fingerprint: fingerprint(p.key),
+        role: p.role,
+        joined_at: p.approved_at,
+        invite: p.invite ? { id: p.invite, label: this.invites.get(p.invite)?.label ?? null } : null,
+        agent: p.agent ? `${p.agent}${p.agent_version ? ` ${p.agent_version}` : ""}` : null,
+        p2pcg: p.p2pcg ?? null,
+        platform: p.platform ?? null,
+        online: online.has(p.key),
+      })),
+    ];
   }
 
   setRole(name: string, role: unknown) {
     const r = this.checkRole(role);
     const p = this.store.byName(name);
-    if (!p) throw new Error(`No approved peer named '${name}'.`);
+    if (!p) throw new Error(`No one named '${name}' has joined this graph.`);
     this.store.put({ ...p, role: r });
     this.hub?.setRole(name, r);
     return { name, role: r };
@@ -300,7 +317,7 @@ export class Host {
     if (p) for (const inv of this.invites.revokeForKey(p.key, `removed ${name}`)) this.hub?.revoke(inv.id, "The host removed you from this graph.");
     const dropped = this.hub?.disconnect(name, "The host removed you from this graph.") ?? false;
     if (!removed && !dropped) throw new Error(`No peer named '${name}'.`);
-    return { removed: name, was_approved: removed, was_connected: dropped };
+    return { removed: name, was_member: removed, was_connected: dropped };
   }
 
   private armIdle() {

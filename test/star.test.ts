@@ -31,8 +31,8 @@ async function startHost(user = "alice") {
   return { host, local, dataDir };
 }
 
-function join(code: string, name: string, dataDir = tempDir(), answerTimeoutMs = 10_000) {
-  const r = new RemoteHost(parseCode(code), loadIdentity(dataDir, name), { signal, ice, answerTimeoutMs });
+function join(code: string, name: string, dataDir = tempDir(), answerTimeoutMs = 10_000, about?: Record<string, string>) {
+  const r = new RemoteHost(parseCode(code), loadIdentity(dataDir, name), { signal, ice, answerTimeoutMs, about });
   remotes.push(r);
   return r;
 }
@@ -71,18 +71,28 @@ describe("local sessions share one host", () => {
 });
 
 describe("the star", () => {
-  it("admits a peer after approval, forwards its calls, and records it as the author", async () => {
+  it("lets a peer straight in with a code, tells the host's sessions who joined, and records it as the author", async () => {
     const { local } = await startHost("alice");
-    const { code } = await local.request<{ code: string }>("share");
+    const { code } = await local.request<{ code: string }>("share", { label: "for Bob" });
     expect(code).toMatch(/^p2pcg1_[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}$/);
 
-    const bob = join(code, "bob");
-    expect(await bob.admitted).toBe("pending");
+    const told = nextEvent(local, "joined");
+    const bob = join(code, "bob", tempDir(), 10_000, { agent: "test-agent", agent_version: "1.2", p2pcg: "0.0.0", platform: "macOS arm64" });
+    expect(await bob.admitted).toBe("active");
+    expect((await told).data).toMatchObject({
+      name: "bob",
+      role: "contributor",
+      fingerprint: expect.stringMatching(/^[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}$/),
+      invite: { label: "for Bob" },
+      agent: "test-agent",
+      agent_version: "1.2",
+      platform: "macOS arm64",
+    });
     const status = await local.request<any>("status");
-    expect(status.waiting).toEqual([expect.objectContaining({ name: "bob", fingerprint: expect.stringMatching(/^[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}$/) })]);
-
-    await local.request("approve", { name: "bob", role: "contributor" });
-    await waitFor(() => bob.state === "active");
+    expect(status.people).toEqual([
+      expect.objectContaining({ name: "alice", host: true }),
+      expect.objectContaining({ name: "bob", role: "contributor", agent: "test-agent 1.2", platform: "macOS arm64", online: true, invite: expect.objectContaining({ label: "for Bob" }) }),
+    ]);
     expect(bob.role).toBe("contributor");
     expect(bob.hostName).toBe("alice");
 
@@ -100,9 +110,7 @@ describe("the star", () => {
     const { local } = await startHost("alice");
     const peers: RemoteHost[] = [];
     for (const name of ["bob", "carol", "dave"]) peers.push(join((await local.request<{ code: string }>("share", { label: `for ${name}` })).code, name));
-    await Promise.all(peers.map((p) => p.admitted));
-    for (const name of ["bob", "carol", "dave"]) await local.request("approve", { name, role: "contributor" });
-    await waitFor(() => peers.every((p) => p.state === "active"));
+    expect(await Promise.all(peers.map((p) => p.admitted))).toEqual(["active", "active", "active"]);
     await Promise.all(peers.map((p, i) => p.request("call", { tool: "add_claim", args: { text: `Finding number ${i} from the team` } })));
     const beliefs = await peers[0]!.request<any[]>("call", { tool: "beliefs", args: {} });
     expect(beliefs.map((b) => b.recorded_by).sort()).toEqual(["bob", "carol", "dave"]);
@@ -111,11 +119,10 @@ describe("the star", () => {
 
   it("enforces the role the host gave, and applies role changes at once", async () => {
     const { local } = await startHost("alice");
-    const { code } = await local.request<{ code: string }>("share");
+    const { code } = await local.request<{ code: string }>("share", { role: "reader" });
     const rita = join(code, "rita");
-    await rita.admitted;
-    await local.request("approve", { name: "rita", role: "reader" });
-    await waitFor(() => rita.state === "active");
+    expect(await rita.admitted).toBe("active");
+    expect(rita.role).toBe("reader");
     await expect(rita.request("call", { tool: "add_claim", args: { text: "Readers cannot write" } })).rejects.toThrow(/needs the contributor role/);
     expect(await rita.request("call", { tool: "beliefs", args: {} })).toEqual([]);
 
@@ -128,23 +135,19 @@ describe("the star", () => {
 
   it("never lets a peer call the host's own methods", async () => {
     const { local } = await startHost("alice");
-    const { code } = await local.request<{ code: string }>("share");
+    const { code } = await local.request<{ code: string }>("share", { role: "admin" });
     const mallory = join(code, "mallory");
-    await mallory.admitted;
-    await local.request("approve", { name: "mallory", role: "admin" });
-    await waitFor(() => mallory.state === "active");
-    for (const method of ["share", "unshare", "approve", "status", "set_role", "remove", "shutdown"])
+    expect(await mallory.admitted).toBe("active");
+    for (const method of ["share", "unshare", "revoke_invite", "status", "set_role", "remove", "shutdown"])
       await expect(mallory.request(method, {})).rejects.toThrow(/Peers can't call/);
   });
 
-  it("lets the machine a code is bound to back in after sharing restarts, under its approved name", async () => {
+  it("lets the machine a code is bound to back in after sharing restarts, under the name it joined with", async () => {
     const { local } = await startHost("alice");
     const bobDir = tempDir();
     const first = await local.request<{ code: string }>("share");
     const bob1 = join(first.code, "bob", bobDir);
-    await bob1.admitted;
-    await local.request("approve", { name: "bob", role: "contributor" });
-    await waitFor(() => bob1.state === "active");
+    expect(await bob1.admitted).toBe("active");
 
     await local.request("unshare");
     await waitFor(() => bob1.state === "closed");
@@ -171,36 +174,32 @@ describe("the star", () => {
     const eve = join(wrong, "eve", tempDir(), 1500);
     expect(await eve.admitted).toBe("closed");
     expect(eve.reason).toMatch(/No answer from the host/);
-    expect((await local.request<any>("status")).waiting).toEqual([]);
+    expect((await local.request<any>("status")).people).toHaveLength(1);
   });
 
-  it("removes a peer: disconnected, their code stops working, and a new code asks for approval again", async () => {
+  it("removes a peer: disconnected, their code stops working, and a new code lets them in again", async () => {
     const { local } = await startHost("alice");
     const { code } = await local.request<{ code: string }>("share");
     const dir = tempDir();
     const bob = join(code, "bob", dir);
-    await bob.admitted;
-    await local.request("approve", { name: "bob", role: "contributor" });
-    await waitFor(() => bob.state === "active");
+    expect(await bob.admitted).toBe("active");
     await local.request("remove", { name: "bob" });
     await waitFor(() => bob.state === "denied" || bob.state === "closed");
-    expect((await local.request<any>("status")).approved).toEqual([]);
+    expect((await local.request<any>("status")).people).toHaveLength(1);
     const old = join(code, "bob", dir, 1500);
     expect(await old.admitted).toBe("closed"); // the revoked code's room is no longer answered
     const fresh = await local.request<{ code: string }>("share");
     const again = join(fresh.code, "bob", dir);
-    expect(await again.admitted).toBe("pending");
+    expect(await again.admitted).toBe("active");
   });
 
   it("carries results larger than one data channel message", async () => {
     const { local } = await startHost("alice");
     for (let i = 0; i < 40; i++)
       await local.request("call", { tool: "add_claim", args: { text: `Claim ${i}: ` + "a long explanation of the finding ".repeat(30) } });
-    const { code } = await local.request<{ code: string }>("share");
+    const { code } = await local.request<{ code: string }>("share", { role: "reader" });
     const bob = join(code, "bob");
-    await bob.admitted;
-    await local.request("approve", { name: "bob", role: "reader" });
-    await waitFor(() => bob.state === "active");
+    expect(await bob.admitted).toBe("active");
     const beliefs = await bob.request<any[]>("call", { tool: "beliefs", args: { limit: 200 } });
     expect(beliefs).toHaveLength(40);
     expect(JSON.stringify(beliefs).length).toBeGreaterThan(40_000);
@@ -213,13 +212,11 @@ describe("invites: one code per machine", () => {
     const inv = await local.request<{ id: string; code: string }>("share", { label: "for Bob" });
     const bobDir = tempDir();
     const bob = join(inv.code, "bob", bobDir);
-    expect(await bob.admitted).toBe("pending");
-    await local.request("approve", { name: "bob", role: "contributor" });
-    await waitFor(() => bob.state === "active");
+    expect(await bob.admitted).toBe("active");
     return { local, inv, bobDir, bob };
   }
 
-  it("ties a code to the approved machine: it rejoins without approval, and the invite shows who has it", async () => {
+  it("ties a code to the first machine that uses it: it rejoins, and the invite shows who has it", async () => {
     const { local, inv, bobDir, bob } = await bound();
     bob.close();
     await waitFor(async () => (await local.request<any>("status")).connected.length === 0);
@@ -236,18 +233,26 @@ describe("invites: one code per machine", () => {
     expect(carol.reason).toMatch(/already been used on another machine/);
   });
 
-  it("turns others away while someone is waiting on the code, and lets the same machine retry", async () => {
-    const { local } = await startHost("alice");
-    const { code } = await local.request<{ code: string }>("share");
-    const bobDir = tempDir();
-    const bob = join(code, "bob", bobDir);
-    expect(await bob.admitted).toBe("pending");
-    const carol = join(code, "carol");
-    expect(await carol.admitted).toBe("denied");
-    expect(carol.reason).toMatch(/Someone else is already waiting/);
-    const bobAgain = join(code, "bob", bobDir);
-    expect(await bobAgain.admitted).toBe("pending");
-    expect((await local.request<any>("status")).waiting).toEqual([expect.objectContaining({ name: "bob" })]);
+  it("tells everyone already in the graph when someone new joins, but not about rejoins", async () => {
+    const { local, bob, bobDir, inv } = await bound();
+    const carolCode = await local.request<{ code: string }>("share", { label: "for Carol", role: "reader" });
+    const bobHears = nextEvent(bob, "joined");
+    const hostHears = nextEvent(local, "joined");
+    const carol = join(carolCode.code, "carol", tempDir(), 10_000, { agent: "codex", platform: "Linux x64" });
+    expect(await carol.admitted).toBe("active");
+    expect((await bobHears).data).toMatchObject({ name: "carol", role: "reader", invite: { label: "for Carol" }, agent: "codex", platform: "Linux x64" });
+    expect((await hostHears).data.name).toBe("carol");
+
+    // Carol doesn't hear about herself; a rejoin isn't news.
+    let news = 0;
+    carol.on("event", (e: any) => e.event === "joined" && news++);
+    local.on("event", (e: any) => e.event === "joined" && news++);
+    bob.close();
+    await waitFor(async () => (await local.request<any>("status")).connected.length === 1);
+    const again = join(inv.code, "bob", bobDir);
+    expect(await again.admitted).toBe("active");
+    await new Promise((r) => setTimeout(r, 300));
+    expect(news).toBe(0);
   });
 
   it("refuses an expired code that was never used", async () => {
@@ -268,17 +273,7 @@ describe("invites: one code per machine", () => {
     await expect(local.request("revoke_invite", { id: "inv_nope" })).rejects.toThrow(/No invite/);
   });
 
-  it("cancels the code when the host refuses the person waiting on it", async () => {
-    const { local } = await startHost("alice");
-    const { code, id } = await local.request<{ code: string; id: string }>("share");
-    const eve = join(code, "eve");
-    expect(await eve.admitted).toBe("pending");
-    await local.request("remove", { name: "eve" });
-    await waitFor(() => eve.state === "denied" || eve.state === "closed");
-    expect((await local.request<any>("status")).invites).toEqual([expect.objectContaining({ id, state: "revoked" })]);
-  });
-
-  it("binds a fresh code to someone already approved, without asking again", async () => {
+  it("binds a fresh code to someone already in the graph, keeping their role, and tells no one", async () => {
     const { local, bobDir } = await bound();
     const second = await local.request<{ code: string; id: string }>("share");
     const bob2 = join(second.code, "bob", bobDir);

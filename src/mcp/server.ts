@@ -32,6 +32,16 @@ const text = (value: unknown): Content => ({
 });
 const failure = (message: string): Content => ({ ...text(message), isError: true });
 
+const OS: Record<string, string> = { darwin: "macOS", win32: "Windows", linux: "Linux" };
+
+/** One line about a newcomer, for every agent in the graph. */
+function joinNotice(p: Record<string, any>, where: string): string {
+  const via = p.invite?.label ? ` with the invite '${p.invite.label}'` : p.invite?.id ? ` with invite ${p.invite.id}` : "";
+  const agent = p.agent ? `${p.agent}${p.agent_version ? ` ${p.agent_version}` : ""}` : "an unknown agent";
+  const extra = [p.platform ? `on ${p.platform}` : "", p.p2pcg ? `p2pcg ${p.p2pcg}` : ""].filter(Boolean).join(", ");
+  return `News: ${p.name} joined ${where} as ${p.role}${via}, at ${p.joined_at}. Key fingerprint ${p.fingerprint}; ${agent}${extra ? ` (${extra})` : ""}.`;
+}
+
 /** New graphs are shared straight away unless P2PCG_AUTO_SHARE is off. */
 const autoShare = () => !/^(0|off|false|no)$/i.test(process.env.P2PCG_AUTO_SHARE ?? "");
 
@@ -53,7 +63,7 @@ export interface SessionOptions {
   identity: () => Identity;
   signal: SignalFactory;
   ice: string[];
-  /** How long join_graph waits for the host's approval before returning. */
+  /** How long join_graph waits for the host to let it in before returning. */
   joinWaitMs?: number;
   /** Connects to (and if needed starts) this machine's host for another graph: use_graph. */
   openLocal?: (graph: string, model?: string) => Promise<LocalHost>;
@@ -70,6 +80,8 @@ export class Session {
   private remote?: RemoteHost;
   private active?: GraphDescription;
   private modelTools = new Map<string, RegisteredTool>();
+  /** Join notices not yet shown to the agent: they ride on its next tool result. */
+  private news: string[] = [];
 
   constructor(private o: SessionOptions) {
     this.server = new McpServer(
@@ -100,9 +112,8 @@ export class Session {
               type: "text",
               text:
                 `Join the shared context graph${code ? ` with this join code: ${code}` : ", rejoining the last one this machine joined"}.\n\n` +
-                `Call join_graph${code ? " with the code exactly as given" : " with no code"}. If I'm waiting for approval, tell me the name and key fingerprint it shows, ` +
-                "and say the host must approve me after checking that fingerprint with me by a channel we both trust. Don't approve anything yourself. " +
-                "Once I'm approved (graph_info shows it), call model_guide before writing. If the code was already used on another machine, expired or was cancelled, tell me to ask the host for a new one.",
+                `Call join_graph${code ? " with the code exactly as given" : " with no code"}. When I'm in, tell me whose graph it is, my role, and that everyone in it has been told I joined (with my name and key fingerprint). ` +
+                "Then call model_guide before writing. If the code was already used on another machine, expired or was cancelled, tell me to ask the host for a new one (and, if it was already used and not by me, to warn them it may have leaked).",
             },
           },
         ],
@@ -134,6 +145,9 @@ export class Session {
     this.localHost = await this.o.local();
     this.localHost.on("close", () => {
       this.o.log?.("local host connection closed");
+    });
+    this.localHost.on("event", (e: { event: string; data: any }) => {
+      if (e.event === "joined" && !this.remote) this.news.push(joinNotice(e.data, "your graph"));
     });
     return this.localHost;
   }
@@ -192,15 +206,23 @@ export class Session {
             out.content.push({ type: "text", text: `(on ${this.where()})` });
             if (tool.view)
               out.structuredContent = { view: tool.view, tool: tool.name, title: tool.title ?? tool.name, input: args, result, undo: undo ?? null, where: this.where() };
-            return out;
+            return this.withNews(out);
           } catch (e) {
-            return failure((e as Error).message);
+            return this.withNews(failure((e as Error).message));
           }
         },
       );
       this.modelTools.set(tool.name, registered);
     }
     if (this.server.isConnected()) this.server.sendToolListChanged();
+  }
+
+  /** Puts any join notices in front of a tool result, once. */
+  private withNews(out: Content): Content {
+    if (!this.news.length) return out;
+    const lines = this.news.splice(0);
+    out.content.unshift({ type: "text", text: `${lines.join("\n")}\nTell the person who joined, in one line.` });
+    return out;
   }
 
   private where(): string {
@@ -213,9 +235,9 @@ export class Session {
     const admin = async <T>(method: string, params?: unknown) => (await this.local()).request<T>(method, params);
     const wrap = (fn: (args: any) => Promise<unknown>) => async (args: any) => {
       try {
-        return text(await fn(args));
+        return this.withNews(text(await fn(args)));
       } catch (e) {
-        return failure((e as Error).message);
+        return this.withNews(failure((e as Error).message));
       }
     };
 
@@ -231,10 +253,10 @@ export class Session {
         if (r && r.state !== "active") {
           const host = r.hostName ?? "the host";
           return {
-            using: r.state === "pending" ? `joining ${host}'s graph: waiting for ${host} to approve you` : `not connected to ${host}'s graph`,
+            using: r.state === "connecting" ? `connecting to ${host}'s graph` : `not connected to ${host}'s graph`,
             state: r.state,
             reason: r.reason,
-            next: r.state === "pending" ? "Wait for approval; the graph tools switch automatically." : "Call join_graph again (with no code it rejoins the last graph you joined), or leave_graph.",
+            next: r.state === "connecting" ? "Wait a moment; the graph tools switch automatically." : "Call join_graph again (with no code it rejoins the last graph you joined), or leave_graph.",
           };
         }
         const info = (await this.backend().request("info")) as Record<string, unknown>;
@@ -291,15 +313,17 @@ export class Session {
         title: "Invite someone",
         description:
           "Invite one person to YOUR graph (on this machine): starts sharing it peer to peer if needed and makes a new join code (p2pcg1_…) for that person. " +
-          "Each code works for one machine: the first person you approve with it is tied to it, and can rejoin with it later without asking; anyone else using it is turned away. " +
+          "Each code works for one machine: the first person to use it is let straight in with the code's role, it is tied to them, and they can rejoin with it later; anyone else using it is turned away. " +
+          "Everyone in the graph is told when someone joins, with their name, key fingerprint and agent. remove_peer takes anyone out. " +
           "An unused code expires (default 24 hours). Call it once per person. sharing_status lists invites; revoke_invite cancels one.",
         inputSchema: {
-          label: z.string().max(60).optional().describe("Who it's for, e.g. 'for Sam': shown in sharing_status"),
+          label: z.string().max(60).optional().describe("Who it's for, e.g. 'for Sam': shown in sharing_status and in the join notice"),
+          role: z.enum(["reader", "contributor", "admin"]).optional().describe("The role they get when they join (default contributor)"),
           expires_hours: z.number().positive().max(720).optional().describe("Hours until an unused code stops working (default 24)"),
         },
         annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
       },
-      wrap(async (a: { label?: string; expires_hours?: number }) => this.invited(await admin<Record<string, any>>("share", a))),
+      wrap(async (a: { label?: string; role?: string; expires_hours?: number }) => this.invited(await admin<Record<string, any>>("share", a))),
     );
 
     this.server.registerTool(
@@ -319,7 +343,7 @@ export class Session {
       "stop_sharing",
       {
         title: "Stop sharing",
-        description: "Stop sharing your graph: disconnect everyone, and no join code works until you share again. Invites and approvals are kept: when you share again, people rejoin with the codes they have.",
+        description: "Stop sharing your graph: disconnect everyone, and no join code works until you share again. Invites and members are kept: when you share again, people rejoin with the codes they have.",
         annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       },
       wrap(() => admin("unshare")),
@@ -329,7 +353,7 @@ export class Session {
       "sharing_status",
       {
         title: "Sharing status",
-        description: "Whether your graph is shared, its invites (who each is for, whether it is open, used and by whom, or expired), who is connected, who is waiting for approval (with key fingerprints), and who is approved.",
+        description: "Whether your graph is shared, its invites (who each is for, whether it is open, used and by whom, or expired), who is connected, and everyone who has joined (name, key fingerprint, role, agent, operating system).",
         annotations: ro,
       },
       wrap(() => admin("status")),
@@ -337,23 +361,10 @@ export class Session {
 
     const roleSchema = z.enum(["reader", "contributor", "admin"]);
     this.server.registerTool(
-      "approve_peer",
-      {
-        title: "Approve someone",
-        description:
-          "Let a person who is waiting join your graph, with a role: reader (search and read), contributor (also add and link), or admin (also withdraw anyone's items). " +
-          "Check their key fingerprint with them first, by a channel you trust. Approved people rejoin later sessions without asking.",
-        inputSchema: { name: z.string().describe("Their name, as sharing_status shows it"), role: roleSchema.default("contributor").describe("Their role") },
-        annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
-      },
-      wrap((a) => admin("approve", a)),
-    );
-
-    this.server.registerTool(
       "set_peer_role",
       {
         title: "Change someone's role",
-        description: "Change the role of a person you approved: reader, contributor or admin. Takes effect at once if they are connected.",
+        description: "Change the role of a person in your graph: reader, contributor or admin. Takes effect at once if they are connected.",
         inputSchema: { name: z.string().describe("Their name"), role: roleSchema.describe("Their new role") },
         annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       },
@@ -365,7 +376,7 @@ export class Session {
       {
         title: "Remove someone",
         description:
-          "Disconnect a person and forget their approval (their join code stops working), or refuse someone who is waiting (which cancels the code they used: send a new one if it was a mistake). Their past contributions stay in the graph.",
+          "Take a person out of your graph: disconnect them, and their join code stops working. Their past contributions stay in the graph. Send a new code if it was a mistake.",
         inputSchema: { name: z.string().describe("Their name") },
         annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
       },
@@ -378,8 +389,8 @@ export class Session {
         title: "Join a shared graph",
         description:
           "Join someone else's shared graph with the join code they sent (p2pcg1_…; it can be inside other text). Use it when the person pastes such a code. " +
-          "After the host approves you, this session's graph tools act on their graph until leave_graph. The code is then tied to this machine: " +
-          "call join_graph with no code in a later session to rejoin the last graph you joined, without waiting for approval.",
+          "You are let in at once, and everyone in the graph is told you joined (your name, key fingerprint and agent). This session's graph tools then act on their graph until leave_graph. " +
+          "The code is tied to this machine: call join_graph with no code in a later session to rejoin the last graph you joined.",
         inputSchema: { code: z.string().optional().describe("The p2pcg1_… join code, exactly as sent. Leave it out to rejoin the last graph you joined.") },
         annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
       },
@@ -461,9 +472,9 @@ export class Session {
     const ro = { readOnlyHint: true, idempotentHint: true, openWorldHint: false };
     const run = (fn: (args: any) => Promise<Content>) => async (args: any) => {
       try {
-        return await fn(args);
+        return this.withNews(await fn(args));
       } catch (e) {
-        return failure((e as Error).message);
+        return this.withNews(failure((e as Error).message));
       }
     };
     const both = (summary: unknown, structured: Record<string, unknown>): Content => ({ ...text(summary), structuredContent: structured });
@@ -473,8 +484,8 @@ export class Session {
       {
         title: "Open the sharing console",
         description:
-          "Show the sharing console: your graph's invites and join codes, who is waiting with their key fingerprints, who is connected, and their roles; or, if you joined someone's graph, your connection to it. " +
-          "The person can share, approve, change roles and remove people there themselves.",
+          "Show the sharing console: your graph's invites and join codes, everyone who has joined (with key fingerprints, agents and whether they're online), and their roles; or, if you joined someone's graph, your connection to it. " +
+          "The person can share, make codes, change roles and remove people there themselves.",
         annotations: ro,
         _meta: uiMeta("console"),
       },
@@ -651,7 +662,7 @@ export class Session {
             model: this.active?.model.title,
             ...inv,
             next:
-              `Show the person this join code now, and say: send it privately to one person; it works for one machine, and you approve them (open_console, or approve_peer). ` +
+              `Show the person this join code now, and say: send it privately to one person; whoever uses it first is let in at once, on one machine, and everyone is told who joined. ` +
               "Call share_graph for a code for each other person. stop_sharing turns sharing off. Then call model_guide before writing.",
           });
         }
@@ -670,7 +681,7 @@ export class Session {
       shared_as: { name: identity.name, fingerprint: fingerprint(identity.publicKey) },
       next:
         "Give the person the 'send' line to pass on privately (not in a public channel). Agents without the plugin command can be told: join the context graph with this code. " +
-        "When they join, check their key fingerprint with them, then approve_peer. Each code is for one person: call share_graph again for the next.",
+        "Whoever uses it first is let in at once, and everyone in the graph is told who joined (name, key fingerprint, agent). Each code is for one person: call share_graph again for the next. remove_peer takes anyone out.",
     };
   }
 
@@ -684,18 +695,29 @@ export class Session {
     const link = parseCode(codeText);
     if (this.remote) this.remote.close();
     const identity = this.o.identity();
-    const remote = new RemoteHost(link, identity, { signal: this.o.signal, ice: this.o.ice, log: this.o.log });
+    const client = this.server.server.getClientVersion();
+    const about = {
+      agent: client?.name,
+      agent_version: client?.version,
+      p2pcg: packageInfo().version,
+      platform: `${OS[process.platform] ?? process.platform} ${process.arch}`,
+    };
+    const remote = new RemoteHost(link, identity, { signal: this.o.signal, ice: this.o.ice, log: this.o.log, about });
     this.remote = remote;
 
-    // Approval that arrives after join_graph returned (it was still waiting).
+    // Being let in after join_graph returned (it was still connecting).
     let returned = false;
     remote.on("state", (s) => {
       if (this.remote !== remote || !returned) return;
-      if (s === "pending" || s === "active") joined.remember(link, { host: remote.hostName });
-      if (s === "active") void this.useRemote().catch((e) => this.o.log?.(`describe failed: ${e.message}`));
+      if (s === "active") {
+        joined.remember(link, { host: remote.hostName });
+        void this.useRemote().catch((e) => this.o.log?.(`describe failed: ${e.message}`));
+      }
     });
-    remote.on("event", (e: { event: string }) => {
-      if (this.remote === remote && e.event === "role") void this.useRemote().catch(() => undefined);
+    remote.on("event", (e: { event: string; data: any }) => {
+      if (this.remote !== remote) return;
+      if (e.event === "role") void this.useRemote().catch(() => undefined);
+      if (e.event === "joined") this.news.push(joinNotice(e.data, `${remote.hostName ?? "the host"}'s graph`));
     });
 
     const outcome = await Promise.race([
@@ -703,8 +725,6 @@ export class Session {
       new Promise<"timeout">((r) => setTimeout(() => r("timeout"), this.o.joinWaitMs ?? 25_000).unref()),
     ]);
     returned = true;
-    const fp = fingerprint(identity.publicKey);
-    if (remote.state === "pending" || remote.state === "active") joined.remember(link, { host: remote.hostName });
     if (outcome === "active") {
       const d = await this.useRemote();
       joined.remember(link, { host: d.host, graph: d.graph });
@@ -713,21 +733,15 @@ export class Session {
         model: d.model.title,
         role: d.you.role,
         as: d.you.id,
-        next: "Call model_guide before writing. Your graph tools now act on this graph until leave_graph.",
-      };
-    }
-    if (outcome === "pending" || (outcome === "timeout" && remote.state === "pending")) {
-      return {
-        waiting: `Connected to ${remote.hostName ?? "the host"}; waiting for them to approve you.`,
-        your_name: identity.name,
-        your_fingerprint: fp,
-        next: `Tell ${remote.hostName ?? "the host"} your name and fingerprint so they can check it is you. The graph tools switch to their graph as soon as they approve; call graph_info to check.`,
+        your_fingerprint: fingerprint(identity.publicKey),
+        told: "Everyone in this graph has been told you joined, with your name, key fingerprint and agent.",
+        next: "Call model_guide before writing. Your graph tools now act on this graph until leave_graph. In a later session, join_graph with no code rejoins.",
       };
     }
     if (outcome === "timeout") {
       return {
         waiting: "Still connecting to the host (it can take a while across some networks).",
-        next: "Call graph_info in a moment to check. If it doesn't connect, the host may need to share again, or a TURN server may be needed (P2PCG_ICE).",
+        next: "Call graph_info in a moment to check. If it doesn't connect, the host may not be sharing right now, or a TURN server may be needed (P2PCG_ICE).",
       };
     }
     this.remote = undefined;

@@ -22,7 +22,7 @@ made a call.
 
 p2p-context-graph gives the group one shared graph. One person hosts it on
 their machine and sends each person a join code; they paste it into their
-agent, the host approves them, and from then on every agent reads and writes
+agent, everyone in the graph is told who joined, and from then on every agent reads and writes
 the same graph, through tools defined by the graph's **context model**.
 
 The relationships are what make it useful, because they answer the questions a
@@ -112,15 +112,14 @@ To use the example data instead of a new graph, add `P2PCG_DATA_DIR=<the folder 
 1. **You:** create a graph (*"start a context graph called incident-42"*) or say *"invite Sam to my context graph"*. Either gives you a join code straight away, as a line to send:
    `Join my context graph: /p2p-context-graph:join p2pcg1_…`
    Send it privately, to that one person. Others see you by your git name until you change it (*"set my name to …"*, or *Change* in the console).
-2. **Them:** run that command, or paste the code into their agent. They see their name and a key fingerprint.
-3. **You:** check the fingerprint with them. Approve them in the console, or with *"approve sam as a contributor"*.
+2. **Them:** run that command, or paste the code into their agent. They're in straight away.
+3. **Everyone in the graph is told** who joined, on their agent's next action: name, role, which invite, key fingerprint, agent and version, operating system. The console's *People* list shows the same. If it isn't who you expected, remove them (*"remove sam"*, or *Remove* in the console).
 
-From then on, their graph tools act on your graph, limited by their role (reader, contributor or admin).
+From then on, their graph tools act on your graph, limited by the code's role (contributor unless you said otherwise: *"invite Sam as a reader"*).
 
 **Each code is for one person's machine.**
-- Approving someone ties the code to their key. They rejoin with it in later sessions without asking (*"rejoin the context graph"* calls `join_graph` with no code). Anyone else who uses it is turned away.
-- While someone is waiting on a code, anyone else using it is turned away.
-- Refusing the person waiting cancels the code, since it probably reached the wrong person: send a new one.
+- Whoever uses it first is let in, and the code is tied to their key. They rejoin with it in later sessions (*"rejoin the context graph"* calls `join_graph` with no code). Anyone else who uses it is turned away, and told to warn you that it may have leaked.
+- There's no approval step: the single-use code is the credential, so send it privately.
 - An unused code expires after 24 hours (*"invite Sam, valid for a week"* sets it).
 - `sharing_status` and the console list the invites; `revoke_invite` or *Cancel* stops one working.
 
@@ -137,7 +136,7 @@ From then on, their graph tools act on your graph, limited by their role (reader
     relate -d examples/data/graphs/decisions "MATCH (d:Decision)-[:RESTS_ON]->(a:Assumption) WHERE a.invalidated_at IS NOT NULL RETURN d.text, a.text, a.invalidated_because"
     ```
 - **Your own graphs:** `~/.local/share/p2p-context-graph/graphs/<name>` (set `P2PCG_DATA_DIR` to move them).
-  - Next to them: `hosts/<name>/` holds the host's log and its list of approved people, and `identity.json` holds your key.
+  - Next to them: `hosts/<name>/` holds the host's log, its invites and the people who joined, and `identity.json` holds your key.
 
 ## How it works
 
@@ -166,7 +165,7 @@ flowchart LR
 - **The host is the centre of a star.** Peers connect straight to it over WebRTC.
   - A join code is `p2pcg1_<room>.<secret>`, one per invite. The room names a signalling topic; the secret never leaves the two machines.
   - Only the connection handshake passes through public Nostr relays, sealed with a key derived from the code's secret.
-  - Joining needs both the secret (an HMAC proof) and an Ed25519 identity key. The host approves each key once, and that ties the code to the key.
+  - Joining needs both the secret (an HMAC proof) and an Ed25519 identity key. The first key to use a code is let in and tied to it; everyone in the graph is told.
 - **Peers only get the model's tools,** never raw Cypher or the host's admin operations. The host checks every call against the caller's role.
 - **Context models are packs:**
   - `model.yaml` holds the shape.
