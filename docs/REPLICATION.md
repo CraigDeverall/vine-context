@@ -1,6 +1,7 @@
 # Replicated graphs: design
 
-Status: draft for review, 2026-11-17. Nothing here is built yet.
+Status: built, 2026-11-17 (all three stages, the model cut, and section 9).
+Where the build differs from this design, section 13 says how and why.
 
 ## 1. Goal
 
@@ -246,3 +247,34 @@ mentioned in earlier conversations still resolve.
 ## 12. Open questions
 
 None at the moment. The four earlier ones are decided in section 2.
+
+## 13. As built: where it differs
+
+- **Old ids are kept as they are** (section 10). A converted graph's items
+  keep their 8-character ids instead of getting UUIDs plus a `legacy_id`:
+  the formats can't clash, and ids in earlier conversations keep working. The
+  whole old graph is one `import` change by the creator, rather than one
+  change per item.
+- **The group secret isn't changed on removal** (sections 6 and 7). Every
+  member's machine refuses a removed key at the link handshake and refuses
+  its later changes, so a removed member gets nothing new; they can still see
+  that the group's signalling room is in use. Changing the secret needs a way
+  to encrypt it to each member's key (Ed25519 keys can't encrypt), which is
+  left for later.
+- **A held write is numbered when it is released**, not when it is made, so
+  taking one back never leaves a gap in its author's numbers.
+- **The machine a code is tied to can use it again** to fetch the whole graph
+  again (for example after losing its copy).
+- **Undo of a link or withdrawal** rebuilds the store from the log; Undo of a
+  claim or question just deletes it (nothing else can refer to it yet).
+- **Joined graphs are local graphs.** `join_graph` puts the graph on this
+  machine under its own name (or `name-2` …), and from then on `use_graph`
+  switches to it; `leave_graph` is gone.
+- **Where it's tested:** `test/replica.test.ts` (real WebRTC between hosts in
+  one process: join, sync both ways, Undo in the hold, offline catch-up,
+  members syncing while the creator is away, roles and removal everywhere,
+  three copies converging, held writes surviving a restart),
+  `test/temporal-claims.test.ts` (order-independent applying),
+  `test/convert.test.ts` (old graphs), `test/nostr.test.ts` (relay keepalive).
+  A member link that goes silent is dropped by its pings, but that has no test
+  of its own yet.

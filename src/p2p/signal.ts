@@ -1,4 +1,4 @@
-// Signalling: how a host and a joining peer exchange WebRTC offers and answers.
+// Signalling: how members (and newcomers with a join code) exchange WebRTC offers and answers.
 //
 // Messages are sealed with the link's key and published on a topic named by a
 // hash of the room, so a relay sees neither the secret nor the contents.
@@ -12,6 +12,8 @@ export interface Signaller {
   /** Resolves true once at least one relay accepted the message. */
   send(message: unknown): Promise<boolean>;
   close(): void;
+  /** Each relay's connection state, where there are relays. */
+  status?(): Record<string, string>;
 }
 
 export type SignalFactory = (link: Link, onMessage: (m: any) => void) => Signaller;
@@ -41,6 +43,7 @@ export const nostrSignaller: SignalFactory = (link, onMessage) => {
   return {
     send: async (m) => (await relays.publish({ kind: KIND, tags: [["t", tag]], content: seal(key, m) })) > 0,
     close: () => relays.close(),
+    status: () => Object.fromEntries(relays.status),
   };
 };
 

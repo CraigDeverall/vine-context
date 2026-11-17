@@ -58,7 +58,6 @@ export class LocalHost extends EventEmitter {
 export interface EnsureOptions {
   dataDir: string;
   graph: string;
-  model?: string;
   /** Seconds the background host waits with no clients before it exits. */
   idleSeconds?: number;
   /** How to run the CLI again: defaults to this process's own command line. */
@@ -75,7 +74,6 @@ export async function ensureHost(o: EnsureOptions): Promise<LocalHost> {
   }
   const cmd = o.command ?? { file: process.execPath, args: [...process.execArgv, process.argv[1]!] };
   const args = [...cmd.args, "host", "--graph", o.graph, "--idle", String(o.idleSeconds ?? 600)];
-  if (o.model) args.push("--model", o.model);
   const logFile = join(hostDir(o.dataDir, o.graph), "host.log");
   const out = openSync(logFile, "a");
   const child = spawn(cmd.file, args, {

@@ -1,28 +1,62 @@
-// Builds the example graphs in examples/data from one scenario: three people
-// (alice, bob, carol) investigating a checkout slowdown, then deciding what to
-// do about it. Every call is backdated, so the explorer's time slider and the
-// `at` reads show the story unfold: a contradiction appears and is settled, an
-// assumption turns out false and flags the decisions resting on it.
+// Builds the example graph in examples/data from one scenario: three people
+// (alice, bob, carol) investigating a checkout slowdown. Every change is
+// backdated, so the explorer's time slider and the `at` reads show the story
+// unfold: a contradiction appears and is settled, a mistaken claim is
+// withdrawn, and a question is answered.
+//
+// The graph is a replicated graph like any other: alice created it, bob and
+// carol are members, and every write is a change signed by its author. The
+// example ships alice's (throwaway) key, so the demo runs as her, the admin.
 //
 //   npm run examples        (rewrites examples/data)
 
-import { existsSync, rmSync } from "node:fs";
-import { homedir } from "node:os";
-import { execFileSync } from "node:child_process";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import { join } from "node:path";
+import { signChange, uuidv7, type Change } from "../src/core/changes.ts";
 import { Graph, type Caller } from "../src/core/graph.ts";
+import { fingerprint, loadIdentity, type Identity } from "../src/core/identity.ts";
 import { packageRoot } from "../src/core/package-root.ts";
+import { b64u } from "../src/p2p/link.ts";
 
 type Row = Record<string, any>;
-const alice: Caller = { id: "alice", role: "admin" };
-const bob: Caller = { id: "bob", role: "contributor" };
-const carol: Caller = { id: "carol", role: "contributor" };
+const out = join(packageRoot(), "examples", "data");
+const keys = join(out, ".keys-not-shipped");
+const [, , mode] = process.argv;
 
 // 10 Nov 2026, times in UTC.
 const at = (day: number, hhmm: string) => `2026-11-${String(day).padStart(2, "0")}T${hhmm}:00.000Z`;
 
-async function incident(g: Graph) {
-  const call = async (who: Caller, when: string, tool: string, args: Row) => (await g.call(tool, args, who, { now: when })) as Row;
+/** Makes signed changes the way a host does: checked against a scratch copy, then applied to it. */
+class Writer {
+  changes: Change[] = [];
+  private seq = new Map<string, number>();
+  constructor(
+    readonly graphId: string,
+    private g: Graph,
+    private ids: Map<string, Identity>,
+  ) {}
+  private sign(who: Identity, kind: Change["kind"], when: string, body: Record<string, unknown>, id = uuidv7(Date.parse(when))): Change {
+    const seq = (this.seq.get(who.publicKey) ?? 0) + 1;
+    this.seq.set(who.publicKey, seq);
+    const c = signChange({ id, graph: this.graphId, kind, author: who.publicKey, seq, at: when, body }, who);
+    this.changes.push(c);
+    return c;
+  }
+  member(who: Identity, kind: Change["kind"], when: string, body: Record<string, unknown>, id?: string) {
+    return this.sign(who, kind, when, body, id);
+  }
+  async call(who: Caller, when: string, tool: string, args: Row): Promise<Row> {
+    const p = await this.g.prepare(tool, args, who, when);
+    const c = this.sign(this.ids.get(who.id)!, p.kind, when, p.body);
+    const r = await this.g.apply(c, { name: (k) => [...this.ids.values()].find((i) => i.publicKey === k)?.name ?? k, isAdmin: () => who.role === "admin" });
+    if (r.status !== "applied") throw new Error(`${tool}: ${JSON.stringify(r)}`);
+    return r.result;
+  }
+}
+
+async function incident(w: Writer, alice: Caller, bob: Caller, carol: Caller) {
+  const call = (who: Caller, when: string, tool: string, args: Row) => w.call(who, when, tool, args);
   const latency = await call(alice, at(10, "14:20"), "add_claim", {
     text: "Checkout p95 latency rose from 300 ms to 4 s at 13:58 on 10 Nov",
     source: "Grafana: checkout dashboard",
@@ -71,90 +105,46 @@ async function incident(g: Graph) {
   });
 }
 
-async function decisions(g: Graph) {
-  const call = async (who: Caller, when: string, tool: string, args: Row) => (await g.call(tool, args, who, { now: when })) as Row;
-  const limit = await call(alice, at(11, "10:00"), "record_decision", {
-    text: "Add per-client rate limiting at the API gateway",
-    rationale: "It protects every backend from any one misbehaving client, including old app versions we can't update",
-    decided_by: "incident review, 11 Nov",
-    source: "incident review notes for #incident-2211",
-  });
-  await call(alice, at(11, "10:02"), "add_option", { decision: limit.id, text: "Rate limiting at the API gateway", outcome: "chosen" });
-  await call(alice, at(11, "10:03"), "add_option", {
-    decision: limit.id,
-    text: "Fix retries in the mobile app only",
-    outcome: "rejected",
-    reason: "Old app versions stay in use for months",
-  });
-  await call(alice, at(11, "10:04"), "add_option", {
-    decision: limit.id,
-    text: "Double the orders database pool size",
-    outcome: "rejected",
-    reason: "Moves the bottleneck to database CPU",
-  });
-  const header = await call(bob, at(11, "10:20"), "add_assumption", {
-    text: "Every mobile request carries a client id header the gateway can limit on",
-    decisions: [limit.id],
-  });
-  const rate = await call(bob, at(11, "10:40"), "record_decision", { text: "Limit each client to 20 requests a second", depends_on: [limit.id] });
-  await call(bob, at(11, "10:41"), "add_assumption", { text: "No legitimate client needs more than 20 requests a second", decisions: [rate.id] });
-  await call(carol, at(11, "11:00"), "record_decision", {
-    text: "Ship mobile 5.13 with exponential backoff and at most three retries by 20 Nov",
-    rationale: "Fixes the cause for current app versions",
-  });
-  const thursdays = await call(alice, at(11, "11:30"), "record_decision", { text: "Release only on Thursdays" });
-  await call(carol, at(12, "09:30"), "invalidate_assumption", {
-    id: header.id,
-    because: "Mobile versions before 5.0 don't send the client id header: 12% of traffic",
-  });
-  await call(alice, at(12, "10:00"), "record_decision", {
-    text: "Release on any weekday, with an hour of watching dashboards after each release",
-    supersedes: [thursdays.id],
-    rationale: "Waiting for Thursday batched changes and made the 10 Nov incident harder to untangle",
-  });
+async function build() {
+  rmSync(out, { recursive: true, force: true });
+  mkdirSync(out, { recursive: true });
+  const scratch = join(keys, "scratch");
+  const ids = new Map<string, Identity>();
+  for (const name of ["alice", "bob", "carol"]) ids.set(name, loadIdentity(name === "alice" ? out : join(keys, name), name));
+  const callers = Object.fromEntries(
+    [...ids].map(([name, i]) => [name, { id: name, key: i.publicKey, role: name === "alice" ? "admin" : "contributor" } as Caller]),
+  );
+  const graphId = uuidv7(Date.parse(at(10, "14:00")));
+  const g = await Graph.open({ dataDir: scratch, name: "incident" });
+  const w = new Writer(graphId, g, ids);
+  const alice = ids.get("alice")!;
+  w.member(alice, "create", at(10, "14:00"), { name: "incident", creator_name: "alice" }, graphId);
+  for (const name of ["bob", "carol"])
+    w.member(alice, "add_member", at(10, "14:01"), { key: ids.get(name)!.publicKey, name, role: "contributor", invite: { id: `inv_${name}`, label: `for ${name}` }, about: { agent: "claude-code", platform: "macOS arm64" } });
+  await incident(w, callers.alice!, callers.bob!, callers.carol!);
+
+  const hostDir = join(out, "hosts", "incident");
+  mkdirSync(hostDir, { recursive: true });
+  writeFileSync(join(hostDir, "group.json"), JSON.stringify({ id: graphId, name: "incident", secret: b64u(randomBytes(32)) }, null, 1) + "\n");
+  writeFileSync(join(hostDir, "changes.jsonl"), w.changes.map((c) => JSON.stringify(c)).join("\n") + "\n");
+  writeFileSync(join(hostDir, "sharing.json"), JSON.stringify({ on: false }) + "\n");
+  rmSync(keys, { recursive: true, force: true });
+  console.log(`examples: incident -> examples/data: ${w.changes.length} changes by alice (${fingerprint(alice.publicKey)}), bob and carol`);
 }
 
-function verify(dir: string): string | undefined {
-  const relate = [process.env.RELATE_BIN, join(homedir(), ".local", "bin", "relate"), "relate"].find((c) => c && (c === "relate" || existsSync(c)))!;
-  try {
-    const out = execFileSync(relate, ["-d", dir, "--json", "MATCH (n) WHERE NOT n:_P2pcgMeta RETURN labels(n)[0] AS label, count(*) AS n ORDER BY label"], {
-      encoding: "utf8",
-      env: { ...process.env, RELATE_TELEMETRY: "off" },
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-    const rows = (JSON.parse(out) as { data: { label: string; n: number }[] }).data;
-    if (!rows.length) throw new Error(`${dir} is empty`);
-    return rows.map((r) => `${r.n} ${r.label}`).join(", ");
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === "ENOENT") {
-      console.log("examples: the relate CLI isn't installed, so the copies weren't checked");
-      return undefined;
-    }
-    throw e;
-  }
+/** Builds the store from the log in a process of its own: a Relate store is only complete on disk once the process that wrote it exits. */
+async function buildStore() {
+  const { Host } = await import("../src/host/host.ts");
+  const h = await Host.start({ dataDir: out, graph: "incident", user: "alice" });
+  const info = await h.info();
+  h.stop();
+  console.log(`examples: store built: ${JSON.stringify(info.nodes)}`);
 }
 
-// Each graph is built by its own process, straight into examples/data: a
-// Relate store is only complete on disk once the process that wrote it exits.
-async function buildHere(name: string, model: string, fill: (g: Graph) => Promise<void>, out: string) {
-  const g = await Graph.open({ dataDir: out, name, model });
-  await fill(g);
-}
-
-const GRAPHS = { incident: ["temporal-claims", incident], decisions: ["decision-log", decisions] } as const;
-const out = join(packageRoot(), "examples", "data");
-const [, , mode, which] = process.argv;
-
-if (mode === "--one" && which && which in GRAPHS) {
-  const [model, fill] = GRAPHS[which as keyof typeof GRAPHS];
-  await buildHere(which, model, fill, out);
+if (mode === "--store") {
+  await buildStore();
   process.exit(0);
 }
-
-for (const [name, [model]] of Object.entries(GRAPHS)) {
-  const dest = join(out, "graphs", name);
-  rmSync(dest, { recursive: true, force: true });
-  execFileSync(process.execPath, [...process.execArgv, process.argv[1]!, "--one", name], { stdio: "inherit" });
-  const counts = verify(dest);
-  console.log(`examples: ${name} (${model}) -> examples/data/graphs/${name}${counts ? `: ${counts}` : ""}`);
-}
+await build();
+const { execFileSync } = await import("node:child_process");
+execFileSync(process.execPath, [...process.execArgv, process.argv[1]!, "--store"], { stdio: "inherit", env: { ...process.env, P2PCG_AUTO_SHARE: "off" } });

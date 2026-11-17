@@ -1,17 +1,22 @@
-// Context model packs: a folder that defines a graph's shape, its tools and
-// the instructions agents follow. See docs/model-packs.md.
+// The context model: a folder that defines a graph's shape, its tools and the
+// instructions agents follow. p2p-context-graph ships one, Claims and
+// Questions (models/temporal-claims), and every graph uses it.
+//
+// Read tools are Cypher in tools.yaml. Write tools in tools.yaml only check
+// the input against the graph (their steps return `_error`); the write itself
+// becomes a signed change (`apply` names its kind), applied by src/core/graph.ts
+// the same way on every member's machine.
 //
 //   model.yaml        nodes, relationships, the searchable set
 //   tools.yaml        named operations: input schema, derived params, Cypher steps
 //   instructions.md   what to record and how to query, for the agent
 //   migrations/*.cypher  optional, applied once each, in name order
 
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 import { packageRoot } from "./package-root.js";
-import { userPacksDir } from "./paths.js";
 
 const identifier = z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/, "must be a Cypher identifier");
 const toolName = z.string().regex(/^[a-z][a-z0-9_]{0,47}$/, "must be snake_case, up to 48 characters");
@@ -111,12 +116,14 @@ export const ToolSchema = z.object({
   steps: z.array(Step).min(1),
   /** A built-in view that shows this tool's result: receipt (for writes) or conflicts (pairs of items). */
   view: z.enum(["receipt", "conflicts"]).optional(),
+  /** For write tools: the kind of change it makes. Its steps only check the input. */
+  apply: z.enum(["claim", "question", "link", "withdraw"]).optional(),
   /** How to undo a write from its receipt: call `tool` with { [arg]: result[field] }. */
   undo: z.object({ tool: toolName, arg: identifier.default("id"), field: identifier.default("id") }).optional(),
 });
 
 /** Parameter names the server sets on every call. */
-export const SERVER_PARAMS = ["now", "by", "role"] as const;
+export const SERVER_PARAMS = ["now", "by", "key", "role"] as const;
 
 /** Tool names the server provides itself. */
 export const RESERVED_TOOL_NAMES = [
@@ -126,16 +133,12 @@ export const RESERVED_TOOL_NAMES = [
   "stop_sharing",
   "sharing_status",
   "revoke_invite",
-  "approve_peer",
   "set_peer_role",
   "remove_peer",
   "join_graph",
-  "leave_graph",
+  "take_back",
   "open_console",
   "explore_graph",
-  "model_studio",
-  "validate_model",
-  "install_model",
   "use_graph",
   "browser_view",
 ] as const;
@@ -216,6 +219,7 @@ export function loadPack(dir: string): Pack {
     return { ...t, steps, role: t.role ?? (t.kind === "read" ? "reader" : "contributor") };
   });
   for (const t of expanded) {
+    if (t.kind === "write" && !t.apply) problems.push(`${t.name}: write tools name the change they make (apply)`);
     if (t.undo && !seen.has(t.undo.tool)) problems.push(`${t.name}: undo tool ${t.undo.tool} is not defined`);
     if (t.undo && t.kind !== "write") problems.push(`${t.name}: only write tools can be undone`);
   }
@@ -238,43 +242,10 @@ export function builtinPacksDir(): string {
   return join(packageRoot(), "models");
 }
 
-export function listBuiltinPacks(): string[] {
-  return packsIn(builtinPacksDir());
-}
-
-function packsIn(dir: string): string[] {
-  return existsSync(dir)
-    ? readdirSync(dir)
-        .filter((d) => statSync(join(dir, d)).isDirectory() && existsSync(join(dir, d, "model.yaml")))
-        .sort()
-    : [];
-}
-
-export interface PackEntry {
-  name: string;
-  source: "built-in" | "installed";
-  dir: string;
-}
-
-/** Built-in packs, then installed ones. An installed pack can't shadow a built-in name. */
-export function listPacks(dataDir?: string): PackEntry[] {
-  const builtin = packsIn(builtinPacksDir()).map((name) => ({ name, source: "built-in" as const, dir: join(builtinPacksDir(), name) }));
-  const names = new Set(builtin.map((p) => p.name));
-  const user = userPacksDir(dataDir);
-  const installed = packsIn(user)
-    .filter((n) => !names.has(n))
-    .map((name) => ({ name, source: "installed" as const, dir: join(user, name) }));
-  return [...builtin, ...installed];
-}
-
-/** A built-in or installed pack's name, or a path to a pack folder. */
-export function resolvePack(ref: string, dataDir?: string): Pack {
-  if (/^[a-z][a-z0-9-]*$/.test(ref)) {
-    const found = listPacks(dataDir).find((p) => p.name === ref);
-    if (found) return loadPack(found.dir);
-  }
-  if (existsSync(join(ref, "model.yaml"))) return loadPack(ref);
-  throw new PackError(`No model pack '${ref}'. Available: ${listPacks(dataDir).map((p) => p.name).join(", ") || "none"}.`);
+let claims: Pack | undefined;
+/** The one model every graph uses: Claims and Questions. */
+export function claimsPack(): Pack {
+  return (claims ??= loadPack(join(builtinPacksDir(), "temporal-claims")));
 }
 
 export type { InputType };

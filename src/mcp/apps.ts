@@ -12,10 +12,9 @@ import { packageRoot } from "../core/package-root.js";
 export const APP_MIME = "text/html;profile=mcp-app";
 
 export const VIEWS = {
-  console: "Sharing console: the join codes, who is waiting, who is connected, and their roles",
+  console: "Sharing console: join codes, everyone in the graph, who is online, and their roles",
   explorer: "Graph explorer: the graph as it stood at any moment, with search",
-  studio: "Model studio: the graph's model, the packs you can use, and checking a new pack",
-  receipt: "Receipt: what your agent just wrote, with undo",
+  receipt: "Receipt: what your agent just wrote, with Undo while it is still on this machine",
   conflicts: "Conflicts: items that contradict each other, side by side",
 } as const;
 export type ViewName = keyof typeof VIEWS;

@@ -1,6 +1,8 @@
-// What the agent just wrote, with undo where the model allows it.
+// What the agent just wrote. For a few seconds it is still only on this
+// machine: Undo removes it without trace. After that it has been sent to the
+// other members, and the button becomes Withdraw (it stays in the history).
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { Bridge } from "../bridge";
 import type { Panel } from "../panel";
 
@@ -9,7 +11,7 @@ interface ReceiptData {
   title: string;
   input: Record<string, unknown>;
   result: Record<string, unknown> | null;
-  undo: { tool: string; arg: string; field: string } | null;
+  undo: { take_back: boolean; withdraw: boolean } | null;
   where: string;
 }
 
@@ -20,38 +22,55 @@ export function Receipt({ b, open }: { b: Bridge; open?: (p: Panel) => void }) {
   const [undone, setUndone] = useState<string>();
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
+  const [now, setNow] = useState(Date.now());
+  const sharedAt = typeof d?.result?.shared_at === "string" ? Date.parse(d.result.shared_at) : 0;
+  useEffect(() => {
+    if (!sharedAt || sharedAt <= Date.now()) return;
+    const t = setInterval(() => setNow(Date.now()), 250);
+    return () => clearInterval(t);
+  }, [sharedAt]);
   if (!d) return <p className="faint">Waiting for the result…</p>;
 
   const input = Object.entries(d.input ?? {}).filter(([, v]) => v !== undefined && v !== null && !(Array.isArray(v) && v.length === 0));
   const main = input.find(([k]) => k === "text");
   const rest = input.filter(([k]) => k !== "text");
-  const target = d.undo && d.result ? d.result[d.undo.field] : undefined;
+  const change = typeof d.result?.change === "string" ? d.result.change : undefined;
+  const item = typeof d.result?.id === "string" ? d.result.id : undefined;
+  const left = Math.ceil((sharedAt - now) / 1000);
+  const held = Boolean(d.undo?.take_back && change && left > 0);
+  const canWithdraw = Boolean(d.undo?.withdraw && item && !held && (d.tool === "add_claim" || d.tool === "ask_question"));
 
-  const undo = async () => {
-    if (!d.undo || target === undefined) return;
+  const run = async (tool: string, args: Record<string, unknown>, done: string) => {
     setBusy(true);
     setError(undefined);
     try {
-      await b.call(d.undo.tool, { [d.undo.arg]: target });
-      setUndone(`Undone with ${d.undo.tool}. It stays in the graph's history.`);
+      await b.call(tool, args);
+      setUndone(done);
     } catch (e) {
       setError((e as Error).message);
     } finally {
       setBusy(false);
     }
   };
+  const undo = () => run("take_back", { id: change }, "Taken back. It never left this machine.");
+  const withdraw = () => run("withdraw", { id: item }, "Withdrawn. The other members have it, so it stays in the graph's history.");
 
   return (
     <div className="card">
       <div className="spread">
         <div className="row">
-          <span className={`pill ${undone ? "" : "ok"}`}>{undone ? "undone" : "recorded"}</span>
+          <span className={`pill ${undone ? "" : held ? "warn" : "ok"}`}>{undone ? "undone" : held ? "on this machine" : "shared"}</span>
           <strong>{d.title}</strong>
           {d.result && typeof d.result.id === "string" && <code className="faint">{d.result.id}</code>}
         </div>
-        {d.undo && target !== undefined && !undone && (
-          <button disabled={busy} onClick={undo}>
-            Undo
+        {!undone && held && (
+          <button disabled={busy} onClick={undo} title="It is still only on this machine: Undo removes it without trace">
+            Undo ({left}s)
+          </button>
+        )}
+        {!undone && canWithdraw && (
+          <button disabled={busy} onClick={withdraw} title="Already sent to the other members: withdrawing keeps it in the history">
+            Withdraw
           </button>
         )}
       </div>

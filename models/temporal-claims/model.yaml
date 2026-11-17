@@ -20,7 +20,8 @@ nodes:
       about_from: { type: date, description: First day the statement is about }
       about_to: { type: date, description: Last day the statement is about }
       recorded_at: { type: datetime, required: true, description: When the graph learned it (record time) }
-      recorded_by: { type: string, required: true }
+      recorded_by: { type: string, required: true, description: The author's name }
+      author: { type: string, description: The author's public key (their machine) }
       withdrawn_at: { type: datetime, description: When its author took it back }
       withdrawn_by: { type: string }
       withdraw_reason: { type: string }
@@ -34,7 +35,8 @@ nodes:
       id: { type: id, required: true }
       text: { type: string, required: true }
       recorded_at: { type: datetime, required: true }
-      recorded_by: { type: string, required: true }
+      recorded_by: { type: string, required: true, description: The author's name }
+      author: { type: string, description: The author's public key (their machine) }
       withdrawn_at: { type: datetime }
       withdrawn_by: { type: string }
       withdraw_reason: { type: string }

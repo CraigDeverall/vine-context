@@ -4,37 +4,38 @@ import { packageInfo } from "../core/package-root.js";
 const pkg = packageInfo();
 const [command, ...rest] = process.argv.slice(2);
 
-const USAGE = `p2pcg ${pkg.version}: share a Relate context graph with other people's AI agents
+const USAGE = `p2pcg ${pkg.version}: a shared context graph of claims and questions, replicated peer to peer between people's AI agents
 
 Usage: p2pcg <command> [options]
 
 Commands:
-  mcp [--graph NAME] [--model PACK]   Run the MCP server on stdio (starts the graph's host if needed)
-  host [--graph NAME] [--model PACK] [--share] [--idle SECONDS]
-                                      Run a graph's host in the foreground
+  mcp [--graph NAME]                  Run the MCP server on stdio (starts the graph's host if needed)
+  host [--graph NAME] [--share] [--idle SECONDS]
+                                      Run a graph's host in the foreground (--share prints a new join code)
   host stop [--graph NAME]            Stop a graph's host
-  demo [--port N] [--no-open]         Open the views on two example graphs (a copy; nothing of yours changes)
+  up                                  Start the host of every graph on this machine that is sharing (in the background)
+  autostart on|off                    Run \`p2pcg up\` at login (macOS), so your graphs sync after a reboot
+  demo [--port N] [--no-open]         Open the views on an example graph (a copy; nothing of yours changes)
   ui [--graph NAME] [--port N] [--open]
-                                      Show the console, explorer and model studio in a browser
-  status [--graph NAME]               Show a graph's host: sharing, invites, peers
+                                      Show the console and explorer in a browser
+  status [--graph NAME]               Show a graph's host: sharing, members, links, relays, invites
   whoami                              Show your name and key fingerprint
   doctor                              Check that this machine can run p2pcg
-  model list                          List the model packs you can use
-  model validate <dir>                Check a model pack, and try it on a scratch graph
   --version                           Print the version
 
 Environment:
   P2PCG_USER        Your name in graphs (default: the name you set with set_my_name, else git's user.name, else your login name)
   P2PCG_GRAPH       The graph to use (default: default)
-  P2PCG_MODEL       The model pack for a new graph (default: temporal-claims)
   P2PCG_DATA_DIR    Where graphs live (default: ~/.local/share/p2p-context-graph)
+  P2PCG_AUTO_SHARE  off: new graphs don't sync until you share them
+  P2PCG_HOLD_MS     How long a write stays on this machine (Undo) before it is sent (default 10000)
   P2PCG_RELAYS      Nostr relays for signalling, comma-separated
   P2PCG_ICE         STUN/TURN servers, comma-separated (turn:user:pass@host:port)`;
 
-const graphOpts = { graph: { type: "string" }, model: { type: "string" } } as const;
+const graphOpts = { graph: { type: "string" } } as const;
 const graphName = (v?: string) => v ?? process.env.P2PCG_GRAPH ?? "default";
 
-async function sessionFactory(values: { graph?: string; model?: string }) {
+async function sessionFactory(values: { graph?: string }) {
   const [{ Session }, { ensureHost }, { defaultDataDir }, { loadIdentity, defaultName }, signal] = await Promise.all([
     import("../mcp/server.js"),
     import("../host/client.js"),
@@ -48,8 +49,8 @@ async function sessionFactory(values: { graph?: string; model?: string }) {
   let ui: Promise<{ url: string }> | undefined;
   const make = (withBrowserView: boolean): InstanceType<typeof Session> =>
     new Session({
-      local: () => ensureHost({ dataDir, graph, model: values.model ?? process.env.P2PCG_MODEL }),
-      openLocal: (g, model) => ensureHost({ dataDir, graph: g, model }),
+      local: () => ensureHost({ dataDir, graph }),
+      openLocal: (g) => ensureHost({ dataDir, graph: g }),
       dataDir,
       identity: () => loadIdentity(dataDir, defaultName(dataDir)),
       signal: signal.nostrSignaller,
@@ -93,19 +94,18 @@ async function demo(args: string[]): Promise<number> {
   cpSync(examples, dataDir, { recursive: true });
   process.env.P2PCG_DATA_DIR = dataDir;
   process.env.P2PCG_USER ??= "alice";
+  process.env.P2PCG_AUTO_SHARE ??= "off"; // the example stays on this machine
   const { make, log } = await sessionFactory({ graph: "incident" });
   const { startUi } = await import("../ui/server.js");
   const server = await startUi({ session: () => make(false), port: values.port ? Number(values.port) : undefined, log });
-  console.log(`p2p-context-graph demo: two example graphs, copied to ${dataDir}
-  incident   (temporal-claims) three people investigating a checkout slowdown
-  decisions  (decision-log)    what they decided to do about it
+  console.log(`p2p-context-graph demo: an example graph, copied to ${dataDir}
+  incident   three people investigating a checkout slowdown
 
 Open this on this machine (it acts as you; don't share it):
 ${server.url}
 
-In the browser: Explore the graph (drag the time slider), Conflicts, and
-Model studio > Packs and graphs to switch to 'decisions' (then "Decisions that
-need review"). To point an agent at the same data:
+In the browser: Explore the graph (drag the time slider) and Conflicts.
+To point an agent at the same data:
   P2PCG_DATA_DIR=${dataDir} p2pcg mcp --graph incident
 
 Ctrl-C stops the demo.`);
@@ -116,7 +116,7 @@ Ctrl-C stops the demo.`);
   }
   const stop = async () => {
     await server.close();
-    for (const g of ["incident", "decisions"]) {
+    for (const g of ["incident"]) {
       try {
         const { LocalHost } = await import("../host/client.js");
         const { socketPath } = await import("../host/state.js");
@@ -181,13 +181,12 @@ async function host(args: string[]): Promise<number> {
     const h = await Host.start({
       dataDir: defaultDataDir(),
       graph: graphName(values.graph),
-      model: values.model ?? process.env.P2PCG_MODEL,
       user: defaultName(defaultDataDir()),
       idleSeconds: values.idle ? Number(values.idle) : 0,
       log,
       onStop: () => process.exit(0),
     });
-    log(`host for graph '${h.graph.name}' (${h.graph.model.name}) on ${h.socket}`);
+    log(`host for graph '${h.graph.name}' on ${h.socket}`);
     if (values.share) console.log(h.share().code);
     const stop = () => h.stop();
     process.on("SIGINT", stop);
@@ -269,12 +268,10 @@ async function doctor(): Promise<number> {
     pc.close();
     return "WebRTC data channels available";
   });
-  await check("model packs", async () => {
-    const { listBuiltinPacks, resolvePack } = await import("../core/pack.js");
-    const names = listBuiltinPacks();
-    if (!names.length) throw new Error("no built-in packs found");
-    for (const n of names) resolvePack(n);
-    return names.join(", ");
+  await check("model", async () => {
+    const { claimsPack } = await import("../core/pack.js");
+    const p = claimsPack();
+    return `${p.model.title}: ${p.tools.length} tools`;
   });
   await check("data directory", async () => {
     const { defaultDataDir } = await import("../core/graph.js");
@@ -288,24 +285,77 @@ async function doctor(): Promise<number> {
   return failed ? 1 : 0;
 }
 
-async function model(args: string[]): Promise<number> {
-  const [sub, dir] = args;
-  const { listPacks, resolvePack } = await import("../core/pack.js");
-  if (sub === "list") {
-    for (const entry of listPacks()) {
-      const p = resolvePack(entry.dir);
-      console.log(`${entry.name}  ${p.model.title}: ${p.tools.length} tools (${entry.source})`);
+/** Starts the host of every graph here that is sharing, so they sync without an agent open. */
+async function up(): Promise<number> {
+  const [{ existsSync, readdirSync, readFileSync }, { join }, { ensureHost }, { defaultDataDir }] = await Promise.all([
+    import("node:fs"),
+    import("node:path"),
+    import("../host/client.js"),
+    import("../core/graph.js"),
+  ]);
+  const { autoShare } = await import("../core/paths.js");
+  const dataDir = defaultDataDir();
+  const dir = join(dataDir, "graphs");
+  const graphs = existsSync(dir) ? readdirSync(dir).filter((n) => /^[a-z0-9][a-z0-9-]{0,62}$/.test(n)) : [];
+  let started = 0;
+  for (const g of graphs) {
+    let on = autoShare();
+    try {
+      on = JSON.parse(readFileSync(join(dataDir, "hosts", g, "sharing.json"), "utf8")).on === true;
+    } catch {
+      // no setting: the default
     }
+    if (!on) continue;
+    try {
+      // idle 0: a sharing host stays up anyway; this keeps it up for the members.
+      const c = await ensureHost({ dataDir, graph: g, idleSeconds: 0 });
+      c.close();
+      started++;
+      console.log(`up: ${g}`);
+    } catch (e) {
+      console.error(`${g}: ${(e as Error).message}`);
+    }
+  }
+  console.log(`${started} graph host(s) running.`);
+  return 0;
+}
+
+/** A macOS launch agent that runs `p2pcg up` at login. */
+async function autostart(args: string[]): Promise<number> {
+  const [sub] = args;
+  const [{ existsSync, mkdirSync, unlinkSync, writeFileSync }, { homedir }, { join }] = await Promise.all([import("node:fs"), import("node:os"), import("node:path")]);
+  const label = "dev.p2pcg.up";
+  if (process.platform !== "darwin") {
+    console.log("autostart is for macOS. Elsewhere, run `p2pcg up` from your login scripts (for example a systemd user service).");
+    return sub === "on" || sub === "off" ? 1 : 2;
+  }
+  const plist = join(homedir(), "Library", "LaunchAgents", `${label}.plist`);
+  if (sub === "off") {
+    if (existsSync(plist)) unlinkSync(plist);
+    console.log(`Removed ${plist}. Your graphs sync only while an agent (or \`p2pcg up\`) runs them.`);
     return 0;
   }
-  if (sub === "validate" && dir) {
-    const { validatePack, formatReport } = await import("../core/validate.js");
-    const report = await validatePack(dir);
-    console.log(formatReport(report));
-    return report.ok ? 0 : 1;
+  if (sub !== "on") {
+    console.error("Usage: p2pcg autostart on|off");
+    return 2;
   }
-  console.error("Usage: p2pcg model list | p2pcg model validate <dir>");
-  return 2;
+  const esc = (v: string) => v.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+  const args2 = [process.execPath, ...process.execArgv, process.argv[1]!, "up"];
+  mkdirSync(join(homedir(), "Library", "LaunchAgents"), { recursive: true });
+  writeFileSync(
+    plist,
+    `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>${label}</string>
+  <key>ProgramArguments</key><array>${args2.map((a) => `<string>${esc(a)}</string>`).join("")}</array>
+  <key>RunAtLoad</key><true/>
+  <key>EnvironmentVariables</key><dict>${process.env.P2PCG_DATA_DIR ? `<key>P2PCG_DATA_DIR</key><string>${esc(process.env.P2PCG_DATA_DIR)}</string>` : ""}</dict>
+</dict></plist>
+`,
+  );
+  console.log(`Wrote ${plist}: \`p2pcg up\` runs at each login. \`p2pcg autostart off\` removes it.`);
+  return 0;
 }
 
 switch (command) {
@@ -340,8 +390,11 @@ switch (command) {
   case "doctor":
     process.exitCode = await doctor();
     break;
-  case "model":
-    process.exitCode = await model(rest);
+  case "up":
+    process.exitCode = await up();
+    break;
+  case "autostart":
+    process.exitCode = await autostart(rest);
     break;
   default:
     console.log(USAGE);

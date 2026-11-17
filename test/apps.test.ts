@@ -1,17 +1,14 @@
-// M3: MCP App views, the tools that open them, model packs from the studio,
+// MCP App views, the tools that open them,
 // and the localhost page for agents that can't show views.
 
 import { EventEmitter } from "node:events";
-import { cpSync, readFileSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
-import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { ToolListChangedNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
 import { afterAll, describe, expect, it } from "vitest";
 import { defaultName, loadIdentity, nameSource } from "../src/core/identity.js";
-import { loadPack } from "../src/core/pack.js";
 import { LocalHost } from "../src/host/client.js";
 import { Host } from "../src/host/host.js";
 import { APP_MIME, VIEWS } from "../src/mcp/apps.js";
@@ -19,7 +16,7 @@ import { Session } from "../src/mcp/server.js";
 import { formatCode, newLink } from "../src/p2p/link.js";
 import { memorySignaller } from "../src/p2p/signal.js";
 import { startUi, type UiServer } from "../src/ui/server.js";
-import { pause, tempDir, writePack } from "./helpers.js";
+import { pause, tempDir } from "./helpers.js";
 
 const signal = memorySignaller(new EventEmitter());
 const ice: string[] = [];
@@ -34,10 +31,10 @@ afterAll(async () => {
 async function agent(user: string, graph = "main", opts: { storedName?: boolean } = {}) {
   const dataDir = tempDir();
   const started = new Map<string, Host>();
-  const open = async (name: string, model?: string) => {
+  const open = async (name: string) => {
     let h = started.get(name);
     if (!h) {
-      h = await Host.start({ dataDir, graph: name, model, user, signal, ice });
+      h = await Host.start({ dataDir, graph: name, user, signal, ice, holdMs: 1500 });
       hosts.push(h);
       started.set(name, h);
     }
@@ -95,7 +92,6 @@ describe("MCP App views", () => {
     const by = (n: string) => tools.find((t) => t.name === n)!;
     expect(uiOf(by("open_console"))).toBe("ui://p2pcg/console");
     expect(uiOf(by("explore_graph"))).toBe("ui://p2pcg/explorer");
-    expect(uiOf(by("model_studio"))).toBe("ui://p2pcg/studio");
     expect(uiOf(by("add_claim"))).toBe("ui://p2pcg/receipt");
     expect(uiOf(by("conflicts"))).toBe("ui://p2pcg/conflicts");
     expect(uiOf(by("search"))).toBeUndefined();
@@ -109,11 +105,12 @@ describe("MCP App views", () => {
       view: "receipt",
       tool: "add_claim",
       input: { text: "The cache hit rate fell to 40% after the deploy" },
-      undo: { tool: "withdraw", arg: "id", field: "id" },
+      undo: { take_back: true, withdraw: true },
       where: "your graph 'main'",
     });
-    const id = r.structuredContent.result.id;
-    await alice.call(r.structuredContent.undo.tool, { [r.structuredContent.undo.arg]: id });
+    // While it is held on this machine, take_back removes it without trace.
+    expect(r.structuredContent.result.shared_at).toBeDefined();
+    await alice.call("take_back", { id: r.structuredContent.result.change });
     expect(await alice.call("beliefs")).toEqual([]);
   });
 
@@ -143,77 +140,31 @@ describe("MCP App views", () => {
 
   it("opens the console with your sharing state", async () => {
     const alice = await agent("alice");
-    expect(await alice.call("open_console")).toMatchObject({ mode: "host", sharing: false, people: [expect.objectContaining({ name: "alice", host: true })], connected: [] });
+    expect(await alice.call("open_console")).toMatchObject({ sharing: false, can_invite: true, people: [expect.objectContaining({ name: "alice", you: true, creator: true })], links: [] });
     await alice.call("share_graph");
-    expect(await alice.call("open_console")).toMatchObject({ mode: "host", sharing: true, invites: [expect.objectContaining({ state: "open", code: expect.stringMatching(/^p2pcg1_/) })] });
+    expect(await alice.call("open_console")).toMatchObject({ sharing: true, invites: [expect.objectContaining({ state: "open", code: expect.stringMatching(/^p2pcg1_/) })] });
     await alice.call("stop_sharing");
   });
 
-  it("lets a peer explore the host's graph, and shows the peer its connection", async () => {
+  it("joins with a code into its own copy, and explores it", async () => {
     const alice = await agent("alice", "team");
     const bob = await agent("bob", "own");
     await alice.call("add_claim", { text: "Alice's finding about the build" });
     const { code } = await alice.call("share_graph", { role: "reader" });
-    await bob.call("join_graph", { code });
-    let state: any;
-    for (let i = 0; i < 100 && state?.state !== "active"; i++) {
-      state = await bob.call("open_console");
-      await pause(50);
-    }
-    expect(state).toMatchObject({ mode: "peer", host: "alice", state: "active", role: "reader", you: { name: "bob" } });
+    const joined = await bob.call("join_graph", { code });
+    expect(joined).toMatchObject({ joined: "alice's graph 'team'", here_as: "team", role: "reader", as: "bob" });
+    const state = await bob.call("open_console");
+    expect(state).toMatchObject({ host: "alice", can_invite: false, you: { name: "bob", role: "reader" } });
     const snap = (await bob.raw("explore_graph")).structuredContent;
-    expect(snap).toMatchObject({ graph: "team", where: expect.stringContaining("alice's graph 'team'") });
+    expect(snap).toMatchObject({ graph: "team", where: expect.stringContaining("alice's graph") });
     expect(snap.nodes.map((n: any) => n.title)).toEqual(["Alice's finding about the build"]);
-    // A reader has no add_claim, so no receipt tool either; the studio can't manage packs on someone else's machine.
-    expect(await bob.call("model_studio")).toMatchObject({ mode: "peer", can_manage: false, packs: [] });
-    await bob.call("leave_graph");
+    // A reader gets no write tools.
+    expect((await bob.client.listTools()).tools.map((t) => t.name)).not.toContain("add_claim");
+    // Back to bob's own graph, then to the joined one again without the code.
+    await bob.call("use_graph", { name: "own" });
+    expect((await bob.call("graph_info")).your_graphs).toEqual(["own", "team"]);
+    expect(await bob.call("use_graph", { name: "team" })).toMatchObject({ using: expect.stringContaining("alice's graph") });
     await alice.call("stop_sharing");
-  });
-});
-
-describe("model packs from the studio", () => {
-  it("lists packs and graphs, checks a pack, installs it, and starts a graph with it", async () => {
-    const alice = await agent("alice");
-    const studio = await alice.call("model_studio");
-    expect(studio.packs.map((p: any) => p.name)).toEqual(["decision-log", "temporal-claims"]);
-    expect(studio.graphs).toEqual(["main"]);
-    expect(studio.model.schema.nodes.map((n: any) => n.label)).toEqual(["Claim", "Question"]);
-
-    // A broken pack fails the check and can't be installed.
-    const broken = writePack({
-      "model.yaml": "name: broken\nversion: 1\ntitle: Broken\ndescription: x\nnodes:\n  Note:\n    description: A note\n    key: id\n    properties:\n      id: { type: id, required: true }\n",
-      "tools.yaml": "tools:\n  - name: notes\n    kind: read\n    description: Lists the notes in order\n    steps:\n      - cypher: MATCH (n:Note) RETURN n.id AS id ORDER BY nope\n",
-    });
-    const report = await alice.call("validate_model", { path: broken });
-    expect(report).toMatchObject({ ok: false, tools: [expect.objectContaining({ tool: "notes", outcome: "failed" })] });
-    expect((await alice.raw("install_model", { path: broken })).isError).toBe(true);
-
-    // A good one: decision-log under another name.
-    const mine = tempDir("p2pcg-pack-");
-    cpSync(loadPack(join("models", "decision-log")).dir, mine, { recursive: true });
-    const yaml = join(mine, "model.yaml");
-    writeFileSync(yaml, readFileSync(yaml, "utf8").replace("name: decision-log", "name: team-decisions"));
-    expect((await alice.call("validate_model", { path: mine })).ok).toBe(true);
-    expect(await alice.call("install_model", { path: mine })).toMatchObject({ installed: "team-decisions", replaced_version: null });
-    expect((await alice.call("model_studio")).packs).toContainEqual(expect.objectContaining({ name: "team-decisions", source: "installed" }));
-
-    const before = alice.changes();
-    expect(await alice.call("use_graph", { name: "decisions", model: "team-decisions" })).toMatchObject({ using: "your graph 'decisions'" });
-    expect(alice.changes()).toBeGreaterThan(before);
-    const names = (await alice.client.listTools()).tools.map((t) => t.name);
-    expect(names).toContain("record_decision");
-    expect(names).not.toContain("add_claim");
-    await alice.call("record_decision", { text: "Ship the beta on 1 December" });
-
-    // An existing graph keeps its model.
-    expect((await alice.raw("use_graph", { name: "decisions", model: "temporal-claims" })).content[0].text).toMatch(/already exists with the model 'team-decisions'/);
-    await alice.call("use_graph", { name: "main" });
-    expect((await alice.client.listTools()).tools.map((t) => t.name)).toContain("add_claim");
-  });
-
-  it("refuses to install over a built-in pack's name", async () => {
-    const alice = await agent("alice");
-    expect((await alice.raw("install_model", { path: join(process.cwd(), "models", "decision-log") })).content[0].text).toMatch(/built-in pack's name/);
   });
 });
 
@@ -262,10 +213,10 @@ describe("the localhost page", () => {
     const client = new Client({ name: "browser", version: "0" });
     await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`), { requestInit: { headers: { Authorization: `Bearer ${token}` } } }));
     const names = (await client.listTools()).tools.map((t) => t.name);
-    expect(names).toEqual(expect.arrayContaining(["open_console", "explore_graph", "model_studio", "add_claim"]));
+    expect(names).toEqual(expect.arrayContaining(["open_console", "explore_graph", "add_claim"]));
     expect(names).not.toContain("browser_view"); // the page's own sessions don't hand out more links
     const r: any = await client.callTool({ name: "open_console", arguments: {} });
-    expect(r.structuredContent).toMatchObject({ mode: "host", graph: "main" });
+    expect(r.structuredContent).toMatchObject({ graph: "main", you: { role: "admin" } });
     await client.close();
   });
 });
@@ -293,7 +244,7 @@ describe("names, auto-share and which graph", () => {
     const me = await agent("alice");
     process.env.P2PCG_AUTO_SHARE = "on";
     try {
-      const r = await me.call("use_graph", { name: "planning", model: "decision-log" });
+      const r = await me.call("use_graph", { name: "planning" });
       expect(r).toMatchObject({ created: "your graph 'planning'", code: expect.stringMatching(/^p2pcg1_/), send: expect.stringContaining(r.code), shared_as: { name: "alice" } });
       expect(await me.call("graph_info")).toMatchObject({ sharing: { sharing: true } });
       // Switching back to an existing graph doesn't share it.
@@ -306,25 +257,20 @@ describe("names, auto-share and which graph", () => {
     }
   });
 
-  it("gets back to its own graph with use_graph when a joined host doesn't answer", async () => {
+  it("says clearly when no one answers a code, and stays on its own graph", async () => {
     const me = await agent("alice");
     await me.call("add_claim", { text: "Mine, on main" });
-    // A code for a room nobody is hosting: the join waits, then gives up waiting.
-    expect(await me.call("join_graph", { code: formatCode(newLink()) })).toHaveProperty("waiting");
-    const info = await me.call("graph_info");
-    expect(info.using).toMatch(/connecting to|not connected to/);
-    expect(info.your_graphs).toContain("main");
-    // No leave_graph needed: use_graph leaves the dead join itself and says so.
-    const r = await me.call("use_graph", { name: "main" });
-    expect(r).toMatchObject({ using: "your graph 'main'", left: expect.stringMatching(/^Left .*graph \(it wasn't connected/) });
+    const r = await me.raw("join_graph", { code: formatCode(newLink()) });
+    expect(r.isError).toBe(true);
+    expect(r.content[0].text).toMatch(/isn't online right now/);
+    expect((await me.call("graph_info")).using).toBe("your graph 'main'");
     expect((await me.call("search", { query: "Mine" })).length).toBe(1);
-    expect((await me.call("graph_info")).your_graphs).toContain("main");
   });
 
   it("says which graph each model tool acted on", async () => {
     const me = await agent("alice");
     const r = await me.raw("add_claim", { text: "Where did this go?" });
-    expect(r.content.at(-1).text).toBe("(on your graph 'main')");
+    expect(r.content.at(-1).text).toMatch(/^\(on your graph 'main'\) It stays on this machine until /);
     expect(JSON.parse(r.content[0].text).id).toMatch(/^c_/);
   });
 });

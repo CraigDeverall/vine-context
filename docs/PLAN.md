@@ -1,5 +1,12 @@
 # p2p-context-graph: root plan
 
+> **Superseded in part (2026-11-17):** the star is replaced by replicated
+> graphs (every member keeps a full copy, synced over a mesh), Claims and
+> Questions is the only model (`decision-log`, model packs and the model
+> studio are gone), and joined graphs are local graphs. See
+> [REPLICATION.md](REPLICATION.md) and the decision at the end of section 9.
+> The rest of this plan is kept as the record of how the project got here.
+
 Status: draft, 2026-11-15. This is the grounding plan for an open-source proof of
 concept entered in the [Relate by Neo4j Hackathon](https://relate.devpost.com/).
 Each milestone gets its own detailed plan; this file holds the decisions they
@@ -354,3 +361,14 @@ Decided in M3 (16 Nov):
   bundle served as `ui://p2pcg/<view>`, run on Preact to keep it near 300 KB.
   `p2pcg ui` / `browser_view` serve the same views on 127.0.0.1 for agents
   without MCP Apps.
+
+Decided 17 Nov:
+
+- **Replicated graphs, one model.** Every member keeps a full copy built from
+  a log of signed changes; online members keep each other in step over a
+  WebRTC mesh, so the graph works offline and while its creator is away.
+  Claims and Questions is the only model: with one fixed schema, changes are
+  four fixed kinds (claim, question, link, withdraw) and need no merge rules.
+  Model packs, `decision-log`, `validate_model`, `install_model` and the
+  model studio are removed. Design and as-built notes:
+  [REPLICATION.md](REPLICATION.md).

@@ -7,7 +7,6 @@ import { Conflicts } from "./views/Conflicts";
 import { Console } from "./views/Console";
 import { Explorer } from "./views/Explorer";
 import { Receipt } from "./views/Receipt";
-import { Studio } from "./views/Studio";
 
 declare global {
   interface Window {
@@ -18,7 +17,6 @@ declare global {
 const VIEWS: Record<string, (p: { b: Bridge; open?: (p: Panel) => void }) => React.ReactNode> = {
   console: Console,
   explorer: Explorer,
-  studio: Studio,
   receipt: Receipt,
   conflicts: Conflicts,
 };

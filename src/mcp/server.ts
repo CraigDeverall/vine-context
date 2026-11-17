@@ -1,30 +1,30 @@
 // The MCP server each agent session runs. It never opens a graph itself: it
-// is a client of a host. By default that is this machine's host for the
-// graph, which it starts if needed. After join_graph, it is another person's
-// host, reached peer to peer. The model's tools come from whichever host is
-// active, filtered by the role that host gave you, and are re-registered
-// (with tools/list_changed) when the host or the role changes.
+// is a client of this machine's host for the graph (started if needed).
+// Every graph this machine is in, its own or one it joined, is a full local
+// copy kept in step with the other members by its host, so the session always
+// works on this machine: reads and writes work offline too.
+//
+// The model's tools come from the host, filtered by this machine's role in
+// the graph, and are re-registered (with tools/list_changed) on a switch or a
+// role change.
 
-import { copyFileSync, existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import { spawn } from "node:child_process";
 import { McpServer, type RegisteredTool } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { inputShape, type Role, type Snapshot } from "../core/graph.js";
-import { listPacks, loadPack, resolvePack } from "../core/pack.js";
-import { autoShare, defaultDataDir, userPacksDir } from "../core/paths.js";
-import { validatePack } from "../core/validate.js";
-import { spawn } from "node:child_process";
+import { RANK } from "../core/changes.js";
+import { inputShape, type Snapshot } from "../core/graph.js";
 import { fingerprint, nameSource, setName, type Identity } from "../core/identity.js";
 import { packageInfo } from "../core/package-root.js";
+import { autoShare, defaultDataDir } from "../core/paths.js";
 import type { LocalHost } from "../host/client.js";
+import { placeReplica, readGroup } from "../host/host.js";
+import { joinWithCode } from "../p2p/join.js";
 import { parseCode } from "../p2p/link.js";
-import { JoinedStore } from "../p2p/joined.js";
 import type { GraphDescription } from "../p2p/protocol.js";
-import { RemoteHost } from "../p2p/remote.js";
 import type { SignalFactory } from "../p2p/signal.js";
 import { registerViews, uiMeta } from "./apps.js";
-
-const RANK: Record<Role, number> = { reader: 0, contributor: 1, admin: 2 };
 
 type Content = { content: { type: "text"; text: string }[]; structuredContent?: Record<string, unknown>; isError?: boolean };
 const text = (value: unknown): Content => ({
@@ -33,15 +33,18 @@ const text = (value: unknown): Content => ({
 const failure = (message: string): Content => ({ ...text(message), isError: true });
 
 const OS: Record<string, string> = { darwin: "macOS", win32: "Windows", linux: "Linux" };
+const GRAPH_RE = /^[a-z0-9][a-z0-9-]{0,62}$/;
+
+type Description = GraphDescription & { graph_id?: string; creator?: boolean; member?: boolean };
 
 /** One line about a newcomer, for every agent in the graph. */
 function joinNotice(p: Record<string, any>, where: string): string {
   const via = p.invite?.label ? ` with the invite '${p.invite.label}'` : p.invite?.id ? ` with invite ${p.invite.id}` : "";
   const agent = p.agent ? `${p.agent}${p.agent_version ? ` ${p.agent_version}` : ""}` : "an unknown agent";
   const extra = [p.platform ? `on ${p.platform}` : "", p.p2pcg ? `p2pcg ${p.p2pcg}` : ""].filter(Boolean).join(", ");
-  return `News: ${p.name} joined ${where} as ${p.role}${via}, at ${p.joined_at}. Key fingerprint ${p.fingerprint}; ${agent}${extra ? ` (${extra})` : ""}.`;
+  const by = p.added_by ? `, let in by ${p.added_by}` : "";
+  return `News: ${p.name} joined ${where} as ${p.role}${via}${by}, at ${p.joined_at}. Key fingerprint ${p.fingerprint}; ${agent}${extra ? ` (${extra})` : ""}.`;
 }
-
 
 /** Opens a URL in the default browser; false where that isn't possible or is turned off. */
 function openInBrowser(url: string): boolean {
@@ -56,16 +59,16 @@ function openInBrowser(url: string): boolean {
 }
 
 export interface SessionOptions {
-  /** Connects to (and if needed starts) this machine's host for the graph. */
+  /** Connects to (and if needed starts) this machine's host for the session's graph. */
   local: () => Promise<LocalHost>;
+  /** Connects to (and if needed starts) this machine's host for another graph. */
+  openLocal?: (graph: string) => Promise<LocalHost>;
   identity: () => Identity;
   signal: SignalFactory;
   ice: string[];
-  /** How long join_graph waits for the host to let it in before returning. */
+  /** How long join_graph waits for the person who made the code to answer. */
   joinWaitMs?: number;
-  /** Connects to (and if needed starts) this machine's host for another graph: use_graph. */
-  openLocal?: (graph: string, model?: string) => Promise<LocalHost>;
-  /** Where graphs and installed packs live. */
+  /** Where graphs live. */
   dataDir?: string;
   /** Starts (once) the localhost page that shows the views, and returns its link: browser_view. */
   browserView?: () => Promise<string>;
@@ -75,10 +78,9 @@ export interface SessionOptions {
 export class Session {
   readonly server: McpServer;
   private localHost?: LocalHost;
-  private remote?: RemoteHost;
-  private active?: GraphDescription;
+  private active?: Description;
   private modelTools = new Map<string, RegisteredTool>();
-  /** Join notices not yet shown to the agent: they ride on its next tool result. */
+  /** Notices not yet shown to the agent: they ride on its next tool result. */
   private news: string[] = [];
 
   constructor(private o: SessionOptions) {
@@ -87,20 +89,20 @@ export class Session {
       {
         capabilities: { tools: { listChanged: true }, resources: {}, prompts: {} },
         instructions:
-          "This server holds a context graph: what a group knows, shared peer to peer. " +
-          "Call model_guide once before you first write to it, and follow it. " +
-          "To invite someone to your graph, use share_graph: it makes a join code for one person. To join someone else's, call join_graph with the p2pcg1_ code they sent.",
+          "This server holds context graphs: what a group knows, as claims and questions, shared peer to peer. Every member keeps a full copy, so it works offline. " +
+          "Call model_guide once before you first write to a graph, and follow it. " +
+          "To invite someone, use share_graph: it makes a join code for one person. To join someone else's graph, call join_graph with the p2pcg1_ code they sent. " +
+          "To switch to another graph on this machine (yours or one you joined), use use_graph.",
       },
     );
     registerViews(this.server);
-    // A slash command for agents that have this server but not the plugin
-    // (Claude Code shows it as /mcp__p2p-context-graph__join).
+    // A slash command for agents that have this server but not the plugin.
     this.server.registerPrompt(
       "join",
       {
         title: "Join a shared context graph",
         description: "Join someone's shared context graph with the join code (p2pcg1_…) they sent you",
-        argsSchema: { code: z.string().optional().describe("The p2pcg1_… join code; leave it out to rejoin the last graph you joined") },
+        argsSchema: { code: z.string().describe("The p2pcg1_… join code") },
       },
       ({ code }) => ({
         messages: [
@@ -109,9 +111,9 @@ export class Session {
             content: {
               type: "text",
               text:
-                `Join the shared context graph${code ? ` with this join code: ${code}` : ", rejoining the last one this machine joined"}.\n\n` +
-                `Call join_graph${code ? " with the code exactly as given" : " with no code"}. When I'm in, tell me whose graph it is, my role, and that everyone in it has been told I joined (with my name and key fingerprint). ` +
-                "Then call model_guide before writing. If the code was already used on another machine, expired or was cancelled, tell me to ask the host for a new one (and, if it was already used and not by me, to warn them it may have leaked).",
+                `Join the shared context graph with this join code: ${code}\n\n` +
+                "Call join_graph with the code exactly as given. When I'm in, tell me whose graph it is, my role, that I now have my own full copy, and that everyone in it has been told I joined (with my name and key fingerprint). " +
+                "Then call model_guide before writing. If the person who made the code isn't online, tell me to try again later. If the code was already used on another machine, expired or was cancelled, tell me to ask for a new one (and, if it was already used and not by me, to warn them it may have leaked).",
             },
           },
         ],
@@ -125,69 +127,58 @@ export class Session {
     return this.o.dataDir ?? defaultDataDir();
   }
 
-  /** Disconnects from any joined graph and from the local host. */
   close(): void {
-    this.remote?.close();
-    this.remote = undefined;
     this.localHost?.close();
     void this.server.close().catch(() => undefined);
   }
 
-  /** Connects to the local host and offers its graph's tools. */
   async start(): Promise<void> {
     await this.useLocal();
   }
 
+  private watch(h: LocalHost): LocalHost {
+    h.on("close", () => this.o.log?.("local host connection closed"));
+    h.on("event", (e: { event: string; data: any }) => {
+      if (this.localHost !== h) return;
+      if (e.event === "joined") this.news.push(joinNotice(e.data, this.where()));
+      if (e.event === "removed") {
+        this.news.push(`News: ${e.data?.by ?? "An admin"} removed you from ${this.where()}. You keep your copy to read, but can't write to it any more.`);
+        void this.useLocal().catch(() => undefined);
+      }
+      if (e.event === "role") {
+        this.news.push(`News: your role in ${this.where()} is now ${e.data?.role}.`);
+        void this.useLocal().catch(() => undefined);
+      }
+    });
+    return h;
+  }
+
   private async local(): Promise<LocalHost> {
     if (this.localHost && !this.localHost.closed) return this.localHost;
-    this.localHost = await this.o.local();
-    this.localHost.on("close", () => {
-      this.o.log?.("local host connection closed");
-    });
-    this.localHost.on("event", (e: { event: string; data: any }) => {
-      if (e.event === "joined" && !this.remote) this.news.push(joinNotice(e.data, "your graph"));
-    });
+    this.localHost = this.watch(await this.o.local());
     return this.localHost;
   }
 
-  private backend(): { request<T>(m: string, p?: unknown): Promise<T> } {
-    if (this.remote) {
-      const r = this.remote;
-      return {
-        request: async <T>(m: string, p?: unknown) => {
-          if (r.state !== "active")
-            throw new Error(
-              `Not connected to ${r.hostName ?? "the host"}'s graph: ${r.reason ?? r.state}. ` +
-                "Call join_graph again (with no code it rejoins the last graph you joined), or leave_graph to go back to your own graph.",
-            );
-          return r.request<T>(m, p);
-        },
-      };
-    }
-    return { request: async <T>(m: string, p?: unknown) => (await this.local()).request<T>(m, p) };
+  private async request<T>(method: string, params?: unknown): Promise<T> {
+    return (await this.local()).request<T>(method, params);
   }
 
-  private async useLocal(): Promise<void> {
-    const d = await (await this.local()).request<GraphDescription>("describe");
-    this.offer(d);
-  }
-
-  private async useRemote(): Promise<GraphDescription> {
-    const d = await this.remote!.request<GraphDescription>("describe");
+  private async useLocal(): Promise<Description> {
+    const d = await this.request<Description>("describe");
     this.offer(d);
     return d;
   }
 
-  /** Replaces the model's tools with this host's, as far as the role allows. */
-  private offer(d: GraphDescription): void {
+  /** Replaces the model's tools with this graph's, as far as this machine's role allows. */
+  private offer(d: Description): void {
     this.active = d;
     for (const t of this.modelTools.values()) t.remove();
     this.modelTools.clear();
+    const role = d.member === false ? "reader" : d.you.role;
     for (const tool of d.tools) {
-      if (RANK[d.you.role] < RANK[tool.role]) continue;
-      // An undo that this role can't call isn't offered on the receipt.
-      const undoTool = tool.undo && d.tools.find((t) => t.name === tool.undo!.tool);
-      const undo = undoTool && RANK[d.you.role] >= RANK[undoTool.role] ? tool.undo : undefined;
+      if (RANK[role] < RANK[tool.role]) continue;
+      if (tool.kind === "write" && d.member === false) continue;
+      const canWithdraw = d.tools.some((t) => t.name === "withdraw") && RANK[role] >= RANK.contributor;
       const registered = this.server.registerTool(
         tool.name,
         {
@@ -199,11 +190,23 @@ export class Session {
         },
         async (args: Record<string, unknown>) => {
           try {
-            const result = await this.backend().request("call", { tool: tool.name, args });
+            const result = await this.request<Record<string, unknown>>("call", { tool: tool.name, args });
             const out = text(result);
-            out.content.push({ type: "text", text: `(on ${this.where()})` });
+            const held =
+              tool.kind === "write" && result && typeof result === "object" && result.shared_at
+                ? ` It stays on this machine until ${result.shared_at}; until then take_back removes it without trace.`
+                : "";
+            out.content.push({ type: "text", text: `(on ${this.where()})${held}` });
             if (tool.view)
-              out.structuredContent = { view: tool.view, tool: tool.name, title: tool.title ?? tool.name, input: args, result, undo: undo ?? null, where: this.where() };
+              out.structuredContent = {
+                view: tool.view,
+                tool: tool.name,
+                title: tool.title ?? tool.name,
+                input: args,
+                result,
+                undo: tool.kind === "write" ? { take_back: true, withdraw: canWithdraw } : null,
+                where: this.where(),
+              };
             return this.withNews(out);
           } catch (e) {
             return this.withNews(failure((e as Error).message));
@@ -215,22 +218,38 @@ export class Session {
     if (this.server.isConnected()) this.server.sendToolListChanged();
   }
 
-  /** Puts any join notices in front of a tool result, once. */
+  /** Puts any notices in front of a tool result, once. */
   private withNews(out: Content): Content {
     if (!this.news.length) return out;
     const lines = this.news.splice(0);
-    out.content.unshift({ type: "text", text: `${lines.join("\n")}\nTell the person who joined, in one line.` });
+    out.content.unshift({ type: "text", text: `${lines.join("\n")}\nTell the person this, in one line.` });
     return out;
   }
 
   private where(): string {
-    if (!this.active) return "no graph";
-    return this.remote ? `${this.active.host}'s graph '${this.active.graph}' (joined as ${this.active.you.role})` : `your graph '${this.active.graph}'`;
+    const d = this.active;
+    if (!d) return "no graph";
+    if (d.creator) return `your graph '${d.graph}'`;
+    return `'${d.graph}' (${d.host}'s graph${d.member === false ? "; you were removed" : `; you are a ${d.you.role}`})`;
+  }
+
+  private localGraphs(): string[] {
+    const dir = join(this.dataDir, "graphs");
+    return existsSync(dir) ? readdirSync(dir).filter((n) => GRAPH_RE.test(n)).sort() : [];
+  }
+
+  private async switchTo(name: string): Promise<Description> {
+    if (!this.o.openLocal) throw new Error("This session can't switch graphs.");
+    const host = await this.o.openLocal(name);
+    const old = this.localHost;
+    this.localHost = this.watch(host);
+    this.o.local = () => this.o.openLocal!(name);
+    if (old && old !== host) old.close();
+    return this.useLocal();
   }
 
   private registerSessionTools(): void {
     const ro = { readOnlyHint: true, idempotentHint: true, openWorldHint: false };
-    const admin = async <T>(method: string, params?: unknown) => (await this.local()).request<T>(method, params);
     const wrap = (fn: (args: any) => Promise<unknown>) => async (args: any) => {
       try {
         return this.withNews(text(await fn(args)));
@@ -243,40 +262,18 @@ export class Session {
       "graph_info",
       {
         title: "Graph info",
-        description: "Which graph this session is using (yours, or one you joined), its model, how many of each node it holds, your role, and the graphs on this machine (your_graphs: switch with use_graph).",
+        description:
+          "Which graph this session is using, how many claims and questions it holds, your role, everyone in it (and who is online), and the graphs on this machine (your_graphs: switch with use_graph).",
         annotations: ro,
       },
-      wrap(async () => {
-        const r = this.remote;
-        if (r && r.state !== "active") {
-          const host = r.hostName ?? "the host";
-          return {
-            using: r.state === "connecting" ? `connecting to ${host}'s graph` : `not connected to ${host}'s graph`,
-            state: r.state,
-            reason: r.reason,
-            your_graphs: this.localGraphs(),
-            next:
-              r.state === "connecting"
-                ? "Wait a moment; the graph tools switch automatically."
-                : "Call join_graph again (with no code it rejoins the last graph you joined), or use_graph to switch to one of your own graphs.",
-          };
-        }
-        const info = (await this.backend().request("info")) as Record<string, unknown>;
-        const identity = this.o.identity();
-        return {
-          using: this.where(),
-          ...info,
-          you: { ...this.active?.you, name: this.remote ? this.active?.you.id : identity.name, fingerprint: fingerprint(identity.publicKey) },
-          your_graphs: this.localGraphs(),
-        };
-      }),
+      wrap(async () => ({ using: this.where(), ...(await this.request<Record<string, unknown>>("info")), your_graphs: this.localGraphs() })),
     );
 
     this.server.registerTool(
       "model_guide",
       {
         title: "Model guide",
-        description: "How to use the current graph's model: what to record, when, and how to query it. Read it before writing.",
+        description: "How to use the graph: what to record, when, and how to query it. Read it before writing.",
         annotations: ro,
       },
       wrap(async () => this.active?.guide ?? "No graph is connected."),
@@ -287,26 +284,16 @@ export class Session {
       {
         title: "Set your name",
         description:
-          "Set the name other people see for you in shared graphs, and that goes on what you record from now on (for example 'Craig Deverall'). " +
-          "Ask the person what they want to be called; don't invent it. Your key fingerprint, not your name, is what proves who you are.",
+          "Set the name other people see for you in every graph on this machine (for example 'Craig Deverall'). Ask the person what they want to be called; don't invent it. " +
+          "You are your machine's key; the name is a label you can change. What you recorded before shows the new name too.",
         inputSchema: { name: z.string().min(1).max(40).describe("1–40 letters, digits, spaces, dots, dashes or underscores") },
         annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       },
       wrap(async ({ name }: { name: string }) => {
         if (process.env.P2PCG_USER) throw new Error(`Your name is set by P2PCG_USER ('${process.env.P2PCG_USER}') in this agent's configuration; change it there.`);
         const n = setName(this.dataDir, name);
-        try {
-          await (await this.local()).request("rename", { name: n });
-        } catch {
-          // no host running yet: it uses the new name when it starts
-        }
-        return {
-          name: n,
-          fingerprint: fingerprint(this.o.identity().publicKey),
-          note: this.remote
-            ? "In the graph you joined you keep the name you joined with until you join again."
-            : "Your graphs use it from now on. What you recorded before keeps the old name.",
-        };
+        await this.request("rename", { name: n });
+        return { name: n, fingerprint: fingerprint(this.o.identity().publicKey), note: "Each of your graphs takes the new name when its host next starts; this one has it now." };
       }),
     );
 
@@ -315,8 +302,8 @@ export class Session {
       {
         title: "Invite someone",
         description:
-          "Invite one person to YOUR graph (on this machine): starts sharing it peer to peer if needed and makes a new join code (p2pcg1_…) for that person. " +
-          "Each code works for one machine: the first person to use it is let straight in with the code's role, it is tied to them, and they can rejoin with it later; anyone else using it is turned away. " +
+          "Invite one person to the current graph (you must be an admin of it): makes a new join code (p2pcg1_…) for that person. " +
+          "Your machine answers the code, so it must be online when they use it. The first person to use it is let straight in with the code's role and gets a full copy of the graph; anyone else using it is turned away. " +
           "Everyone in the graph is told when someone joins, with their name, key fingerprint and agent. remove_peer takes anyone out. " +
           "An unused code expires (default 24 hours). Call it once per person. sharing_status lists invites; revoke_invite cancels one.",
         inputSchema: {
@@ -326,40 +313,41 @@ export class Session {
         },
         annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
       },
-      wrap(async (a: { label?: string; role?: string; expires_hours?: number }) => this.invited(await admin<Record<string, any>>("share", a))),
+      wrap(async (a) => this.invited(await this.request<Record<string, any>>("share", a))),
     );
 
     this.server.registerTool(
       "revoke_invite",
       {
         title: "Cancel an invite",
-        description:
-          "Cancel a join code: it stops working, and anyone connected with it is disconnected. Use the invite id from sharing_status. " +
-          "To take away someone's access altogether, use remove_peer.",
+        description: "Cancel a join code you made: it stops working. Use the invite id from sharing_status. To take someone out of the graph, use remove_peer.",
         inputSchema: { id: z.string().describe("The invite id (inv_…), as sharing_status shows it") },
         annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
       },
-      wrap((a) => admin("revoke_invite", a)),
+      wrap((a) => this.request("revoke_invite", a)),
     );
 
     this.server.registerTool(
       "stop_sharing",
       {
-        title: "Stop sharing",
-        description: "Stop sharing your graph: disconnect everyone, and no join code works until you share again. Invites and members are kept: when you share again, people rejoin with the codes they have.",
+        title: "Go offline",
+        description:
+          "Stop syncing this graph with the other members, and stop answering your join codes, until you share again (share_graph, or open the console). " +
+          "Your copy keeps working; what you write is sent when you're back. Sharing is on by default.",
         annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       },
-      wrap(() => admin("unshare")),
+      wrap(() => this.request("unshare")),
     );
 
     this.server.registerTool(
       "sharing_status",
       {
         title: "Sharing status",
-        description: "Whether your graph is shared, its invites (who each is for, whether it is open, used and by whom, or expired), who is connected, and everyone who has joined (name, key fingerprint, role, agent, operating system).",
+        description:
+          "Whether this graph is syncing, its invites (who each is for, open, used or expired), everyone in it (name, key fingerprint, role, agent, operating system, online), the links to other members, and the signalling relays' state.",
         annotations: ro,
       },
-      wrap(() => admin("status")),
+      wrap(() => this.request("status")),
     );
 
     const roleSchema = z.enum(["reader", "contributor", "admin"]);
@@ -367,11 +355,11 @@ export class Session {
       "set_peer_role",
       {
         title: "Change someone's role",
-        description: "Change the role of a person in your graph: reader, contributor or admin. Takes effect at once if they are connected.",
+        description: "Change a member's role (you must be an admin): reader, contributor or admin. Every member's machine applies it.",
         inputSchema: { name: z.string().describe("Their name"), role: roleSchema.describe("Their new role") },
         annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       },
-      wrap((a) => admin("set_role", a)),
+      wrap((a) => this.request("set_role", a)),
     );
 
     this.server.registerTool(
@@ -379,11 +367,12 @@ export class Session {
       {
         title: "Remove someone",
         description:
-          "Take a person out of your graph: disconnect them, and their join code stops working. Their past contributions stay in the graph. Send a new code if it was a mistake.",
+          "Take a member out of the graph (you must be an admin). Every member's machine stops syncing with them and refuses their later changes. Their past contributions stay. " +
+          "They keep the copy they already had: removal can't take back what they received.",
         inputSchema: { name: z.string().describe("Their name") },
         annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
       },
-      wrap((a) => admin("remove", a)),
+      wrap((a) => this.request("remove", a)),
     );
 
     this.server.registerTool(
@@ -391,83 +380,61 @@ export class Session {
       {
         title: "Join a shared graph",
         description:
-          "Join someone else's shared graph with the join code they sent (p2pcg1_…; it can be inside other text). Use it when the person pastes such a code. " +
-          "You are let in at once, and everyone in the graph is told you joined (your name, key fingerprint and agent). This session's graph tools then act on their graph until leave_graph. " +
-          "The code is tied to this machine: call join_graph with no code in a later session to rejoin the last graph you joined.",
-        inputSchema: { code: z.string().optional().describe("The p2pcg1_… join code, exactly as sent. Leave it out to rejoin the last graph you joined.") },
+          "Join someone else's graph with the join code they sent (p2pcg1_…; it can be inside other text). Use it when the person pastes such a code. " +
+          "The machine that made the code must be online. You are let in at once and get your own full copy of the graph, kept in step with the others; everyone is told you joined (your name, key fingerprint and agent). " +
+          "This session then works on that graph. Later sessions don't need the code: use use_graph with its name.",
+        inputSchema: { code: z.string().describe("The p2pcg1_… join code, exactly as sent") },
         annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
       },
-      wrap(async ({ code }: { code?: string }) => this.join(code)),
+      wrap(async ({ code }: { code: string }) => this.join(code)),
     );
 
     this.server.registerTool(
-      "leave_graph",
+      "use_graph",
       {
-        title: "Leave the joined graph",
-        description: "Disconnect from the graph you joined and go back to your own graph.",
+        title: "Switch graphs",
+        description:
+          "Switch this session to another graph on this machine: one of yours, or one you joined (graph_info lists your_graphs). A name that isn't here yet starts a new graph of your own.",
+        inputSchema: { name: z.string().regex(GRAPH_RE).describe("Graph name: lower-case letters, digits and dashes") },
         annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       },
-      wrap(async () => {
-        if (!this.remote) return "You are not in someone else's graph; you are using your own.";
-        const host = this.remote.hostName;
-        this.remote.close();
-        this.remote = undefined;
-        await this.useLocal();
-        return `Left ${host ?? "the host"}'s graph. You are back on ${this.where()}.`;
+      wrap(async ({ name }: { name: string }) => {
+        const isNew = !this.localGraphs().includes(name);
+        await this.switchTo(name);
+        if (isNew && autoShare())
+          return {
+            created: this.where(),
+            ...this.invited(await this.request<Record<string, any>>("share")),
+            next:
+              "Show the person this join code now, and say: send it privately to one person; whoever uses it first is let in at once and gets a full copy, and everyone is told who joined. " +
+              "Call share_graph for a code for each other person. Then call model_guide before writing.",
+          };
+        return { using: this.where(), next: "Call model_guide before writing to it." };
       }),
+    );
+
+    this.server.registerTool(
+      "take_back",
+      {
+        title: "Take back a write",
+        description:
+          "Undo something you just wrote, while it is still only on this machine (for a few seconds after writing): it is removed and never reaches anyone. " +
+          "Use it when something was recorded by mistake, such as personal details in the wrong chat. After that, use withdraw (which keeps it in the history).",
+        inputSchema: { id: z.string().describe("The change id (change) or the item's id from the write's result") },
+        annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+      },
+      wrap((a) => this.request("take_back", a)),
     );
   }
 
-  /** What the console shows: your sharing, or the graph you joined. */
+  /** What the console shows. */
   private async consoleState(): Promise<Record<string, unknown>> {
-    const r = this.remote;
-    if (r) {
-      const identity = this.o.identity();
-      return {
-        mode: "peer",
-        using: this.where(),
-        host: r.hostName ?? null,
-        graph: this.active?.graph ?? null,
-        state: r.state,
-        reason: r.reason ?? null,
-        role: r.state === "active" ? (this.active?.you.role ?? null) : null,
-        you: { name: identity.name, fingerprint: fingerprint(identity.publicKey) },
-      };
-    }
-    const identity = this.o.identity();
-    return {
-      mode: "host",
-      using: this.where(),
-      ...((await (await this.local()).request("status")) as object),
-      you: { name: identity.name, fingerprint: fingerprint(identity.publicKey), name_from: nameSource(this.dataDir) },
-    };
-  }
-
-  private localGraphs(): string[] {
-    const dir = join(this.dataDir, "graphs");
-    return existsSync(dir) ? readdirSync(dir).filter((n) => /^[a-z0-9][a-z0-9-]{0,62}$/.test(n)).sort() : [];
-  }
-
-  private studioState(): Record<string, unknown> {
-    const d = this.active;
+    const status = await this.request<Record<string, any>>("status");
     return {
       using: this.where(),
-      mode: this.remote ? "peer" : "host",
-      can_manage: !this.remote,
-      graph: d?.graph ?? null,
-      model: d ? { ...d.model, schema: d.schema, tools: d.tools.map(({ name, title, kind, role, description }) => ({ name, title, kind, role, description })) } : null,
-      guide: d?.guide ?? null,
-      packs: this.remote
-        ? []
-        : listPacks(this.dataDir).map((p) => {
-            try {
-              const pack = loadPack(p.dir);
-              return { name: p.name, source: p.source, title: pack.model.title, description: pack.model.description, version: pack.model.version, tools: pack.tools.length };
-            } catch (e) {
-              return { name: p.name, source: p.source, error: (e as Error).message };
-            }
-          }),
-      graphs: this.remote ? [] : this.localGraphs(),
+      ...status,
+      you: { ...status.you, name_from: nameSource(this.dataDir) },
+      graphs: this.localGraphs(),
     };
   }
 
@@ -487,8 +454,8 @@ export class Session {
       {
         title: "Open the sharing console",
         description:
-          "Show the sharing console: your graph's invites and join codes, everyone who has joined (with key fingerprints, agents and whether they're online), and their roles; or, if you joined someone's graph, your connection to it. " +
-          "The person can share, make codes, change roles and remove people there themselves.",
+          "Show the sharing console: everyone in the graph (with key fingerprints, agents, roles and who is online), your join codes, and whether this graph is syncing. " +
+          "An admin can make codes, change roles and remove people there.",
         annotations: ro,
         _meta: uiMeta("console"),
       },
@@ -513,7 +480,7 @@ export class Session {
         _meta: uiMeta("explorer"),
       },
       run(async (a: { at?: string; limit?: number }) => {
-        const snap = await this.backend().request<Snapshot>("snapshot", a);
+        const snap = await this.request<Snapshot>("snapshot", a);
         const counts: Record<string, number> = {};
         for (const n of snap.nodes) counts[n.label] = (counts[n.label] ?? 0) + 1;
         return both(
@@ -530,33 +497,14 @@ export class Session {
       }),
     );
 
-    this.server.registerTool(
-      "model_studio",
-      {
-        title: "Open the model studio",
-        description:
-          "Show the model studio: the current graph's model (its node types, relationships and tools), the model packs you can use, and your graphs. " +
-          "The person can check a new pack, install it, and switch to a graph there.",
-        annotations: ro,
-        _meta: uiMeta("studio"),
-      },
-      run(async () => {
-        const state = this.studioState();
-        return both(
-          { using: state.using, model: this.active?.model.name, packs: (state.packs as { name: string }[]).map((p) => p.name), graphs: state.graphs },
-          state,
-        );
-      }),
-    );
-
     if (this.o.browserView)
       this.server.registerTool(
         "browser_view",
         {
           title: "Open the views in a browser",
           description:
-            "Get a link to the console, explorer and model studio in a browser tab on this machine, for when this agent can't show MCP App views itself. " +
-            "Give the person the link to open; it works only on this machine and while this session runs. The browser page shows your own graph, not one you joined.",
+            "Get a link to the console and explorer in a browser tab on this machine, for when this agent can't show MCP App views itself. " +
+            "Give the person the link to open; it works only on this machine and while this session runs.",
           annotations: ro,
         },
         run(async () => {
@@ -571,117 +519,6 @@ export class Session {
           });
         }),
       );
-
-    this.server.registerTool(
-      "validate_model",
-      {
-        title: "Check a model pack",
-        description:
-          "Check a model pack folder (model.yaml, tools.yaml, instructions.md): its files against the pack format, then a trial run of every tool on a scratch graph. " +
-          "Use it after writing or changing a pack, and fix what it reports before install_model.",
-        inputSchema: { path: z.string().min(1).describe("The pack folder, as an absolute path") },
-        annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
-      },
-      run(async ({ path }: { path: string }) => {
-        const report = await validatePack(path);
-        return both(report, report as unknown as Record<string, unknown>);
-      }),
-    );
-
-    this.server.registerTool(
-      "install_model",
-      {
-        title: "Install a model pack",
-        description:
-          "Install a checked model pack folder, so new graphs can use it by name (use_graph with model). It checks the pack first and refuses one that fails. " +
-          "Installing a newer version of an installed pack replaces it; graphs that use it get its new migrations when they next open.",
-        inputSchema: { path: z.string().min(1).describe("The pack folder, as an absolute path") },
-        annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-      },
-      run(async ({ path }: { path: string }) => {
-        const report = await validatePack(path);
-        if (!report.ok) return { ...text({ installed: false, report }), isError: true };
-        const pack = loadPack(path);
-        const name = pack.model.name;
-        if (listPacks(this.dataDir).some((p) => p.name === name && p.source === "built-in"))
-          throw new Error(`'${name}' is a built-in pack's name. Rename the pack (model.yaml name) to install it.`);
-        const dest = join(userPacksDir(this.dataDir), name);
-        let previous: number | undefined;
-        if (existsSync(join(dest, "model.yaml"))) {
-          try {
-            previous = loadPack(dest).model.version;
-          } catch {
-            previous = undefined;
-          }
-          rmSync(dest, { recursive: true, force: true });
-        }
-        // Copy only the pack's own files.
-        mkdirSync(join(dest, "migrations"), { recursive: true });
-        for (const f of ["model.yaml", "tools.yaml", "instructions.md"])
-          if (existsSync(join(pack.dir, f))) copyFileSync(join(pack.dir, f), join(dest, f));
-        for (const m of pack.migrations) copyFileSync(join(pack.dir, "migrations", m.name), join(dest, "migrations", m.name));
-        return text({
-          installed: name,
-          version: pack.model.version,
-          replaced_version: previous ?? null,
-          next: `Start a graph with it: use_graph with name and model '${name}'.`,
-        });
-      }),
-    );
-
-    this.server.registerTool(
-      "use_graph",
-      {
-        title: "Switch to another of your graphs",
-        description:
-          "Switch this session to another graph on this machine, creating it if it doesn't exist. A new graph uses `model` (a pack name; default temporal-claims); an existing graph keeps the model it was made with. " +
-          "If this session is in someone else's graph, it leaves it first (nothing is lost; join_graph with no code rejoins).",
-        inputSchema: {
-          name: z.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/).describe("Graph name: lower-case letters, digits and dashes"),
-          model: z.string().optional().describe("Model pack for a new graph"),
-        },
-        annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-      },
-      run(async ({ name, model }: { name: string; model?: string }) => {
-        if (!this.o.openLocal) throw new Error("This session can't switch graphs.");
-        let left: string | undefined;
-        if (this.remote) {
-          left = `Left ${this.remote.hostName ?? "the host"}'s graph${this.remote.state === "active" ? "" : ` (it wasn't connected: ${this.remote.reason ?? this.remote.state})`}.`;
-          this.remote.close();
-          this.remote = undefined;
-        }
-        if (model) resolvePack(model, this.dataDir); // fails early with the list of packs
-        const isNew = !this.localGraphs().includes(name);
-        const host = await this.o.openLocal(name, model).catch(async (e) => {
-          if (left) await this.useLocal(); // back on the session's own graph, not the one it left
-          throw e;
-        });
-        const d = await host.request<{ model: { name: string } }>("describe");
-        if (model && d.model.name !== resolvePack(model, this.dataDir).model.name) {
-          host.close();
-          if (left) await this.useLocal();
-          throw new Error(`Graph '${name}' already exists with the model '${d.model.name}'. Pick another name for a '${model}' graph.`);
-        }
-        const old = this.localHost;
-        this.localHost = host;
-        this.o.local = () => this.o.openLocal!(name);
-        old?.close();
-        await this.useLocal();
-        if (isNew && autoShare()) {
-          const inv = this.invited(await host.request<Record<string, any>>("share"));
-          return text({
-            ...(left ? { left } : {}),
-            created: this.where(),
-            model: this.active?.model.title,
-            ...inv,
-            next:
-              `Show the person this join code now, and say: send it privately to one person; whoever uses it first is let in at once, on one machine, and everyone is told who joined. ` +
-              "Call share_graph for a code for each other person. stop_sharing turns sharing off. Then call model_guide before writing.",
-          });
-        }
-        return text({ ...(left ? { left } : {}), using: this.where(), model: this.active?.model.title, next: "Call model_guide before writing to it." });
-      }),
-    );
   }
 
   /** What share_graph says about a new invite. */
@@ -690,23 +527,18 @@ export class Session {
     return {
       code: r.code,
       send: `Join my context graph: /p2p-context-graph:join ${r.code}`,
-      invite: { id: r.id, label: r.label, expires_at: r.expires_at },
+      invite: { id: r.id, label: r.label, role: r.role, expires_at: r.expires_at },
       shared_as: { name: identity.name, fingerprint: fingerprint(identity.publicKey) },
       next:
         "Give the person the 'send' line to pass on privately (not in a public channel). Agents without the plugin command can be told: join the context graph with this code. " +
-        "Whoever uses it first is let in at once, and everyone in the graph is told who joined (name, key fingerprint, agent). Each code is for one person: call share_graph again for the next. remove_peer takes anyone out.",
+        "This machine answers the code, so it must be online when they use it. Whoever uses it first is let in at once and gets a full copy, and everyone in the graph is told who joined (name, key fingerprint, agent). " +
+        "Each code is for one person: call share_graph again for the next. remove_peer takes anyone out.",
     };
   }
 
-  private async join(codeText?: string): Promise<unknown> {
-    const joined = new JoinedStore(this.dataDir);
-    if (!codeText?.trim()) {
-      const last = joined.last();
-      if (!last) throw new Error("You haven't joined a graph from this machine yet. Ask the host for a join code (it starts p2pcg1_).");
-      codeText = last.code;
-    }
+  /** Joins a graph with a code: gets its whole log from the machine that made the code, and keeps a copy here. */
+  private async join(codeText: string): Promise<unknown> {
     const link = parseCode(codeText);
-    if (this.remote) this.remote.close();
     const identity = this.o.identity();
     const client = this.server.server.getClientVersion();
     const about = {
@@ -715,50 +547,30 @@ export class Session {
       p2pcg: packageInfo().version,
       platform: `${OS[process.platform] ?? process.platform} ${process.arch}`,
     };
-    const remote = new RemoteHost(link, identity, { signal: this.o.signal, ice: this.o.ice, log: this.o.log, about });
-    this.remote = remote;
+    const welcome = await joinWithCode(link, identity, { signal: this.o.signal, ice: this.o.ice, about, timeoutMs: this.o.joinWaitMs ?? 30_000, log: this.o.log });
 
-    // Being let in after join_graph returned (it was still connecting).
-    let returned = false;
-    remote.on("state", (s) => {
-      if (this.remote !== remote || !returned) return;
-      if (s === "active") {
-        joined.remember(link, { host: remote.hostName });
-        void this.useRemote().catch((e) => this.o.log?.(`describe failed: ${e.message}`));
+    // Put it on this machine: under its own name if that's free, else name-2, name-3 …
+    const base = GRAPH_RE.test(welcome.graph.name) ? welcome.graph.name : "shared";
+    let name: string | undefined;
+    for (let i = 1; i < 100 && !name; i++) {
+      const candidate = i === 1 ? base : `${base}-${i}`.slice(0, 63);
+      const group = readGroup(this.dataDir, candidate);
+      if (group?.id === welcome.graph.id) name = candidate; // already here: its host syncs it
+      else if (!group && !this.localGraphs().includes(candidate)) {
+        if (placeReplica(this.dataDir, candidate, welcome.graph, welcome.changes)) name = candidate;
       }
-    });
-    remote.on("event", (e: { event: string; data: any }) => {
-      if (this.remote !== remote) return;
-      if (e.event === "role") void this.useRemote().catch(() => undefined);
-      if (e.event === "joined") this.news.push(joinNotice(e.data, `${remote.hostName ?? "the host"}'s graph`));
-    });
-
-    const outcome = await Promise.race([
-      remote.admitted,
-      new Promise<"timeout">((r) => setTimeout(() => r("timeout"), this.o.joinWaitMs ?? 25_000).unref()),
-    ]);
-    returned = true;
-    if (outcome === "active") {
-      const d = await this.useRemote();
-      joined.remember(link, { host: d.host, graph: d.graph });
-      return {
-        joined: `${d.host}'s graph '${d.graph}'`,
-        model: d.model.title,
-        role: d.you.role,
-        as: d.you.id,
-        your_fingerprint: fingerprint(identity.publicKey),
-        told: "Everyone in this graph has been told you joined, with your name, key fingerprint and agent.",
-        next: "Call model_guide before writing. Your graph tools now act on this graph until leave_graph. In a later session, join_graph with no code rejoins.",
-      };
     }
-    if (outcome === "timeout") {
-      return {
-        waiting: "Still connecting to the host (it can take a while across some networks).",
-        next: "Call graph_info in a moment to check. If it doesn't connect, the host may not be sharing right now, or a TURN server may be needed (P2PCG_ICE).",
-      };
-    }
-    this.remote = undefined;
-    if (remote.state === "denied") joined.forget(link);
-    throw new Error(remote.reason ?? "Could not join.");
+    if (!name) throw new Error("Couldn't find a free name for this graph on this machine.");
+    const d = await this.switchTo(name);
+    return {
+      joined: `${welcome.host || d.host}'s graph '${welcome.graph.name}'`,
+      here_as: name,
+      role: d.you.role,
+      as: d.you.id,
+      your_fingerprint: fingerprint(identity.publicKey),
+      copy: `You have your own full copy (${welcome.changes.length} changes), kept in step with the other members whenever you're both online. It works offline too.`,
+      told: "Everyone in this graph has been told you joined, with your name, key fingerprint and agent.",
+      next: `Call model_guide before writing. In later sessions, use_graph '${name}' (no code needed).`,
+    };
   }
 }

@@ -1,22 +1,15 @@
-// The sharing console. As host: the invites (one join code per person), and
-// everyone who has joined (key fingerprint, agent, online or not) with their
-// roles. As a peer: your
-// connection to someone else's graph.
+// The sharing console: everyone in the graph (key fingerprint, agent, role,
+// online or not), whether this machine is syncing, the signalling relays, and
+// (for admins) the join codes this machine answers.
 
 import { useCallback, useEffect, useState } from "react";
 import { usePoll, when, type Bridge } from "../bridge";
 
 type Role = "reader" | "contributor" | "admin";
-interface Peer {
-  name: string;
-  fingerprint: string;
-  role?: Role;
-  since?: string;
-  approved_at?: string;
-}
 interface Invite {
   id: string;
   label: string | null;
+  role?: Role;
   state: "open" | "used" | "expired" | "revoked";
   code: string | null;
   for: { name: string; since: string } | null;
@@ -25,38 +18,31 @@ interface Invite {
 }
 interface Person {
   name: string;
-  role: Role;
-  host?: boolean;
+  role: Role | null;
+  you?: boolean;
+  creator?: boolean;
   online: boolean;
-  fingerprint?: string;
+  fingerprint: string;
   joined_at?: string;
+  removed_at?: string | null;
   invite?: { id: string; label: string | null } | null;
   agent?: string | null;
   platform?: string | null;
   p2pcg?: string | null;
 }
-interface HostState {
-  mode: "host";
+interface State {
   using: string;
   graph: string;
-  host: string;
-  sharing: boolean;
-  invites: Invite[];
-  connected: Peer[];
-  people: Person[];
-  you: { name: string; fingerprint: string; name_from: "P2PCG_USER" | "set_my_name" | "git" | "login" };
-}
-interface PeerState {
-  mode: "peer";
-  using: string;
   host: string | null;
-  graph: string | null;
-  state: "connecting" | "pending" | "active" | "denied" | "closed";
-  reason: string | null;
-  role: Role | null;
-  you: { name: string; fingerprint: string };
+  sharing: boolean;
+  can_invite: boolean;
+  invites: Invite[];
+  links: { name: string; fingerprint: string; state: string; since: string }[];
+  relays: Record<string, string>;
+  people: Person[];
+  log: { changes: number; held: number; refused: number };
+  you: { name: string; role: Role | null; fingerprint: string; name_from: "P2PCG_USER" | "set_my_name" | "git" | "login" };
 }
-type State = HostState | PeerState;
 
 const ROLES: Role[] = ["reader", "contributor", "admin"];
 const ROLE_HELP: Record<Role, string> = {
@@ -117,45 +103,6 @@ export function Console({ b }: { b: Bridge }) {
 
   if (!state) return <p className="faint">Loading…</p>;
 
-  if (state.mode === "peer") {
-    const tone = state.state === "active" ? "ok" : state.state === "pending" || state.state === "connecting" ? "warn" : "bad";
-    return (
-      <div>
-        <div className="head">
-          <h1>{state.host ? `${state.host}'s graph` : "Joining a graph"}</h1>
-          <span className={`pill ${tone}`}>{state.state === "active" ? `joined as ${state.role}` : state.state}</span>
-        </div>
-        {state.state === "pending" && (
-          <p className="notice">
-            Waiting for {state.host ?? "the host"} to approve you. Tell them your name and fingerprint so they can check it's you.
-          </p>
-        )}
-        {state.reason && state.state !== "active" && <p className="notice bad">{state.reason}</p>}
-        <h2>You</h2>
-        <dl className="kv">
-          <dt>Name</dt>
-          <dd>{state.you.name}</dd>
-          <dt>Fingerprint</dt>
-          <dd>
-            <span className="fp">{state.you.fingerprint}</span>
-          </dd>
-          {state.graph && (
-            <>
-              <dt>Graph</dt>
-              <dd>{state.graph}</dd>
-            </>
-          )}
-        </dl>
-        <div className="row" style={{ marginTop: 12 }}>
-          <button className="danger" disabled={!!busy} onClick={() => act("leave", "leave_graph")}>
-            Leave and go back to my graph
-          </button>
-        </div>
-        {error && <p className="notice bad">{error}</p>}
-      </div>
-    );
-  }
-
   const sendLine = (code: string) => `Join my context graph: /p2p-context-graph:join ${code}`;
   const copy = async (inv: Invite) => {
     if (!inv.code) return;
@@ -173,7 +120,10 @@ export function Console({ b }: { b: Bridge }) {
   };
   const open = state.invites.filter((i) => i.state === "open");
   const used = state.invites.filter((i) => i.state === "used");
-  const members = state.people.filter((p) => !p.host);
+  const members = state.people.filter((p) => !p.you && !p.removed_at);
+  const admin = state.you.role === "admin";
+  const relays = Object.values(state.relays ?? {});
+  const relaysUp = relays.filter((r) => r === "open").length;
 
   return (
     <div>
@@ -181,24 +131,31 @@ export function Console({ b }: { b: Bridge }) {
         <div className="row">
           <span className={`dot ${state.sharing ? "on" : ""}`} aria-hidden />
           <h1>
-            {state.sharing ? "Sharing" : "Not sharing"} <span className="muted">graph '{state.graph}'</span>
+            {state.sharing ? "Syncing" : "Offline"} <span className="muted">{state.using}</span>
           </h1>
         </div>
         {state.sharing ? (
           <button className="danger" disabled={!!busy} onClick={() => act("unshare", "stop_sharing")}>
-            Stop sharing
+            Go offline
           </button>
-        ) : (
+        ) : admin ? (
           <button className="primary" disabled={!!busy} onClick={() => act("share", "share_graph")}>
-            Share and make a join code
+            Go online and make a join code
           </button>
-        )}
+        ) : null}
       </div>
+      <p className="faint">
+        Your copy holds {state.log.changes} changes
+        {state.log.held ? `; ${state.log.held} still on this machine (Undo possible)` : ""}.{" "}
+        {state.sharing && relays.length > 0 && `Signalling relays: ${relaysUp} of ${relays.length} connected.`}
+        {state.sharing && relays.length > 0 && relaysUp === 0 && " None are reachable: other members can't find you until one is."}
+      </p>
 
       <div className="you">
         {naming === undefined ? (
           <p>
-            People see you as <strong>{state.you.name}</strong> <span className="fp">{state.you.fingerprint}</span>{" "}
+            People see you as <strong>{state.you.name}</strong> <span className="fp">{state.you.fingerprint}</span>
+            {state.you.role ? <span className="faint"> ({state.you.role})</span> : <span className="faint"> (removed: read only)</span>}{" "}
             {state.you.name_from !== "P2PCG_USER" && (
               <button className="link" onClick={() => setNaming(state.you.name)}>
                 Change
@@ -234,11 +191,11 @@ export function Console({ b }: { b: Bridge }) {
         )}
       </div>
 
-      {state.sharing && (
+      {state.sharing && admin && (
         <>
           <h2>Invites</h2>
           <p className="faint">
-            Each join code is for one person. It works on the first machine you approve with it (they rejoin with it later), and an unused one expires. Send it privately.
+            Each join code is for one person: the first machine to use it gets in, with a full copy of the graph. This machine answers it, so it must be online then. An unused code expires. Send it privately.
           </p>
           {open.length === 0 && <p className="empty">No open join codes.</p>}
           <div className="list">
@@ -285,7 +242,7 @@ export function Console({ b }: { b: Bridge }) {
         People <span className="faint">{members.filter((p) => p.online).length} online</span>
       </h2>
       {members.length === 0 ? (
-        <p className="empty">{state.sharing ? "No one has joined yet. Whoever uses a code first is let in, and everyone is told." : "Share the graph and send someone a join code."}</p>
+        <p className="empty">{admin ? "No one else is in this graph yet. Whoever uses a code first is let in, and everyone is told." : "No one else is in this graph."}</p>
       ) : (
         <table>
           <tbody>
@@ -293,6 +250,7 @@ export function Console({ b }: { b: Bridge }) {
               <tr key={p.name}>
                 <td>
                   <span className={`dot ${p.online ? "on" : ""}`} aria-hidden /> <strong>{p.name}</strong>
+                  {p.creator && <span className="faint"> (made this graph)</span>}
                   <div className="faint">
                     {[p.agent, p.platform, p.invite?.label && `via '${p.invite.label}'`, p.joined_at && `joined ${when(p.joined_at)}`].filter(Boolean).join(" · ")}
                   </div>
@@ -301,12 +259,18 @@ export function Console({ b }: { b: Bridge }) {
                   <span className="fp">{p.fingerprint}</span>
                 </td>
                 <td>
-                  <RolePicker value={p.role} disabled={!!busy} onChange={(r) => act(`role ${p.name}`, "set_peer_role", { name: p.name, role: r })} />
+                  {admin && !p.creator ? (
+                    <RolePicker value={p.role ?? "reader"} disabled={!!busy} onChange={(r) => act(`role ${p.name}`, "set_peer_role", { name: p.name, role: r })} />
+                  ) : (
+                    p.role
+                  )}
                 </td>
                 <td>
-                  <button className="danger" disabled={!!busy} onClick={() => act(`remove ${p.name}`, "remove_peer", { name: p.name })}>
-                    Remove
-                  </button>
+                  {admin && !p.creator && (
+                    <button className="danger" disabled={!!busy} onClick={() => act(`remove ${p.name}`, "remove_peer", { name: p.name })}>
+                      Remove
+                    </button>
+                  )}
                 </td>
               </tr>
             ))}

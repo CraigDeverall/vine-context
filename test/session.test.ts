@@ -1,5 +1,6 @@
 // Two agents' MCP sessions: Alice shares her graph, Bob joins it with the
-// code, Bob's tools switch to Alice's graph at once, and Alice's agent is told he joined.
+// code and gets his own copy, writes flow both ways, and Alice's agent is told
+// he joined.
 
 import { EventEmitter } from "node:events";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -13,6 +14,7 @@ import { Session } from "../src/mcp/server.js";
 import { memorySignaller } from "../src/p2p/signal.js";
 import { tempDir } from "./helpers.js";
 
+process.env.P2PCG_AUTO_SHARE = "on";
 const signal = memorySignaller(new EventEmitter());
 const ice: string[] = [];
 const hosts: Host[] = [];
@@ -20,20 +22,29 @@ afterAll(() => hosts.forEach((h) => h.stop()));
 
 async function agent(user: string, graph: string) {
   const dataDir = tempDir();
-  const host = await Host.start({ dataDir, graph, user, signal, ice });
-  hosts.push(host);
+  const started = new Map<string, Host>();
+  const open = async (name: string) => {
+    let h = started.get(name);
+    if (!h) {
+      h = await Host.start({ dataDir, graph: name, user, signal, ice, holdMs: 200 });
+      hosts.push(h);
+      started.set(name, h);
+    }
+    return LocalHost.connect(h.socket);
+  };
   const session = new Session({
-    local: () => LocalHost.connect(host.socket),
+    local: () => open(graph),
+    openLocal: open,
     identity: () => loadIdentity(dataDir, user),
     dataDir,
     signal,
     ice,
-    joinWaitMs: 3000,
+    joinWaitMs: 10_000,
   });
   await session.start();
   const [a, b] = InMemoryTransport.createLinkedPair();
   await session.server.connect(a);
-  const client = new Client({ name: user, version: "0" });
+  const client = new Client({ name: `${user}-agent`, version: "1.2.3" });
   let listChanges = 0;
   client.setNotificationHandler(ToolListChangedNotificationSchema, async () => {
     listChanges++;
@@ -49,83 +60,64 @@ async function agent(user: string, graph: string) {
       return text;
     }
   };
-  /** Every text item of a tool result, join notices included. */
+  /** Every text item of a tool result, notices included. */
   const raw = async (name: string, args: Record<string, unknown> = {}) =>
     ((await client.callTool({ name, arguments: args })) as any).content.map((c: { text: string }) => c.text).join("\n") as string;
   return { client, call, raw, changes: () => listChanges };
 }
 
-const waitFor = async (cond: () => Promise<boolean> | boolean, ms = 10_000) => {
+const waitFor = async (cond: () => Promise<boolean> | boolean, ms = 20_000) => {
   const end = Date.now() + ms;
   while (!(await cond())) {
     if (Date.now() > end) throw new Error("timed out waiting");
-    await new Promise((r) => setTimeout(r, 50));
+    await new Promise((r) => setTimeout(r, 100));
   }
 };
 
-describe("MCP sessions across the star", () => {
-  it("shares, joins, tells the host's agent, switches tools, and leaves", async () => {
+describe("MCP sessions on replicated graphs", () => {
+  it("shares, joins into a local copy, tells everyone, and syncs both ways", async () => {
     const alice = await agent("alice", "team");
     const bob = await agent("bob", "bobs-notes");
 
-    // Bob starts on his own graph.
     await bob.call("add_claim", { text: "Bob's private note" });
-    expect((await bob.call("graph_info")).using).toMatch(/your graph 'bobs-notes'/);
+    expect((await bob.call("graph_info")).using).toBe("your graph 'bobs-notes'");
+    await alice.call("add_claim", { text: "Alice's finding" });
 
     const shared = await alice.call("share_graph", { label: "for Bob" });
     expect(shared.send).toBe(`Join my context graph: /p2p-context-graph:join ${shared.code}`);
+    const before = bob.changes();
     const joined = await bob.call("join_graph", { code: `Here you go: ${shared.code} thanks` });
-    expect(joined).toMatchObject({ joined: "alice's graph 'team'", role: "contributor", told: expect.stringMatching(/Everyone/) });
-    expect(joined.your_fingerprint).toMatch(/^[0-9a-f-]{14}$/);
-    expect((await bob.call("graph_info")).using).toMatch(/alice's graph 'team'/);
+    expect(joined).toMatchObject({ joined: "alice's graph 'team'", here_as: "team", role: "contributor", told: expect.stringMatching(/Everyone/) });
+    expect(joined.your_fingerprint).toMatch(/^[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}$/);
+    expect(bob.changes()).toBeGreaterThan(before);
+    expect((await bob.call("graph_info")).using).toBe("'team' (alice's graph; you are a contributor)");
+    // Bob's copy already has Alice's claim; his own graph is untouched.
+    expect((await bob.call("search", { query: "finding" })).map((r: any) => r.text)).toEqual(["Alice's finding"]);
 
-    // Alice's agent hears about it on its next tool call, with what Bob's install said about itself.
-    await waitFor(async () => /News: bob joined your graph/.test(await alice.raw("sharing_status")));
+    // Alice's agent hears about Bob on its next tool result, with his agent.
+    const news = await alice.raw("graph_info");
+    expect(news).toMatch(/^News: bob joined your graph 'team' as contributor with the invite 'for Bob'/);
+    expect(news).toContain(joined.your_fingerprint);
+    expect(news).toContain("bob-agent 1.2.3");
+    expect(await alice.raw("graph_info")).not.toMatch(/News:/); // once only
 
-    // Bob's add_claim now writes to Alice's graph, and his own note isn't there.
-    const c = await bob.call("add_claim", { text: "Bob's finding for the team" });
-    const seen = await alice.call("search", { query: "finding for the team" });
-    expect(seen[0]).toMatchObject({ id: c.id, recorded_by: "bob" });
-    expect((await bob.call("beliefs")).map((b: any) => b.text)).toEqual(["Bob's finding for the team"]);
-    expect(await bob.call("model_guide")).toMatch(/Claims and Questions/);
+    // Writes flow both ways.
+    await bob.call("add_claim", { text: "Bob adds to the team graph" });
+    const find = async (who: typeof alice, text: string) => ((await who.call("beliefs")) as any[]).find((r) => r.text === text);
+    await waitFor(async () => Boolean(await find(alice, "Bob adds to the team graph")));
+    expect(await find(alice, "Bob adds to the team graph")).toMatchObject({ recorded_by: "bob" });
+    await alice.call("add_claim", { text: "Alice replies in the team graph" });
+    await waitFor(async () => Boolean(await find(bob, "Alice replies in the team graph")));
 
-    // Readers don't get write tools.
-    await alice.call("set_peer_role", { name: "bob", role: "reader" });
-    await waitFor(async () => !(await bob.client.listTools()).tools.some((t) => t.name === "add_claim"));
-    await alice.call("set_peer_role", { name: "bob", role: "contributor" });
-    await waitFor(async () => (await bob.client.listTools()).tools.some((t) => t.name === "add_claim"));
-
-    // Leaving puts Bob back on his own graph.
-    expect(await bob.call("leave_graph")).toMatch(/back on your graph 'bobs-notes'/);
-    expect((await bob.call("beliefs")).map((b: any) => b.text)).toEqual(["Bob's private note"]);
-
-    // Bob's machine kept the code: join_graph with no code rejoins, without approval.
-    const back = await bob.call("join_graph", {});
-    expect(back.joined).toBe("alice's graph 'team'");
-  });
-
-  it("tells the agent clearly when the host stops sharing", async () => {
-    const alice = await agent("alice", "brief");
-    const bob = await agent("bob", "own");
-    const { code } = await alice.call("share_graph");
-    await bob.call("join_graph", { code });
-    await waitFor(async () => (await bob.call("graph_info")).using.includes("alice's graph"));
-    await alice.call("stop_sharing");
-    await waitFor(async () => {
-      try {
-        await bob.call("beliefs");
-        return false;
-      } catch (e) {
-        return /stopped sharing[\s\S]*leave_graph/.test((e as Error).message);
-      }
-    });
+    // Bob's own graph is still his.
+    await bob.call("use_graph", { name: "bobs-notes" });
+    expect((await bob.call("search", { query: "note" })).map((r: any) => r.text)).toEqual(["Bob's private note"]);
   });
 
   it("rejects text that isn't a join code, and says what to do with an old link", async () => {
-    const bob = await agent("bob", "solo");
-    await expect(bob.call("join_graph", { code: "https://example.com/not-a-code" })).rejects.toThrow(/not a p2pcg join code/);
-    await expect(bob.call("join_graph", { code: "p2pcg://join/abcdefghijklmnopqrstuv#abcdefghijklmnopqrstuvwxyzabcdefghijklmnopq" })).rejects.toThrow(/old p2pcg:\/\/ join link/);
-    const zed = await agent("zed", "zeds-own"); // has never joined anything
-    await expect(zed.call("join_graph", {})).rejects.toThrow(/haven't joined a graph/);
+    const bob = await agent("bob", "own");
+    await expect(bob.call("join_graph", { code: "hello there" })).rejects.toThrow(/not a p2pcg join code/);
+    await expect(bob.call("join_graph", { code: "p2pcg://join/abc#k=def" })).rejects.toThrow(/old p2pcg:\/\/ join link/);
+    await expect(bob.call("join_graph", { code: "p2pcg1_abc.def" })).rejects.toThrow(/damaged or cut short/);
   });
 });

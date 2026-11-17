@@ -1,43 +1,70 @@
-// The model runtime: one Relate store, one model pack, and the pack's tools.
+// The graph on this machine: one Relate store, built from the graph's changes,
+// with the Claims and Questions model's tools.
 //
-// Every tool call runs in one transaction. Inputs are validated against the
-// tool's schema, then the server adds its own parameters ($now, $by and the
-// derived ones), which callers can never set. Any row with a non-null
-// `_error` column, in any step, rolls the call back and becomes the error.
+// Read tools run the model's Cypher in one transaction. Write tools only
+// check their input here (prepare); the write itself is a change, applied by
+// apply() in the same way on every member's machine. apply() is idempotent
+// and order-independent: whatever order changes arrive in, the same set of
+// changes gives the same graph.
+//   - A claim or question is created once (by its node id).
+//   - A link waits until both ends exist ("pending"), and of two equal links
+//     the earlier is kept.
+//   - Of two withdrawals of one item, the earlier is kept.
+//   - Checks that depend on what this machine has seen so far ("that claim is
+//     withdrawn", "that link already exists") run only in prepare, on the
+//     author's machine, never in apply.
 
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { randomInt } from "node:crypto";
 import { z } from "zod";
+import type { Change } from "./changes.js";
+import { uuidv7 } from "./changes.js";
 import { contentWords, makeEmbedder, type Embedder } from "./embed.js";
-import { resolvePack, type InputSpecT, type Model, type Pack, type ToolSpec } from "./pack.js";
+import { claimsPack, type InputSpecT, type Model, type Pack, type ToolSpec } from "./pack.js";
 import { loadRelate, type Connection, type Database, type RelateModule } from "./relate.js";
 import { defaultDataDir } from "./paths.js";
 import { toJson } from "./values.js";
 import type { GraphDescription } from "../p2p/protocol.js";
 
-export type Role = "reader" | "contributor" | "admin";
-const RANK: Record<Role, number> = { reader: 0, contributor: 1, admin: 2 };
+export type { Role } from "./changes.js";
+import { RANK, type Role } from "./changes.js";
 
 export interface Caller {
-  /** Who is calling: recorded as $by on writes. */
+  /** The caller's name: recorded as $by. */
   id: string;
+  /** The caller's public key: recorded as `author`. */
+  key?: string;
   role: Role;
 }
 
 /** A failure the agent should see and can act on. */
 export class ToolError extends Error {}
 
-/** Relate refused a tool's Cypher: a bug in the pack, not in the caller's input. */
+/** Relate refused a tool's Cypher: a bug in the model, not in the caller's input. */
 export class QueryError extends ToolError {}
 
 export { defaultDataDir } from "./paths.js";
 
-const ID_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789";
-function newId(prefix: string): string {
-  let s = "";
-  for (let i = 0; i < 8; i++) s += ID_ALPHABET[randomInt(ID_ALPHABET.length)];
-  return `${prefix}_${s}`;
+/** A node id: the kind's letter and a time-ordered UUID, e.g. c_0193…. Two machines never make the same one. */
+export function newId(prefix: string): string {
+  return `${prefix}_${uuidv7()}`;
+}
+
+/** What a write tool will do, once checked: a change's kind and body. */
+export interface Prepared {
+  kind: "claim" | "question" | "link" | "withdraw";
+  body: Record<string, unknown>;
+}
+
+/** Applying a change: done, waiting for something it refers to, or never (with why). */
+export type Applied = { status: "applied"; result: Record<string, unknown> } | { status: "pending"; waiting: string[] } | { status: "refused"; reason: string };
+
+/** What apply needs to know about the change's author, from the membership. */
+export interface ApplyContext {
+  /** The name to record for a key. */
+  name(key: string): string;
+  /** Was this key an admin at that moment? */
+  isAdmin(key: string, at: string): boolean;
 }
 
 function scalar(type: string, spec: Pick<InputSpecT, "max_length" | "min" | "max">): z.ZodType {
@@ -93,6 +120,8 @@ interface Meta {
   embedder: string;
   embedding_dim: number;
   migrations: string[];
+  /** A digest of the changes applied to this store, in order: tells the host whether the store matches its log. */
+  applied?: string;
 }
 
 // @relate/relate 1.0.1 cannot close a store, and opening one twice in a
@@ -104,6 +133,12 @@ interface Store {
   queue: Promise<unknown>;
 }
 const openStores = new Map<string, Store>();
+
+const CLAIM_RELS = new Set(["SUPPORTS", "CONTRADICTS", "REPLACES"]);
+const REL_TYPES = new Set(["SUPPORTS", "CONTRADICTS", "REPLACES", "ANSWERS", "ABOUT"]);
+const isArray = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && x.length <= 64) : []);
+const str = (v: unknown, max = 20_000): string | null => (typeof v === "string" ? v.slice(0, max) : null);
+const day = (v: unknown): string | null => (typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null);
 
 export interface SnapshotSchema {
   nodes: {
@@ -171,11 +206,8 @@ export class Graph {
     return this.pack.tools;
   }
 
-  /**
-   * Opens (or creates) a graph. A new graph takes `model`; an existing one
-   * keeps the model it was created with, and `model` must match it if given.
-   */
-  static async open(opts: { name?: string; dataDir?: string; model?: string; embedder?: Embedder } = {}): Promise<Graph> {
+  /** Opens (or creates) a graph's store on this machine. Every graph uses the Claims and Questions model. */
+  static async open(opts: { name?: string; dataDir?: string; embedder?: Embedder } = {}): Promise<Graph> {
     const name = opts.name ?? process.env.P2PCG_GRAPH ?? "default";
     if (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(name)) throw new ToolError(`Graph names are lower-case letters, digits and dashes: '${name}'.`);
     const dir = join(opts.dataDir ?? defaultDataDir(), "graphs", name);
@@ -188,18 +220,14 @@ export class Graph {
       openStores.set(dir, store);
     }
     const { db, conn } = store;
-    const shared = store;
     const embedder = opts.embedder ?? makeEmbedder();
-
     const found = conn.query("MATCH (m:_P2pcgMeta {key: 'meta'}) RETURN m {.*} AS m").rows[0]?.m as Meta | undefined;
-    const modelRef = opts.model ?? found?.model ?? process.env.P2PCG_MODEL ?? "temporal-claims";
-    const pack = resolvePack(modelRef, opts.dataDir);
+    const pack = claimsPack();
     if (found && found.model !== pack.model.name)
-      throw new ToolError(`Graph '${name}' uses the model '${found.model}', not '${pack.model.name}'.`);
+      throw new ToolError(`Graph '${name}' uses the model '${found.model}', which this version of p2p-context-graph no longer supports (only '${pack.model.name}').`);
     if (found && found.embedder !== embedder.name)
       throw new ToolError(`Graph '${name}' was embedded with '${found.embedder}', not '${embedder.name}'. Re-embedding is not supported yet.`);
-
-    const graph = new Graph(name, dir, pack, embedder, db, conn, R, shared);
+    const graph = new Graph(name, dir, pack, embedder, db, conn, R, store);
     graph.applyModel(found);
     return graph;
   }
@@ -251,67 +279,380 @@ export class Graph {
     return run;
   }
 
-  /**
-   * Runs one of the model's tools. `opts.now` backdates the call: it exists for
-   * building example graphs with a history, and nothing that a client or peer
-   * sends can reach it.
-   */
-  async call(toolName: string, args: unknown, caller: Caller, opts: { now?: string } = {}): Promise<unknown> {
+  private async rows(cypher: string, params: Record<string, unknown> = {}): Promise<Record<string, unknown>[]> {
+    try {
+      const r = await this.conn.queryAsync(cypher, params as never);
+      return r.rows.map((row) => toJson(row, this.R) as Record<string, unknown>);
+    } catch (e) {
+      if (e instanceof this.R.RelateError) throw new QueryError(`The graph refused the query: ${e.message}`);
+      throw e;
+    }
+  }
+
+  private tool(toolName: string, caller: Caller): { tool: ToolSpec; input: Record<string, unknown> } & { parse(args: unknown): Record<string, unknown> } {
     const tool = this.pack.tools.find((t) => t.name === toolName);
     if (!tool) throw new ToolError(`No tool '${toolName}' in the model '${this.model.name}'.`);
     if (RANK[caller.role] < RANK[tool.role]) throw new ToolError(`'${toolName}' needs the ${tool.role} role; you are a ${caller.role}.`);
-    const parsed = this.validators.get(tool.name)!.safeParse(args ?? {});
-    if (!parsed.success)
-      throw new ToolError("Invalid input:\n" + parsed.error.issues.map((i) => `- ${i.path.join(".") || "(input)"}: ${i.message}`).join("\n"));
-    const input = parsed.data as Record<string, unknown>;
+    const validator = this.validators.get(tool.name)!;
+    return {
+      tool,
+      input: {},
+      parse(args: unknown) {
+        const parsed = validator.safeParse(args ?? {});
+        if (!parsed.success)
+          throw new ToolError("Invalid input:\n" + parsed.error.issues.map((i) => `- ${i.path.join(".") || "(input)"}: ${i.message}`).join("\n"));
+        return parsed.data as Record<string, unknown>;
+      },
+    };
+  }
 
+  /** The parameters a tool's Cypher sees: its input, the server's own, and the derived ones. */
+  private params(tool: ToolSpec, input: Record<string, unknown>, caller: Caller, now: string, embed: boolean): Record<string, unknown> {
     const params: Record<string, unknown> = {};
     for (const name of Object.keys(tool.input)) params[name] = input[name] ?? null;
-    params.now = opts.now ?? new Date().toISOString();
+    params.now = now;
     params.by = caller.id;
+    params.key = caller.key ?? null;
     params.role = caller.role;
     for (const [name, d] of Object.entries(tool.derive)) {
       if ("new_id" in d) params[name] = newId(d.new_id);
       else if ("embed" in d) {
         const text = input[d.embed];
         if (typeof text !== "string") params[name] = null;
-        else {
-          const v = this.embedder.embed(text);
-          if (!v) throw new ToolError(`'${d.embed}' needs at least one letter or digit.`);
-          params[name] = v;
-        }
+        else if (!contentWords(text).length) throw new ToolError(`'${d.embed}' needs at least one letter or digit.`);
+        else params[name] = embed ? this.embedder.embed(text) : null;
       } else if ("terms" in d) {
         const text = input[d.terms];
         params[name] = typeof text === "string" ? contentWords(text).join(" ") || null : null;
       }
     }
+    return params;
+  }
 
+  /** Runs a tool's steps; a row with `_error` fails the call. Read tools only change nothing; checks are rolled back. */
+  private async runSteps(tool: ToolSpec, params: Record<string, unknown>, commit: boolean): Promise<unknown> {
+    this.conn.begin();
+    try {
+      const out: Record<string, unknown> = {};
+      let last: unknown = null;
+      for (const [i, step] of tool.steps.entries()) {
+        const used = Object.fromEntries(Object.entries(params).filter(([k]) => new RegExp(`\\$${k}\\b`).test(step.cypher)));
+        const result = await this.conn.queryAsync(step.cypher, used as never);
+        const failed = result.rows.find((r) => r._error !== null && r._error !== undefined);
+        if (failed) throw new ToolError(String(failed._error));
+        const rows = result.rows.map((r) => {
+          const { _error, ...rest } = r;
+          return toJson(rest, this.R) as Record<string, unknown>;
+        });
+        const value = step.single ? (rows[0] ?? null) : rows;
+        if (step.name) out[step.name] = value;
+        if (i === tool.steps.length - 1) last = value;
+      }
+      if (commit) this.conn.commit();
+      else this.conn.rollback();
+      return Object.keys(out).length ? out : last;
+    } catch (e) {
+      this.conn.rollback();
+      if (e instanceof ToolError) throw e;
+      if (e instanceof this.R.RelateError) throw new QueryError(`The graph refused the query: ${e.message}`);
+      throw e;
+    }
+  }
+
+  /** Runs one of the model's read tools. */
+  async call(toolName: string, args: unknown, caller: Caller): Promise<unknown> {
+    const t = this.tool(toolName, caller);
+    if (t.tool.kind === "write") throw new ToolError(`'${toolName}' is a write: it goes through the change log (prepare, then apply).`);
+    const input = t.parse(args);
+    const params = this.params(t.tool, input, caller, new Date().toISOString(), true);
+    return this.serial(() => this.runSteps(t.tool, params, false));
+  }
+
+  /** Checks a write tool's input against the graph as this machine has it, and says what change it makes. */
+  async prepare(toolName: string, args: unknown, caller: Caller, now = new Date().toISOString()): Promise<Prepared> {
+    const t = this.tool(toolName, caller);
+    if (t.tool.kind !== "write" || !t.tool.apply) throw new ToolError(`'${toolName}' is not a write.`);
+    const input = t.parse(args);
+    const params = this.params(t.tool, input, caller, now, false);
+    await this.serial(() => this.runSteps(t.tool, params, false));
+    switch (t.tool.apply) {
+      case "claim":
+        return {
+          kind: "claim",
+          body: {
+            node: params.id,
+            text: input.text,
+            source: input.source ?? null,
+            about_from: input.about_from ?? null,
+            about_to: input.about_to ?? null,
+            supports: input.supports ?? [],
+            contradicts: input.contradicts ?? [],
+            replaces: input.replaces ?? [],
+            answers: input.answers ?? [],
+          },
+        };
+      case "question":
+        return { kind: "question", body: { node: params.id, text: input.text, about: input.about ?? [] } };
+      case "link":
+        return { kind: "link", body: { from: input.from, relation: input.relation, to: input.to } };
+      case "withdraw":
+        return { kind: "withdraw", body: { node: input.id, reason: input.reason ?? null } };
+    }
+  }
+
+  // ---- Applying changes -------------------------------------------------
+
+  /**
+   * Applies one data change to the store. Membership has already been
+   * checked by the caller (the author could make this change at that time).
+   */
+  async apply(c: Pick<Change, "id" | "kind" | "author" | "at" | "body">, ctx: ApplyContext): Promise<Applied> {
     return this.serial(async () => {
       this.conn.begin();
       try {
-        const out: Record<string, unknown> = {};
-        let last: unknown = null;
-        for (const [i, step] of tool.steps.entries()) {
-          const used = Object.fromEntries(Object.entries(params).filter(([k]) => new RegExp(`\\$${k}\\b`).test(step.cypher)));
-          const result = await this.conn.queryAsync(step.cypher, used as never);
-          const failed = result.rows.find((r) => r._error !== null && r._error !== undefined);
-          if (failed) throw new ToolError(String(failed._error));
-          const rows = result.rows.map((r) => {
-            const { _error, ...rest } = r;
-            return toJson(rest, this.R) as Record<string, unknown>;
-          });
-          const value = step.single ? (rows[0] ?? null) : rows;
-          if (step.name) out[step.name] = value;
-          if (i === tool.steps.length - 1) last = value;
-        }
+        const out = await this.applyOne(c, ctx);
+        if (out.status === "applied" && (c.kind === "claim" || c.kind === "question" || c.kind === "import")) await this.retryPending(ctx);
         this.conn.commit();
-        return Object.keys(out).length ? out : last;
+        return out;
       } catch (e) {
         this.conn.rollback();
-        if (e instanceof ToolError) throw e;
-        if (e instanceof this.R.RelateError) throw new QueryError(`The graph refused the query: ${e.message}`);
+        if (e instanceof this.R.RelateError) throw new QueryError(`The graph refused a change: ${e.message}`);
         throw e;
       }
+    });
+  }
+
+  private async applyOne(c: Pick<Change, "id" | "kind" | "author" | "at" | "body">, ctx: ApplyContext): Promise<Applied> {
+    const b = c.body;
+    const by = ctx.name(c.author);
+    switch (c.kind) {
+      case "claim":
+      case "question": {
+        const label = c.kind === "claim" ? "Claim" : "Question";
+        const node = str(b.node, 64);
+        const text = str(b.text, c.kind === "claim" ? 2000 : 1000);
+        if (!node || !text || !node.startsWith(c.kind === "claim" ? "c_" : "q_")) return { status: "refused", reason: "bad node or text" };
+        const exists = await this.rows(`OPTIONAL MATCH (n:Claim|Question {id: $node}) RETURN n.change AS change`, { node });
+        if (exists[0]?.change !== null && exists[0]?.change !== undefined)
+          return exists[0].change === c.id ? { status: "applied", result: { id: node, recorded_at: c.at } } : { status: "refused", reason: `${node} already exists` };
+        const embedding = contentWords(text).length ? this.embedder.embed(text) : null;
+        await this.rows(
+          `CREATE (n:${label} {id: $node, text: $text, embedding: $embedding, recorded_at: datetime($at), recorded_by: $by, author: $author, change: $change})` +
+            (c.kind === "claim"
+              ? ` SET n.source = $source, n.about_from = CASE WHEN $about_from IS NULL THEN null ELSE date($about_from) END, n.about_to = CASE WHEN $about_to IS NULL THEN null ELSE date($about_to) END`
+              : ""),
+          { node, text, embedding, at: c.at, by, author: c.author, change: c.id, ...(c.kind === "claim" ? { source: str(b.source, 500), about_from: day(b.about_from), about_to: day(b.about_to) } : {}) },
+        );
+        const links: [string, string[]][] =
+          c.kind === "claim"
+            ? [
+                ["SUPPORTS", isArray(b.supports)],
+                ["CONTRADICTS", isArray(b.contradicts)],
+                ["REPLACES", isArray(b.replaces)],
+                ["ANSWERS", isArray(b.answers)],
+              ]
+            : [["ABOUT", isArray(b.about)]];
+        const counts: Record<string, number> = {};
+        for (const [rel, targets] of links) {
+          counts[rel.toLowerCase()] = 0;
+          for (const to of targets) {
+            const r = await this.link({ change: c.id, author: c.author, at: c.at, from: node, relation: rel, to }, ctx);
+            if (r.status === "applied") counts[rel.toLowerCase()]!++;
+            else if (r.status === "pending") await this.addPending(c.id, "edge", { change: c.id, author: c.author, at: c.at, from: node, relation: rel, to });
+          }
+        }
+        return { status: "applied", result: { id: node, recorded_at: c.at, ...counts } };
+      }
+      case "link": {
+        const from = str(b.from, 64);
+        const to = str(b.to, 64);
+        const relation = str(b.relation, 20);
+        if (!from || !to || !relation || !REL_TYPES.has(relation) || relation === "ABOUT") return { status: "refused", reason: "bad link" };
+        const r = await this.link({ change: c.id, author: c.author, at: c.at, from, relation, to }, ctx);
+        if (r.status === "pending") await this.addPending(c.id, "edge", { change: c.id, author: c.author, at: c.at, from, relation, to });
+        return r.status === "applied" ? { status: "applied", result: { from, relation, to } } : r;
+      }
+      case "withdraw": {
+        const node = str(b.node, 64);
+        if (!node) return { status: "refused", reason: "bad withdraw" };
+        const r = await this.withdraw({ change: c.id, author: c.author, at: c.at, node, reason: str(b.reason, 500) }, ctx);
+        if (r.status === "pending") await this.addPending(c.id, "withdraw", { change: c.id, author: c.author, at: c.at, node, reason: str(b.reason, 500) });
+        return r;
+      }
+      case "import":
+        return this.importLegacy(c, ctx);
+    }
+    return { status: "refused", reason: `not a data change: ${c.kind}` };
+  }
+
+  /** Creates a link between two existing items, keeping the earlier of two equal links. */
+  private async link(e: { change: string; author: string; at: string; from: string; relation: string; to: string }, ctx: ApplyContext): Promise<Applied> {
+    if (e.from === e.to) return { status: "refused", reason: "an item can't link to itself" };
+    const ends = await this.rows(
+      `OPTIONAL MATCH (a:Claim|Question {id: $from}) OPTIONAL MATCH (b:Claim|Question {id: $to}) ` +
+        `RETURN a IS NOT NULL AS a, b IS NOT NULL AS b, a:Claim AS a_claim, b:Claim AS b_claim, b:Question AS b_question`,
+      { from: e.from, to: e.to },
+    );
+    const x = ends[0] ?? {};
+    const waiting = [...(x.a ? [] : [e.from]), ...(x.b ? [] : [e.to])];
+    if (waiting.length) return { status: "pending", waiting };
+    const fromLabel = x.a_claim ? "Claim" : "Question";
+    const toLabel = x.b_claim ? "Claim" : "Question";
+    const ok =
+      e.relation === "ABOUT"
+        ? fromLabel === "Question"
+        : fromLabel === "Claim" && (CLAIM_RELS.has(e.relation) ? toLabel === "Claim" : e.relation === "ANSWERS" && toLabel === "Question");
+    if (!ok) return { status: "refused", reason: `${e.relation} can't link a ${fromLabel} to a ${toLabel}` };
+    const existing = await this.rows(`MATCH (a:${fromLabel} {id: $from})-[r:${e.relation}]->(b:${toLabel} {id: $to}) RETURN r.recorded_at AS at, r.change AS change`, e);
+    const by = ctx.name(e.author);
+    if (!existing.length) {
+      await this.rows(
+        `MATCH (a:${fromLabel} {id: $from}), (b:${toLabel} {id: $to}) CREATE (a)-[:${e.relation} {recorded_at: datetime($at), recorded_by: $by, author: $author, change: $change}]->(b)`,
+        { ...e, by },
+      );
+    } else if (existing[0]!.change !== e.change && Date.parse(e.at) < Date.parse(String(existing[0]!.at))) {
+      await this.rows(
+        `MATCH (a:${fromLabel} {id: $from})-[r:${e.relation}]->(b:${toLabel} {id: $to}) SET r.recorded_at = datetime($at), r.recorded_by = $by, r.author = $author, r.change = $change`,
+        { ...e, by },
+      );
+    }
+    return { status: "applied", result: { from: e.from, relation: e.relation, to: e.to } };
+  }
+
+  private async withdraw(w: { change: string; author: string; at: string; node: string; reason: string | null }, ctx: ApplyContext): Promise<Applied> {
+    const found = await this.rows(`OPTIONAL MATCH (n:Claim|Question {id: $node}) RETURN n IS NOT NULL AS found, n.author AS author, n.recorded_by AS by, n.withdrawn_at AS w`, { node: w.node });
+    const n = found[0] ?? {};
+    if (!n.found) return { status: "pending", waiting: [w.node] };
+    const own = n.author ? n.author === w.author : n.by === ctx.name(w.author);
+    if (!own && !ctx.isAdmin(w.author, w.at)) return { status: "refused", reason: "only its author or an admin can withdraw it" };
+    if (n.w === null || n.w === undefined || Date.parse(w.at) < Date.parse(String(n.w)))
+      await this.rows(
+        `MATCH (n:Claim|Question {id: $node}) SET n.withdrawn_at = datetime($at), n.withdrawn_by = $by, n.withdrawn_author = $author, n.withdraw_reason = $reason, n.withdraw_change = $change`,
+        { ...w, by: ctx.name(w.author) },
+      );
+    return { status: "applied", result: { id: w.node, withdrawn_at: w.at } };
+  }
+
+  /** A graph from before change logs: its items, as they were, in one change by the graph's creator. */
+  private async importLegacy(c: Pick<Change, "id" | "body">, ctx: ApplyContext): Promise<Applied> {
+    const nodes = Array.isArray(c.body.nodes) ? c.body.nodes : [];
+    const edges = Array.isArray(c.body.edges) ? c.body.edges : [];
+    let n = 0;
+    for (const raw of nodes) {
+      const p = (raw?.props ?? {}) as Record<string, unknown>;
+      const label = raw?.label === "Question" ? "Question" : raw?.label === "Claim" ? "Claim" : undefined;
+      const id = str(p.id, 64);
+      const text = str(p.text, 2000);
+      if (!label || !id || !text || typeof p.recorded_at !== "string") continue;
+      const exists = await this.rows(`OPTIONAL MATCH (n:Claim|Question {id: $id}) RETURN n IS NOT NULL AS found`, { id });
+      if (exists[0]?.found) continue;
+      const author = typeof p.author === "string" ? p.author : null;
+      await this.rows(
+        `CREATE (n:${label} {id: $id, text: $text, embedding: $embedding, recorded_at: datetime($recorded_at), recorded_by: $recorded_by, author: $author, change: $change}) ` +
+          `SET n.source = $source, n.about_from = CASE WHEN $about_from IS NULL THEN null ELSE date($about_from) END, n.about_to = CASE WHEN $about_to IS NULL THEN null ELSE date($about_to) END, ` +
+          `n.withdrawn_at = CASE WHEN $withdrawn_at IS NULL THEN null ELSE datetime($withdrawn_at) END, n.withdrawn_by = $withdrawn_by, n.withdraw_reason = $withdraw_reason`,
+        {
+          id,
+          text,
+          embedding: contentWords(text).length ? this.embedder.embed(text) : null,
+          recorded_at: p.recorded_at,
+          recorded_by: author ? ctx.name(author) : (str(p.recorded_by, 60) ?? "unknown"),
+          author,
+          change: c.id,
+          source: str(p.source, 500),
+          about_from: day(p.about_from),
+          about_to: day(p.about_to),
+          withdrawn_at: typeof p.withdrawn_at === "string" ? p.withdrawn_at : null,
+          withdrawn_by: str(p.withdrawn_by, 60),
+          withdraw_reason: str(p.withdraw_reason, 500),
+        },
+      );
+      n++;
+    }
+    for (const e of edges) {
+      const type = str(e?.type, 20);
+      const p = (e?.props ?? {}) as Record<string, unknown>;
+      if (!type || !REL_TYPES.has(type) || typeof e.from !== "string" || typeof e.to !== "string") continue;
+      await this.rows(
+        `MATCH (a:Claim|Question {id: $from}), (b:Claim|Question {id: $to}) WHERE NOT EXISTS { MATCH (a)-[:${type}]->(b) } ` +
+          `CREATE (a)-[:${type} {recorded_at: datetime($at), recorded_by: $by, author: $author, change: $change}]->(b)`,
+        { from: e.from, to: e.to, at: typeof p.recorded_at === "string" ? p.recorded_at : new Date(0).toISOString(), by: str(p.recorded_by, 60) ?? "unknown", author: typeof p.author === "string" ? p.author : null, change: c.id },
+      );
+    }
+    return { status: "applied", result: { imported: n } };
+  }
+
+  private async addPending(change: string, kind: "edge" | "withdraw", data: Record<string, unknown>) {
+    await this.rows(`CREATE (:_P2pcgPending {change: $change, kind: $kind, data: $data})`, { change, kind, data: JSON.stringify(data) });
+  }
+
+  /** Retries links and withdrawals that were waiting for an item that may now exist. */
+  private async retryPending(ctx: ApplyContext) {
+    for (let round = 0; round < 3; round++) {
+      const pending = await this.rows(`MATCH (p:_P2pcgPending) RETURN p.change AS change, p.kind AS kind, p.data AS data`);
+      if (!pending.length) return;
+      let progress = false;
+      for (const p of pending) {
+        const d = JSON.parse(String(p.data));
+        const r = p.kind === "edge" ? await this.link(d, ctx) : await this.withdraw(d, ctx);
+        if (r.status !== "pending") {
+          await this.rows(`MATCH (p:_P2pcgPending {change: $change, kind: $kind, data: $data}) DELETE p`, { change: p.change, kind: p.kind, data: p.data });
+          progress = true;
+        }
+      }
+      if (!progress) return;
+    }
+  }
+
+  /** Takes back a claim or question this machine just made and hasn't sent: it was never shared. */
+  async discard(changeId: string): Promise<boolean> {
+    return this.serial(async () => {
+      const found = await this.rows(`MATCH (n:Claim|Question {change: $change}) RETURN count(n) AS n`, { change: changeId });
+      await this.rows(`MATCH (n:Claim|Question {change: $change}) DETACH DELETE n`, { change: changeId });
+      await this.rows(`MATCH (p:_P2pcgPending {change: $change}) DELETE p`, { change: changeId });
+      return Number(found[0]?.n ?? 0) > 0;
+    });
+  }
+
+  /** Empties the store (keeping the model's indexes), to build it again from the log. */
+  async reset(): Promise<void> {
+    await this.serial(async () => {
+      await this.rows(`MATCH (n) WHERE NOT n:_P2pcgMeta DETACH DELETE n`);
+      await this.rows(`MATCH (m:_P2pcgMeta {key: 'meta'}) SET m.applied = null`);
+    });
+  }
+
+  /** Records which changes the store holds (a digest of their ids, in the order applied). */
+  async setApplied(digest: string): Promise<void> {
+    await this.serial(() => this.rows(`MATCH (m:_P2pcgMeta {key: 'meta'}) SET m.applied = $digest`, { digest }));
+  }
+
+  async getApplied(): Promise<string | null> {
+    const r = await this.serial(() => this.rows(`MATCH (m:_P2pcgMeta {key: 'meta'}) RETURN m.applied AS applied`));
+    return (r[0]?.applied as string | null) ?? null;
+  }
+
+  /** Puts each member's current name on what they recorded (after a rename). */
+  async refreshNames(names: Map<string, string>): Promise<void> {
+    await this.serial(async () => {
+      for (const [key, name] of names) {
+        await this.rows(`MATCH (n:Claim|Question) WHERE n.author = $key AND n.recorded_by <> $name SET n.recorded_by = $name`, { key, name });
+        await this.rows(`MATCH (n:Claim|Question) WHERE n.withdrawn_author = $key AND n.withdrawn_by <> $name SET n.withdrawn_by = $name`, { key, name });
+        await this.rows(`MATCH ()-[r]->() WHERE r.author = $key AND r.recorded_by <> $name SET r.recorded_by = $name`, { key, name });
+      }
+    });
+  }
+
+  /** Whether this store holds items from before change logs (to import them once). */
+  async legacyItems(): Promise<{ nodes: { label: string; props: Record<string, unknown> }[]; edges: { type: string; from: string; to: string; props: Record<string, unknown> }[] } | null> {
+    return this.serial(async () => {
+      const nodes = await this.rows(`MATCH (n:Claim|Question) WHERE n.change IS NULL RETURN labels(n) AS labels, n {.*} AS props ORDER BY n.recorded_at`);
+      if (!nodes.length) return null;
+      const edges = await this.rows(`MATCH (a:Claim|Question)-[r]->(b:Claim|Question) WHERE r.change IS NULL RETURN type(r) AS type, a.id AS from, b.id AS to, r {.*} AS props`);
+      return {
+        nodes: nodes.map((n) => ({ label: (n.labels as string[]).includes("Claim") ? "Claim" : "Question", props: n.props as Record<string, unknown> })),
+        edges: edges.map((e) => ({ type: String(e.type), from: String(e.from), to: String(e.to), props: e.props as Record<string, unknown> })),
+      };
     });
   }
 

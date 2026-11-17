@@ -1,6 +1,6 @@
 # p2p-context-graph
 
-Share one [Relate](https://relatedb.ai/) context graph between several people's AI agents, peer to peer, with no server.
+Share one [Relate](https://relatedb.ai/) context graph between several people's AI agents, peer to peer, with no server. Every member keeps a full copy, and the members' machines keep each other in step.
 
 ```bash
 git clone https://github.com/CraigDeverall/p2p-context-graph && cd p2p-context-graph
@@ -8,7 +8,7 @@ npm install && npm run build
 node dist/cli.js demo
 ```
 
-`demo` opens the views in your browser on two example graphs (a copy; nothing
+`demo` opens the views in your browser on an example graph (a copy; nothing
 is changed). No account, API key or model download is needed.
 
 ![The graph explorer on the example incident graph](docs/images/explorer.jpg)
@@ -20,10 +20,12 @@ agent learns things the others never see. Findings get repeated, contradictions
 go unnoticed, and a week later nobody can say what the team believed when it
 made a call.
 
-p2p-context-graph gives the group one shared graph. One person hosts it on
-their machine and sends each person a join code; they paste it into their
-agent, everyone in the graph is told who joined, and from then on every agent reads and writes
-the same graph, through tools defined by the graph's **context model**.
+p2p-context-graph gives the group one shared graph of **claims** and
+**questions**. One person creates it and sends each person a join code; they
+paste it into their agent, get their own full copy, and everyone in the graph
+is told who joined. From then on every agent reads and writes its own copy,
+and the members' machines swap what each is missing whenever they're online.
+It keeps working offline, and when the person who made it is away.
 
 The relationships are what make it useful, because they answer the questions a
 group actually asks:
@@ -33,39 +35,31 @@ group actually asks:
 | What do we believe now, and what did we believe on Tuesday? | `REPLACES` between claims, read *as of* any moment |
 | Where do we disagree? | `CONTRADICTS` between claims that are both still current |
 | Which questions are still open? | `ANSWERS` from a current claim |
-| Which decisions need another look? | `RESTS_ON` an assumption since found false; `DEPENDS_ON` a superseded `Decision` |
-| Why did we decide this, and what did we turn down? | `CHOSE` / `REJECTED` options with reasons |
-
-Two context models are built in:
-- `temporal-claims`: claims and questions.
-- `decision-log`: decisions, options and assumptions.
-
-The skill helps people write their own.
+| What supports this? | `SUPPORTS` chains, followed by `history` and the explorer |
 
 ## How it uses Relate
 
 - **Mode: directory.** Each graph is one Relate directory store (`@relate/relate`, embedded in the Node process through the C ABI).
 - **Why this mode:**
   - A shared graph is long-lived and outlives every agent session.
-  - One host process per graph owns the store while people come and go.
-  - A directory keeps a write-ahead log, so every committed tool call is durable.
+  - One host process per graph, on each member's machine, owns its copy while sessions come and go.
+  - A directory keeps a write-ahead log, so every applied change is durable.
   - Anyone can open the store with Relate's own CLI.
 
   In memory would lose the group's knowledge when the host stops. A single `.rl` file would suit shipping a snapshot, not a store that is written all day.
-- **What the graph models:** each model pack defines it.
-  - `temporal-claims`: `Claim` and `Question` nodes, linked by `SUPPORTS`, `CONTRADICTS`, `REPLACES`, `ANSWERS` and `ABOUT`.
-  - `decision-log`: `Decision`, `Option` and `Assumption` nodes, linked by `SUPERSEDES`, `DEPENDS_ON`, `RESTS_ON`, `CHOSE` and `REJECTED`.
-  - Every node and relationship records when it entered the graph and who recorded it, so any read can answer as of a past moment.
+- **What the graph models:** one built-in model, Claims and Questions: `Claim` and `Question` nodes, linked by `SUPPORTS`, `CONTRADICTS`, `REPLACES`, `ANSWERS` and `ABOUT`.
+  - Every node and relationship records when it entered the graph, who recorded it and their key, so any read can answer as of a past moment.
+- **The store is built from a change log.** Each machine's Relate store is the result of applying the graph's signed changes; the same changes give the same store on every machine, whatever order they arrived in.
 
 | Relate feature | Where it's used |
 |---|---|
 | Embedded directory store, one per graph | `src/core/graph.ts`; the host process owns it |
-| Uniqueness constraints | each node type's `key` in `model.yaml` |
+| Uniqueness constraints | each node type's `key` in `model.yaml` (ids are time-ordered UUIDs, so two machines never clash) |
 | Vector index and full-text index across labels | `search` in `model.yaml` (`search_embedding`, `search_text`) |
-| Hybrid search: `SEARCH … COMBINE (VECTOR …, FULLTEXT …) USING WRRF` (preview `hybrid-search`) | the `search` tool in both packs |
-| Temporal values and `EXISTS {}` subqueries | the *as of* reads: `beliefs`, `conflicts`, `open_questions`, `decisions`, `needs_review` |
-| Pattern comprehensions and traversal | `needs_review`, `decisions`, `history`; the explorer's snapshot |
-| Transactions (`begin` / `commit` / `rollback`) | every tool call is one transaction; a check step can roll it back |
+| Hybrid search: `SEARCH … COMBINE (VECTOR …, FULLTEXT …) USING WRRF` (preview `hybrid-search`) | the `search` tool |
+| Temporal values and `EXISTS {}` subqueries | the *as of* reads: `beliefs`, `conflicts`, `open_questions` |
+| Pattern comprehensions and traversal | `history`; the explorer's snapshot |
+| Transactions (`begin` / `commit` / `rollback`) | every read is one transaction; every applied change is one, and a write's checks run in one that is rolled back |
 
 ## Setup and run
 
@@ -74,7 +68,7 @@ You need Node 20 or later. It's tested on macOS arm64 and, in CI, on Linux x64 a
 **1. See it** (the steps at the top): `node dist/cli.js demo`.
 - In the browser, open *Explore the graph* and drag the time slider back to 10 Nov. Watch the conflict between Bob's and Carol's claims appear, then settle.
 - *Conflicts* shows the two claims side by side.
-- In *Model studio → Packs and graphs*, switch to `decisions`. A *Decisions that need review* tab appears: the gateway decision rests on an assumption Carol found false.
+- *Sharing console* shows the three members, with their keys and roles.
 
 **2. Use it from your agent.** Add the MCP server to Claude Code:
 
@@ -91,7 +85,7 @@ Agents that support MCP Apps show the views inline. In other agents, ask for the
 
 Where the views show:
 
-- **Claude** (Claude Code desktop and Claude desktop): in the chat, and the console can stay open beside it.
+- **Claude** (Claude Code desktop and Claude desktop): in the chat, and the console can stay open beside it. A receipt's *Explore graph* and *Console* buttons open those panels from it.
 - **Codex app** (in the ChatGPT desktop app): in the chat, with a button to expand to full screen. There's no panel that stays open beside the chat.
 - **Codex CLI and other terminal agents:** no views. Ask for the *browser view*.
 
@@ -118,69 +112,77 @@ To use the example data instead of a new graph, add `P2PCG_DATA_DIR=<the folder 
 1. **You:** create a graph (*"start a context graph called incident-42"*) or say *"invite Sam to my context graph"*. Either gives you a join code straight away, as a line to send:
    `Join my context graph: /p2p-context-graph:join p2pcg1_…`
    Send it privately, to that one person. Others see you by your git name until you change it (*"set my name to …"*, or *Change* in the console).
-2. **Them:** run that command, or paste the code into their agent. They're in straight away.
-3. **Everyone in the graph is told** who joined, on their agent's next action: name, role, which invite, key fingerprint, agent and version, operating system. The console's *People* list shows the same. If it isn't who you expected, remove them (*"remove sam"*, or *Remove* in the console).
+2. **Them:** run that command, or paste the code into their agent, while your machine is online (it answers the code). They're in straight away, with a full copy of the graph.
+3. **Everyone in the graph is told** who joined, on their agent's next action: name, role, which invite, who let them in, key fingerprint, agent and version, operating system. The console's *People* list shows the same. If it isn't who you expected, remove them (*"remove sam"*, or *Remove* in the console).
 
-From then on, their graph tools act on your graph, limited by the code's role (contributor unless you said otherwise: *"invite Sam as a reader"*).
+From then on everyone works on their own copy, limited by their role (contributor unless you said otherwise: *"invite Sam as a reader"*). Whatever anyone writes reaches the others the next time their machines are both online, directly or through any other member.
 
 **Each code is for one person's machine.**
-- Whoever uses it first is let in, and the code is tied to their key. They rejoin with it in later sessions (*"rejoin the context graph"* calls `join_graph` with no code). Anyone else who uses it is turned away, and told to warn you that it may have leaked.
+- Whoever uses it first is let in. Anyone else who uses it is turned away, and told to warn you that it may have leaked.
 - There's no approval step: the single-use code is the credential, so send it privately.
 - An unused code expires after 24 hours (*"invite Sam, valid for a week"* sets it).
 - `sharing_status` and the console list the invites; `revoke_invite` or *Cancel* stops one working.
-- **Sharing is on by default** and survives your host restarting (sleep, reboot), so members get back in with their codes. *"Stop sharing"* turns it off until you share again. `P2PCG_AUTO_SHARE=off` makes off the default.
-- **Your own graphs:** on the machine that hosts a graph, just *"use my rainy-eve graph"* (`use_graph`). Joining is for other people's graphs.
+- A code isn't needed again: a joined graph is on the member's machine, so *"use the incident-42 graph"* (`use_graph`) switches to it in any later session.
+
+**Undo really undoes, for 10 seconds.** A write stays on your machine for 10 seconds before it is sent: *Undo* on the receipt (or `take_back`) removes it without trace, so a slip such as personal details in the wrong chat never reaches anyone. After that it can only be *withdrawn*, which keeps it in everyone's history.
+
+**Staying in sync.**
+- Sharing is on by default and survives restarts. *"Stop sharing"* takes a graph offline until you share again; your copy keeps working.
+- Each graph's host runs while an agent uses it. To keep your graphs syncing without an agent open, and after a reboot, run `node dist/cli.js autostart on` (macOS: `p2pcg up` at login).
+- `p2pcg status --graph <name>` shows the members, the live links to them, and whether the signalling relays are reachable.
+
+**Removing someone** stops every member's machine syncing with them and refuses their later changes. It can't take back the copy they already have.
 
 **Check your machine** with `node dist/cli.js doctor`.
 
 ## Where the data lives
 
-- **Example graphs in this repo:** [`examples/data/graphs/incident`](examples/data/graphs/incident) (temporal-claims) and [`examples/data/graphs/decisions`](examples/data/graphs/decisions) (decision-log).
-  - They are ordinary Relate directory stores, built by [`scripts/make-examples.ts`](scripts/make-examples.ts) (`npm run examples`) from one scenario: three people investigating a checkout slowdown, then deciding what to do.
-  - Open them with Relate's CLI:
+- **The example graph in this repo:** [`examples/data/graphs/incident`](examples/data/graphs/incident), with its change log in [`examples/data/hosts/incident/changes.jsonl`](examples/data/hosts/incident/changes.jsonl).
+  - Built by [`scripts/make-examples.ts`](scripts/make-examples.ts) (`npm run examples`) from one scenario: three people investigating a checkout slowdown. Each change is signed by alice, bob or carol; the example ships alice's throwaway key, so the demo runs as her.
+  - The store is an ordinary Relate directory store. Open it with Relate's CLI:
 
     ```bash
     relate -d examples/data/graphs/incident "MATCH (a:Claim)-[:CONTRADICTS]->(b:Claim) RETURN a.text, b.text"
-    relate -d examples/data/graphs/decisions "MATCH (d:Decision)-[:RESTS_ON]->(a:Assumption) WHERE a.invalidated_at IS NOT NULL RETURN d.text, a.text, a.invalidated_because"
     ```
-- **Your own graphs:** `~/.local/share/p2p-context-graph/graphs/<name>` (set `P2PCG_DATA_DIR` to move them).
-  - Next to them: `hosts/<name>/` holds the host's log, its invites and the people who joined, and `identity.json` holds your key.
+- **Your own graphs:** `~/.local/share/p2p-context-graph/` (set `P2PCG_DATA_DIR` to move it).
+  - `graphs/<name>`: the Relate store, built from the change log.
+  - `hosts/<name>/changes.jsonl`: every change this machine has (signed, one per line); `group.json`: the graph's id and group secret (only members have it); `invites.json`, `sharing.json`, `host.log`.
+  - `identity.json`: your key. Keep it private: it is you in every graph.
+  - Graphs made before change logs are converted the first time the new host starts them: their items keep their ids, authors and times, and the people the old host let in become members.
 
 ## How it works
 
 ```mermaid
 flowchart LR
-  subgraph alice["Alice's machine (host)"]
+  subgraph alice["Alice's machine"]
     A1[Claude Code session] -- MCP --> S1[p2pcg mcp]
-    A2[another session] -- MCP --> S2[p2pcg mcp]
-    S1 -- local socket --> H[(p2pcg host<br/>Relate directory store)]
-    S2 -- local socket --> H
+    S1 -- local socket --> H1[(host: change log +<br/>Relate store)]
   end
   subgraph bob["Bob's machine"]
-    B1[his agent] -- MCP --> SB[p2pcg mcp]
+    B1[his agent] -- MCP --> S2[p2pcg mcp]
+    S2 -- local socket --> H2[(host: change log +<br/>Relate store)]
   end
   subgraph carol["Carol's machine"]
-    C1[her agent] -- MCP --> SC[p2pcg mcp]
+    C1[her agent] -- MCP --> S3[p2pcg mcp]
+    S3 -- local socket --> H3[(host: change log +<br/>Relate store)]
   end
-  SB <-- "WebRTC data channel (DTLS)" --> H
-  SC <-- "WebRTC data channel (DTLS)" --> H
-  N{{public Nostr relays:<br/>sealed handshake only}} -.-> H
-  N -.-> SB
-  N -.-> SC
+  H1 <-- "WebRTC (DTLS): swap missing changes" --> H2
+  H2 <--> H3
+  H1 <--> H3
+  N{{public Nostr relays:<br/>sealed handshakes only}} -.-> H1
+  N -.-> H2
+  N -.-> H3
 ```
 
-- **One host process per graph** owns the Relate store. Every agent session on that machine is a client over a local socket, which only that user can open.
-- **The host is the centre of a star.** Peers connect straight to it over WebRTC.
-  - A join code is `p2pcg1_<room>.<secret>`, one per invite. The room names a signalling topic; the secret never leaves the two machines.
-  - Only the connection handshake passes through public Nostr relays, sealed with a key derived from the code's secret.
-  - Joining needs both the secret (an HMAC proof) and an Ed25519 identity key. The first key to use a code is let in and tied to it; everyone in the graph is told.
-- **Peers only get the model's tools,** never raw Cypher or the host's admin operations. The host checks every call against the caller's role.
-- **Context models are packs:**
-  - `model.yaml` holds the shape.
-  - `tools.yaml` holds parameterised Cypher, run in one transaction per call, with validated inputs.
-  - `instructions.md` tells agents how to use the model.
-  - `validate_model` runs every tool once on a scratch graph. The format is in [`references/model-packs.md`](plugin/skills/p2p-context-graph/references/model-packs.md).
-- **MCP Apps:** five views (console, explorer, model studio, receipt with undo, conflicts) in one bundle. They're served as `ui://` resources, and on 127.0.0.1 behind a one-time token for agents that can't show views.
+- **Every member has a full copy.** On each machine, one host process per graph owns that copy: a log of signed changes and the Relate store built from it. Agent sessions reach it over a local socket, which only that user can open. Reads and writes always work, offline too.
+- **Writes are signed changes.** A write is checked against the copy, applied at once, held for 10 seconds (Undo), then numbered, signed with the author's Ed25519 key and sent. Each author numbers their own changes 1, 2, 3, so "what I have" is one number per member, and catching up is sending what the other side lacks.
+- **Same changes, same graph.** Applying is idempotent and order-independent: a link waits for both its ends, the earlier of two equal links or withdrawals is kept, and checks that depend on what one machine has seen run only when the change is made. Every machine checks each change's signature and its author's role at that time.
+- **Membership is in the same log:** the creator, joins, role changes, renames and removals, each signed by an admin (a rename by the member). A membership change that arrives late makes a machine rebuild its store from the log, so all copies agree.
+- **The mesh:** online members meet in a signalling room named and sealed with the group secret, and link to each other over WebRTC (up to 20 members). Links and relay connections are pinged and replaced when they go quiet, and reconnect forever. Changes are forwarded, so members who never meet still get each other's writes.
+- **Join codes:** `p2pcg1_<room>.<secret>`, one per invite, answered by the admin machine that made it. The newcomer proves the secret (HMAC) and its key (Ed25519), and receives the graph id, the group secret and the whole log.
+- **Agents only get the model's tools,** never raw Cypher. Write tools in [`models/temporal-claims/tools.yaml`](models/temporal-claims/tools.yaml) only check; the change itself is applied by fixed code in [`src/core/graph.ts`](src/core/graph.ts).
+- **MCP Apps:** four views (console, explorer, receipt with Undo, conflicts) in one bundle. They're served as `ui://` resources, and on 127.0.0.1 behind a one-time token for agents that can't show views.
+- The design and its reasoning: [`docs/REPLICATION.md`](docs/REPLICATION.md).
 
 If two machines can't reach each other directly (some networks block it), set a TURN server: `P2PCG_ICE=turn:user:pass@host:3478`.
 
@@ -189,8 +191,11 @@ If two machines can't reach each other directly (some networks block it), set a 
 - Relate 1.0 is new: this pins `@relate/relate` 1.0.1 and uses its `hybrid-search` preview.
 - **Search embedder:** the default matches words and word fragments, not meaning. It runs offline with no model download, and the `Embedder` interface allows a semantic one later.
 - **Tested connections:**
-  - Peer-to-peer was tested between processes on one machine, over real public relays.
+  - Replication was tested between processes on one machine, over real public relays, and between hosts in one process.
   - Networks with strict NAT need a TURN server.
+- **Removal can't recall data:** a removed member keeps what they already received. Every other machine refuses their later changes and stops syncing with them; the group secret isn't changed, so they can still see that the group's signalling room is in use, but get nothing from it.
+- **Clocks:** changes are ordered by their time, so members' clocks are assumed to be right.
+- **Size:** made for groups of up to about 20, and logs of up to about 100,000 changes. A new member downloads the whole log.
 
 ## Built with
 

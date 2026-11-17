@@ -1,29 +1,21 @@
 {
   "format_version": 5,
-  "next_node_id": 13,
-  "next_rel_id": 11,
-  "checkpoint_lsn": 19,
-  "commit_ts": 19,
+  "next_node_id": 1,
+  "next_rel_id": 0,
+  "checkpoint_lsn": 5,
+  "commit_ts": 5,
   "node_parts": [
     {
-      "path": "nodes/0-262144-f7b18492eaa7a76671a911bacbf5299c.parquet",
+      "path": "nodes/0-262144-c9b85f6c944fa81a2323b8ca6c5d4df9.parquet",
       "id_lo": 0,
       "id_hi": 262144,
-      "rows": 13,
-      "bytes": 10027
+      "rows": 1,
+      "bytes": 1942
     }
   ],
-  "rel_parts": [
-    {
-      "path": "relationships/0-262144-f9e311a4deb1e9f8088dd797acca056c.parquet",
-      "id_lo": 0,
-      "id_hi": 262144,
-      "rows": 11,
-      "bytes": 1693
-    }
-  ],
-  "bytes_per_node": 1344.9469230769228,
-  "bytes_per_rel": 153.9090909090909,
+  "rel_parts": [],
+  "bytes_per_node": 1942.0,
+  "bytes_per_rel": 0.0,
   "codec": "parquet",
   "indexes": [
     {
