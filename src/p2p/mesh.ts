@@ -62,6 +62,8 @@ interface PeerLink {
   since: string;
   answer?: { sdp: string; sdpType: string };
   initiator: boolean;
+  /** Sync frames that arrived before this side finished checking the link: handled once it has. */
+  early: any[];
 }
 
 export interface LinkInfo {
@@ -114,9 +116,23 @@ export class Mesh {
     for (const l of this.links.values()) if (l.state === "active" && l.key !== exceptKey) this.sendChanges(l, changes);
   }
 
-  /** Drops links to a key (removed from the graph). */
-  drop(key: string, reason = "removed"): void {
-    for (const l of [...this.links.values()]) if (l.key === key) this.close(l, reason);
+  /** Says hello again now: after a new member is added, so links to them don't wait for the next round. */
+  nudge(): void {
+    this.hello();
+  }
+
+  /**
+   * Drops links to a key (removed from the graph). `farewell` (the removal
+   * itself) is sent first, so the removed machine learns it was removed.
+   */
+  drop(key: string, farewell: Change[] = [], reason = "removed"): void {
+    for (const l of [...this.links.values()]) {
+      if (l.key !== key) continue;
+      if (l.state === "active" && farewell.length) {
+        this.sendChanges(l, farewell);
+        setTimeout(() => this.close(l, reason), 1000).unref();
+      } else this.close(l, reason);
+    }
   }
 
   stop(): void {
@@ -207,6 +223,7 @@ export class Mesh {
       lastHeard: Date.now(),
       since: new Date().toISOString(),
       initiator,
+      early: [],
     };
     this.links.set(them, l);
     pc.onStateChange((s) => {
@@ -295,16 +312,21 @@ export class Mesh {
         l.state = "active";
         this.log(`linked with ${fingerprint(l.key)}`);
         this.o.onChange?.();
-        return this.send(l, { t: "have", have: this.o.have() });
+        this.send(l, { t: "have", have: this.o.have() });
+        // The other side may have checked us first and already sent its sync frames.
+        for (const f of l.early.splice(0)) await this.onFrame(l, f);
+        return;
       }
       case "have": {
-        if (l.state !== "active") return;
+        if (l.state !== "active") return void l.early.push(m);
         const missing = this.o.missing(m.have && typeof m.have === "object" ? m.have : {});
+        if (missing.length) this.log(`catching ${fingerprint(l.key!)} up: ${missing.length} change(s)`);
         this.sendChanges(l, missing);
         return;
       }
       case "changes": {
-        if (l.state !== "active" || !Array.isArray(m.changes)) return;
+        if (!Array.isArray(m.changes)) return;
+        if (l.state !== "active") return void (l.early.length < 1000 && l.early.push(m));
         const fresh = await this.o.receive(m.changes, l.key!);
         this.broadcast(fresh, l.key);
         return;

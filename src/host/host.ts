@@ -298,6 +298,7 @@ export class Host {
         if (this.log.add(c)) fresh.push(c);
       }
       if (!fresh.length) return fresh;
+      this.say(`received ${fresh.length} new change(s)${from ? ` from ${fingerprint(from)}` : ""}`);
       const membership = fresh.filter((c) => MEMBER_KINDS.has(c.kind));
       const before = this.members;
       if (membership.length) this.members = new Members(this.log.all());
@@ -326,6 +327,8 @@ export class Host {
       if (c.kind === "add_member" && typeof c.body.key === "string" && !before.isMember(c.body.key) && this.members.isMember(c.body.key)) {
         const m = this.members.get(c.body.key)!;
         if (m.key !== this.me) this.broadcastLocal({ t: "evt", event: "joined", data: this.personNotice(m) });
+        // They may already have said hello and been ignored as a stranger: say hello back.
+        this.mesh?.nudge();
       }
       if (c.kind === "remove_member" && typeof c.body.key === "string") {
         if (c.body.key === this.me) {
@@ -336,7 +339,7 @@ export class Host {
           this.desk = undefined;
           this.broadcastLocal({ t: "evt", event: "removed", data: { by: this.members.displayName(c.author), at: c.at } });
         } else {
-          this.mesh?.drop(c.body.key);
+          this.mesh?.drop(c.body.key, [c]);
           for (const inv of this.invites.revokeForKey(c.body.key, "removed")) this.desk?.revoke(inv.id);
         }
       }
@@ -432,7 +435,10 @@ export class Host {
         this.log.add(c);
         out.push(c);
       }
-      if (out.length) this.mesh?.broadcast(out);
+      if (out.length) {
+        this.say(`sent ${out.length} change(s) to ${this.mesh?.online().filter((l) => l.state === "active").length ?? 0} linked member(s)`);
+        this.mesh?.broadcast(out);
+      }
       this.scheduleRelease();
       return out;
     });

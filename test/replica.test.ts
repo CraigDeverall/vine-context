@@ -37,7 +37,7 @@ interface Member {
 async function member(name: string, graph: string, dataDir = tempDir()): Promise<Member> {
   const m = { name, dataDir, graph, events: [] as { event: string; data: any }[] } as Member;
   const start = async () => {
-    m.host = await Host.start({ dataDir, graph, user: name, signal, ice, holdMs: HOLD });
+    m.host = await Host.start({ dataDir, graph, user: name, signal, ice, holdMs: HOLD, log: process.env.P2PCG_TEST_LOG ? (msg) => console.log(`${Date.now() % 100000} ${name}: ${msg}`) : undefined });
     running.push(m.host);
     m.local = await LocalHost.connect(m.host.socket);
     m.local.on("event", (e) => m.events.push(e));
