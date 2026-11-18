@@ -267,6 +267,16 @@ describe("names, auto-share and which graph", () => {
     expect((await me.call("search", { query: "Mine" })).length).toBe(1);
   });
 
+  it("reports recent activity, the people and the graph", async () => {
+    const me = await agent("alice");
+    const c = await me.call("add_claim", { text: "Seen in the activity feed" });
+    const a = await me.call("graph_activity", { snapshot: true });
+    expect(a).toMatchObject({ graph: "main", you: { name: "alice", role: "admin" }, members: 1, your_graphs: ["main"] });
+    expect(a.recent[0]).toMatchObject({ kind: "claim", by: "alice", mine: true, held: true, node: c.result?.id ?? c.id, summary: "claimed: Seen in the activity feed" });
+    expect(a.snapshot.nodes.map((n: any) => n.title)).toContain("Seen in the activity feed");
+    expect(a.people).toEqual([expect.objectContaining({ name: "alice", you: true, creator: true })]);
+  });
+
   it("says which graph each model tool acted on", async () => {
     const me = await agent("alice");
     const r = await me.raw("add_claim", { text: "Where did this go?" });

@@ -96,7 +96,14 @@ claude plugin marketplace add CraigDeverall/p2p-context-graph
 claude plugin install p2p-context-graph@p2p-context-graph
 ```
 
-**In Codex**, the same `plugin/` folder is a Codex plugin (skills and the MCP server; Codex has no plugin slash commands, so joining is the `join-context-graph` skill: paste the code):
+**In Claude Code, the plugin also adds a mod** to Claude Code's own interface:
+- a band above the prompt: the graph this chat uses, who's online, and the latest thing someone else synced (with *Open*);
+- a status line entry, and a toast when someone else's change arrives;
+- `/graph`: a panel beside the chat with the graph drawn as SVG (desktop app and VS Code), the claims and questions (add, *Undo* while a write is still on your machine, *Withdraw*), and the people (roles, *Remove* and join codes for admins).
+
+The mod reads through the `graph_activity` tool, which never uses up the join notices meant for your agent. Its source is [`plugin/hooks/register.tsx`](plugin/hooks/register.tsx); `claude plugin test plugin` runs its tests.
+
+**In Codex**, the same `plugin/` folder is a Codex plugin (skills and the MCP server; Codex has no plugin slash commands or mods, so joining is the `join-context-graph` skill: paste the code, and the views show in the chat):
 
 ```bash
 codex plugin marketplace add CraigDeverall/p2p-context-graph

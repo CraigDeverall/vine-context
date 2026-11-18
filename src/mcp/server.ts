@@ -270,6 +270,31 @@ export class Session {
     );
 
     this.server.registerTool(
+      "graph_activity",
+      {
+        title: "Graph activity",
+        description:
+          "What happened lately in the current graph, newest first: who wrote what (yours and synced from others), joins and role changes, plus who is online. " +
+          "With snapshot, also the graph's items and links. Read-only; it never uses up the join notices meant for you (it's what the Claude Code mod's band and panel poll).",
+        inputSchema: {
+          limit: z.number().int().min(1).max(200).optional().describe("How many recent changes (default 30)"),
+          snapshot: z.boolean().optional().describe("Also return the graph as it stands now (items and links)"),
+        },
+        annotations: ro,
+      },
+      async (a: { limit?: number; snapshot?: boolean }) => {
+        try {
+          const activity = await this.request<Record<string, unknown>>("activity", { limit: a.limit });
+          const out: Record<string, unknown> = { using: this.where(), your_graphs: this.localGraphs(), ...activity };
+          if (a.snapshot) out.snapshot = await this.request<Snapshot>("snapshot", { limit: 300 });
+          return { ...text(out), structuredContent: out };
+        } catch (e) {
+          return failure((e as Error).message); // no withNews: this read never takes the agent's notices
+        }
+      },
+    );
+
+    this.server.registerTool(
       "model_guide",
       {
         title: "Model guide",

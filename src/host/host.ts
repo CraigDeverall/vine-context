@@ -716,6 +716,8 @@ export class Host {
       case "start_sharing":
         this.startSharing();
         return { sharing: Boolean(this.mesh) };
+      case "activity":
+        return this.activity(Number(p.limit ?? 30));
       case "status":
         return this.status();
       case "set_role":
@@ -749,6 +751,68 @@ export class Host {
       sharing: { sharing: Boolean(this.mesh), online: this.mesh?.online().filter((l) => l.state === "active").length ?? 0 },
       people: this.people(),
       log: { changes: this.log.size, held: this.log.heldChanges().length, refused: this.refused.size },
+    };
+  }
+
+  /**
+   * The latest changes, newest first, described for a person: what the
+   * Claude Code mod's band and panel show. Held writes (still undoable) are
+   * marked.
+   */
+  activity(limit = 30) {
+    const n = Math.min(Math.max(Math.trunc(limit) || 30, 1), 200);
+    const held = this.log.heldChanges().map((h) => ({ c: { ...h.change, seq: 0, sig: "" } as Change, held: true, until: h.until }));
+    const all = [...held, ...this.log.all().map((c) => ({ c, held: false, until: 0 }))];
+    all.sort((a, b) => Date.parse(b.c.at) - Date.parse(a.c.at));
+    const name = (k: unknown) => (typeof k === "string" ? this.members.displayName(k) : "someone");
+    const describe = (c: Change): string => {
+      const b = c.body;
+      switch (c.kind) {
+        case "claim":
+          return `claimed: ${String(b.text ?? "").slice(0, 160)}`;
+        case "question":
+          return `asked: ${String(b.text ?? "").slice(0, 160)}`;
+        case "link":
+          return `linked ${b.from} ${String(b.relation ?? "").toLowerCase()} ${b.to}`;
+        case "withdraw":
+          return `withdrew ${b.node}${b.reason ? ` (${String(b.reason).slice(0, 80)})` : ""}`;
+        case "import":
+          return `brought in ${Array.isArray(b.nodes) ? b.nodes.length : 0} items from before change logs`;
+        case "create":
+          return `created the graph '${b.name}'`;
+        case "add_member":
+          return `let in ${b.name} as ${b.role}`;
+        case "set_role":
+          return `made ${name(b.key)} ${b.role}`;
+        case "remove_member":
+          return `removed ${name(b.key)}`;
+        case "rename":
+          return `is now called ${b.name}`;
+      }
+      return c.kind;
+    };
+    return {
+      graph: this.o.graph,
+      graph_id: this.group.id,
+      created_by: this.members.creator() ? this.members.displayName(this.members.creator()!.key) : null,
+      you: { name: this.members.displayName(this.me), role: this.members.roleAt(this.me, new Date().toISOString()), fingerprint: fingerprint(this.me) },
+      sharing: Boolean(this.mesh),
+      online: this.mesh?.online().filter((l) => l.state === "active").map((l) => this.members.displayName(l.key)) ?? [],
+      members: this.members.current().length,
+      people: this.people(),
+      relays_up: Object.values(this.mesh?.relayStatus() ?? {}).filter((s) => s === "open").length,
+      changes: this.log.size,
+      recent: all.slice(0, n).map(({ c, held, until }) => ({
+        id: c.id,
+        kind: c.kind,
+        at: c.at,
+        by: name(c.author),
+        mine: c.author === this.me,
+        summary: describe(c),
+        node: typeof c.body.node === "string" ? c.body.node : null,
+        held,
+        shared_at: held ? new Date(until).toISOString() : null,
+      })),
     };
   }
 

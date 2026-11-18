@@ -6,3 +6,7 @@ dist/
 /.data/
 /spikes/.out/
 !examples/data/**/*.log
+
+# Written by Claude Code when it loads the mod from this folder
+plugin/.claude-plugin/types/
+plugin/tsconfig.json
