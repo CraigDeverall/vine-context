@@ -91,7 +91,7 @@ describe("MCP App views", () => {
     const { tools } = await alice.client.listTools();
     const by = (n: string) => tools.find((t) => t.name === n)!;
     expect(uiOf(by("open_console"))).toBe("ui://p2pcg/console");
-    expect(uiOf(by("explore_graph"))).toBe("ui://p2pcg/explorer");
+    expect(uiOf(by("explore_context"))).toBe("ui://p2pcg/explorer");
     expect(uiOf(by("add_claim"))).toBe("ui://p2pcg/receipt");
     expect(uiOf(by("conflicts"))).toBe("ui://p2pcg/conflicts");
     expect(uiOf(by("search"))).toBeUndefined();
@@ -106,7 +106,7 @@ describe("MCP App views", () => {
       tool: "add_claim",
       input: { text: "The cache hit rate fell to 40% after the deploy" },
       undo: { take_back: true, withdraw: true },
-      where: "your graph 'main'",
+      where: "your context 'main'",
     });
     // While it is held on this machine, take_back removes it without trace.
     expect(r.structuredContent.result.shared_at).toBeDefined();
@@ -123,7 +123,7 @@ describe("MCP App views", () => {
     const b = await alice.call("add_claim", { text: "The October campaign drove the sign-ups", supports: [a.result.id] });
     await alice.call("withdraw", { id: a.result.id });
 
-    const r = await alice.raw("explore_graph");
+    const r = await alice.raw("explore_context");
     expect(r.content[0].text).not.toContain("Sign-ups doubled"); // the picture is for the person
     const now = r.structuredContent;
     expect(now.nodes.map((n: any) => [n.key, n.ended])).toEqual([
@@ -133,7 +133,7 @@ describe("MCP App views", () => {
     expect(now.edges).toEqual([expect.objectContaining({ type: "SUPPORTS", source: `Claim:${b.result.id}`, target: `Claim:${a.result.id}` })]);
     expect(now.schema.time).toEqual({ recorded: "recorded_at", ended: "withdrawn_at" });
 
-    const then = (await alice.raw("explore_graph", { at: before })).structuredContent;
+    const then = (await alice.raw("explore_context", { at: before })).structuredContent;
     expect(then.nodes.map((n: any) => [n.key, n.ended])).toEqual([[a.result.id, false]]);
     expect(then.edges).toEqual([]);
   });
@@ -141,7 +141,7 @@ describe("MCP App views", () => {
   it("opens the console with your sharing state", async () => {
     const alice = await agent("alice");
     expect(await alice.call("open_console")).toMatchObject({ sharing: false, can_invite: true, people: [expect.objectContaining({ name: "alice", you: true, creator: true })], links: [] });
-    await alice.call("share_graph");
+    await alice.call("share_context");
     expect(await alice.call("open_console")).toMatchObject({ sharing: true, invites: [expect.objectContaining({ state: "open", code: expect.stringMatching(/^p2pcg1_/) })] });
     await alice.call("stop_sharing");
   });
@@ -150,20 +150,24 @@ describe("MCP App views", () => {
     const alice = await agent("alice", "team");
     const bob = await agent("bob", "own");
     await alice.call("add_claim", { text: "Alice's finding about the build" });
-    const { code } = await alice.call("share_graph", { role: "reader" });
-    const joined = await bob.call("join_graph", { code });
-    expect(joined).toMatchObject({ joined: "alice's graph 'team'", here_as: "team", role: "reader", as: "bob" });
+    const { code } = await alice.call("share_context", { role: "reader" });
+    const joined = await bob.call("join_context", { code });
+    expect(joined).toMatchObject({ joined: "alice's context 'team'", here_as: "team", role: "reader", as: "bob" });
     const state = await bob.call("open_console");
     expect(state).toMatchObject({ host: "alice", can_invite: false, you: { name: "bob", role: "reader" } });
-    const snap = (await bob.raw("explore_graph")).structuredContent;
-    expect(snap).toMatchObject({ graph: "team", where: expect.stringContaining("alice's graph") });
+    const snap = (await bob.raw("explore_context")).structuredContent;
+    expect(snap).toMatchObject({ graph: "team", where: expect.stringContaining("alice's context") });
     expect(snap.nodes.map((n: any) => n.title)).toEqual(["Alice's finding about the build"]);
-    // A reader gets no write tools.
-    expect((await bob.client.listTools()).tools.map((t) => t.name)).not.toContain("add_claim");
+    // Joining attaches the context alongside bob's own; as a reader there, his writes to it are refused.
+    expect((await bob.call("context_info")).attached.map((c: any) => [c.context, c.role, c.writes_here])).toEqual([
+      ["own", "admin", false],
+      ["team", "reader", true],
+    ]);
+    expect((await bob.raw("add_claim", { text: "A reader tries to write", context: "team" })).isError).toBe(true);
     // Back to bob's own graph, then to the joined one again without the code.
-    await bob.call("use_graph", { name: "own" });
-    expect((await bob.call("graph_info")).your_graphs).toEqual(["own", "team"]);
-    expect(await bob.call("use_graph", { name: "team" })).toMatchObject({ using: expect.stringContaining("alice's graph") });
+    await bob.call("use_context", { name: "own" });
+    expect((await bob.call("context_info")).your_contexts).toEqual(["own", "team"]);
+    expect(await bob.call("use_context", { name: "team" })).toMatchObject({ using: expect.stringContaining("alice's context") });
     await alice.call("stop_sharing");
   });
 });
@@ -213,7 +217,7 @@ describe("the localhost page", () => {
     const client = new Client({ name: "browser", version: "0" });
     await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`), { requestInit: { headers: { Authorization: `Bearer ${token}` } } }));
     const names = (await client.listTools()).tools.map((t) => t.name);
-    expect(names).toEqual(expect.arrayContaining(["open_console", "explore_graph", "add_claim"]));
+    expect(names).toEqual(expect.arrayContaining(["open_console", "explore_context", "add_claim"]));
     expect(names).not.toContain("browser_view"); // the page's own sessions don't hand out more links
     const r: any = await client.callTool({ name: "open_console", arguments: {} });
     expect(r.structuredContent).toMatchObject({ graph: "main", you: { role: "admin" } });
@@ -244,13 +248,13 @@ describe("names, auto-share and which graph", () => {
     const me = await agent("alice");
     process.env.P2PCG_AUTO_SHARE = "on";
     try {
-      const r = await me.call("use_graph", { name: "planning" });
-      expect(r).toMatchObject({ created: "your graph 'planning'", code: expect.stringMatching(/^p2pcg1_/), send: expect.stringContaining(r.code), shared_as: { name: "alice" } });
-      expect(await me.call("graph_info")).toMatchObject({ sharing: { sharing: true } });
+      const r = await me.call("use_context", { name: "planning" });
+      expect(r).toMatchObject({ created: "your context 'planning'", code: expect.stringMatching(/^p2pcg1_/), send: expect.stringContaining(r.code), shared_as: { name: "alice" } });
+      expect(await me.call("context_info", { context: "planning" })).toMatchObject({ sharing: { sharing: true } });
       // Switching back to an existing graph doesn't share it.
-      const back = await me.call("use_graph", { name: "main" });
+      const back = await me.call("use_context", { name: "main" });
       expect(back).not.toHaveProperty("code");
-      await me.call("use_graph", { name: "planning" });
+      await me.call("use_context", { name: "planning" });
       await me.call("stop_sharing");
     } finally {
       process.env.P2PCG_AUTO_SHARE = "off";
@@ -260,18 +264,18 @@ describe("names, auto-share and which graph", () => {
   it("says clearly when no one answers a code, and stays on its own graph", async () => {
     const me = await agent("alice");
     await me.call("add_claim", { text: "Mine, on main" });
-    const r = await me.raw("join_graph", { code: formatCode(newLink()) });
+    const r = await me.raw("join_context", { code: formatCode(newLink()) });
     expect(r.isError).toBe(true);
     expect(r.content[0].text).toMatch(/isn't online right now/);
-    expect((await me.call("graph_info")).using).toBe("your graph 'main'");
+    expect((await me.call("context_info")).using).toBe("your context 'main'");
     expect((await me.call("search", { query: "Mine" })).length).toBe(1);
   });
 
   it("reports recent activity, the people and the graph", async () => {
     const me = await agent("alice");
     const c = await me.call("add_claim", { text: "Seen in the activity feed" });
-    const a = await me.call("graph_activity", { snapshot: true });
-    expect(a).toMatchObject({ graph: "main", you: { name: "alice", role: "admin" }, members: 1, your_graphs: ["main"] });
+    const a = await me.call("context_activity", { snapshot: true });
+    expect(a).toMatchObject({ graph: "main", you: { name: "alice", role: "admin" }, members: 1, your_contexts: ["main"] });
     expect(a.recent[0]).toMatchObject({ kind: "claim", by: "alice", mine: true, held: true, node: c.result?.id ?? c.id, summary: "claimed: Seen in the activity feed" });
     expect(a.snapshot.nodes.map((n: any) => n.title)).toContain("Seen in the activity feed");
     expect(a.people).toEqual([expect.objectContaining({ name: "alice", you: true, creator: true })]);
@@ -280,7 +284,7 @@ describe("names, auto-share and which graph", () => {
   it("says which graph each model tool acted on", async () => {
     const me = await agent("alice");
     const r = await me.raw("add_claim", { text: "Where did this go?" });
-    expect(r.content.at(-1).text).toMatch(/^\(on your graph 'main'\) It stays on this machine until /);
+    expect(r.content.at(-1).text).toMatch(/^\(in your context 'main'\) It stays on this machine until /);
     expect(JSON.parse(r.content[0].text).id).toMatch(/^c_/);
   });
 });

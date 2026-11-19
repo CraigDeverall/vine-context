@@ -115,7 +115,7 @@ export function Console({ b }: { b: Bridge }) {
     }
   };
   const invite = async () => {
-    await act("invite", "share_graph", label.trim() ? { label: label.trim() } : {});
+    await act("invite", "share_context", label.trim() ? { label: label.trim() } : {});
     setLabel("");
   };
   const open = state.invites.filter((i) => i.state === "open");
@@ -139,7 +139,7 @@ export function Console({ b }: { b: Bridge }) {
             Go offline
           </button>
         ) : admin ? (
-          <button className="primary" disabled={!!busy} onClick={() => act("share", "share_graph")}>
+          <button className="primary" disabled={!!busy} onClick={() => act("share", "share_context")}>
             Go online and make a join code
           </button>
         ) : null}

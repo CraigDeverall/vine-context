@@ -1,12 +1,14 @@
-// The context-graph mod: p2p-context-graph inside Claude Code's own UI.
+// The p2p-context-graph mod: shared contexts inside Claude Code's own UI.
 //
-// - A band above the prompt: the graph this chat uses, who's online, and the
-//   latest thing someone else synced, with a button that opens the panel.
-// - A status line entry, and a toast when someone else's change arrives.
-// - A panel (/graph): the graph drawn as SVG, the claims and questions with
-//   add, Undo and Withdraw, and the people with roles, removal and join codes.
+// - A band above the prompt: the contexts this chat uses, who's online, and the
+//   latest news (what others' changes meant for you, from the sync digest, or
+//   the latest thing someone synced), with a button that opens the panel.
+// - A status line entry, and a toast when someone else's change or a digest arrives.
+// - A panel (/context): the context drawn as SVG, the claims and questions with
+//   add, Undo and Withdraw, the people with roles, removal and join codes, and
+//   the attached contexts (attach, detach, write here, save for the folder).
 //
-// It reads through the p2p-context-graph MCP server's `graph_activity` tool,
+// It reads through the p2p-context-graph MCP server's `context_activity` tool,
 // which never uses up the join notices meant for the agent, and acts through
 // the server's ordinary tools.
 
@@ -26,6 +28,8 @@ const code = atom({ plugin: 'p2p-context-graph', key: 'code' } as const, null)
 const notice = atom({ plugin: 'p2p-context-graph', key: 'notice' } as const, null)
 const error = atom({ plugin: 'p2p-context-graph', key: 'error' } as const, null)
 const confirmRemove = atom({ plugin: 'p2p-context-graph', key: 'confirmRemove' } as const, null)
+/** The context the panel shows; null is the conversation's write context. */
+const viewing = atom({ plugin: 'p2p-context-graph', key: 'viewing' } as const, null)
 
 type Engine = EngineInterface
 
@@ -118,6 +122,7 @@ export function graphSvg(nodes: GraphNode[], edges: GraphEdge[], width = 640, he
 let server: string | undefined
 let poll: { cancel(): void } | undefined
 let seen: Set<string> | undefined
+let seenDigest: string | undefined
 let wantSnapshot = false
 
 /** Calls a tool on the p2p-context-graph server, finding its name on first use. */
@@ -146,7 +151,8 @@ async function call($: Engine, tool: string, args: Record<string, unknown> = {})
 
 async function refresh($: Engine) {
   try {
-    const a = (await call($, 'graph_activity', { limit: 40, snapshot: wantSnapshot })) as Activity
+    const which = await read($, viewing)
+    const a = (await call($, 'context_activity', { limit: 40, snapshot: wantSnapshot, ...(which ? { context: which } : {}) })) as Activity
     await update($, activity, () => a)
     await update($, error, () => null)
     const others = a.recent.filter(c => !c.mine && !c.held)
@@ -155,10 +161,15 @@ async function refresh($: Engine) {
       for (const c of fresh.slice(0, 3)) $.ui.toast(`${c.by} ${short(c.summary, 90)}`)
     }
     seen = new Set(a.recent.map(c => c.id))
+    // What others' changes meant for you (the sync digest): its first line as a toast.
+    const d = a.digest?.at(-1)
+    if (d && seenDigest !== undefined && d.at !== seenDigest && d.lines[0]) $.ui.toast(`${a.context}: ${short(d.lines[0], 110)}`)
+    seenDigest = d?.at ?? ''
     const top = others.find(c => c.kind !== 'create')
     await update($, latest, (): Latest | null => (top ? { by: top.by, summary: top.summary, at: top.at } : null))
     const away = a.members - 1
-    $.ui.status(`graph ${a.graph}${a.sharing ? (away ? ` · ${a.online.length}/${away} online` : '') : ' · offline'}`)
+    const more = a.attached.length > 1 ? ` +${a.attached.length - 1}` : ''
+    $.ui.status(`context ${a.context}${more}${a.sharing ? (away ? ` · ${a.online.length}/${away} online` : '') : ' · offline'}`)
   } catch (e) {
     await update($, error, () => (e as Error).message)
   }
@@ -169,7 +180,7 @@ async function act($: Engine, tool: string, args: Record<string, unknown>, done?
   try {
     const r = await call($, tool, args)
     await update($, notice, () => done ?? null)
-    if (tool === 'share_graph' && r && typeof r === 'object' && 'send' in r) await update($, code, () => String((r as { send: string }).send))
+    if (tool === 'share_context' && r && typeof r === 'object' && 'send' in r) await update($, code, () => String((r as { send: string }).send))
   } catch (e) {
     await update($, error, () => (e as Error).message)
   }
@@ -179,12 +190,12 @@ async function act($: Engine, tool: string, args: Record<string, unknown>, done?
 async function openPane($: Engine) {
   wantSnapshot = true
   await refresh($)
-  return $.ui.open({ id: PANE, title: 'Context graph', closeOnEscape: true })
+  return $.ui.open({ id: PANE, title: 'Contexts', closeOnEscape: true })
 }
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
-    await $.command.register({ name: 'graph', description: 'Open the context graph panel: the graph, its claims and questions, and its people' })
+    await $.command.register({ name: 'context', description: 'Open the contexts panel: the attached context graphs, their claims and questions, and their people' })
     poll?.cancel()
     seen = undefined
     poll = $.clock.every(POLL_MS, () => void refresh($))
@@ -192,9 +203,9 @@ export const register: Register = on => {
     return next(e)
   })
 
-  on('command.run', { command: 'graph' }, async $ => {
+  on('command.run', { command: 'context' }, async $ => {
     const r = await openPane($)
-    return { text: r.isPlaced ? 'Context graph panel opened.' : `The panel couldn't open here: ${r.reason}` }
+    return { text: r.isPlaced ? 'Contexts panel opened.' : `The panel couldn't open here: ${r.reason}` }
   })
 
   // The band above the prompt.
@@ -205,17 +216,22 @@ export const register: Register = on => {
     const l = await read($, latest)
     const now = await $.clock.now()
     const away = a.members - 1
+    const others = a.attached.filter(c => c.name !== a.context).map(c => c.name)
+    const d = a.digest?.at(-1)
+    // The latest news: what others' changes meant for you if that's newest, else the latest change from someone else.
+    const news = d && (!l || d.at >= l.at) ? `${short(d.lines[0] ?? '', 70)} (${ago(d.at, now)})` : l ? `${l.by} ${short(l.summary, 60)} (${ago(l.at, now)})` : ''
     return (
       <Box flexDirection="row" gap={1}>
         <Text color={a.sharing ? 'green' : undefined} dimColor={!a.sharing}>
           ●
         </Text>
         <Text>
-          {a.graph}
+          {a.context}
           <Text dimColor>
             {a.created_by && a.created_by !== a.you.name ? ` (${a.created_by}'s)` : ''}
+            {others.length ? ` + ${others.join(', ')}` : ''}
             {a.sharing ? (away ? ` · ${a.online.length}/${away} online` : ' · just you') : ' · offline'}
-            {l ? ` · ${l.by} ${short(l.summary, 60)} (${ago(l.at, now)})` : ''}
+            {news ? ` · ${news}` : ''}
           </Text>
         </Text>
         <Button key="open-graph" label="Open" onPress={() => void openPane($)} />
@@ -229,7 +245,8 @@ export const register: Register = on => {
     const { Box, Text, Button, Input, Select, Code } = els
     const a = await read($, activity)
     const err = await read($, error)
-    if (!a) return <Text dimColor>{err ? `Can't reach p2p-p2p-context-graph: ${err}` : 'Loading the context graph…'}</Text>
+    if (!a) return <Text dimColor>{err ? `Can't reach p2p-context-graph: ${err}` : 'Loading the contexts…'}</Text>
+    const ctx = { context: a.context }
     const current = await read($, tab)
     const now = await $.clock.now()
     const admin = a.you.role === 'admin'
@@ -248,10 +265,24 @@ export const register: Register = on => {
             · you are {a.you.name} ({a.you.role ?? 'removed'}) · {a.sharing ? `${a.online.length} online` : 'offline'} · {a.changes} changes
           </Text>
         </Text>
+        <Text dimColor>{a.description ?? 'No description yet: an admin can set one (describe_context), so agents know what goes here.'}</Text>
+        {a.attached.length > 1 && (
+          <Box flexDirection="row" gap={1} flexWrap="wrap">
+            <Text dimColor>Show:</Text>
+            {a.attached.map(c => (
+              <Button
+                key={`view-${c.name}`}
+                label={`${c.name === a.context ? '[' : ''}${c.name}${c.writes_here ? ' ✎' : ''}${c.name === a.context ? ']' : ''}`}
+                onPress={() => void update($, viewing, () => c.name).then(() => refresh($))}
+              />
+            ))}
+          </Box>
+        )}
         <Box flexDirection="row" gap={1}>
           {tabButton('graph', 'Graph')}
           {tabButton('items', 'Claims and questions')}
           {tabButton('people', 'People')}
+          {tabButton('contexts', 'Contexts')}
           <Button key="refresh" label="Refresh" onPress={() => void refresh($)} />
         </Box>
         {err && <Text color="red">{err}</Text>}
@@ -285,8 +316,8 @@ export const register: Register = on => {
         <Box flexDirection="column" gap={1}>
           {canWrite && (
             <Box flexDirection="column">
-              <Input key="add-claim" placeholder="Add a claim: one statement you believe is true" submitLabel="add" onSubmit={(v: string) => v.trim() && void act($, 'add_claim', { text: v.trim() }, 'Added. Undo works for 10 seconds.')} />
-              <Input key="ask-question" placeholder="Ask a question the group needs to answer" submitLabel="ask" onSubmit={(v: string) => v.trim() && void act($, 'ask_question', { text: v.trim() }, 'Asked. Undo works for 10 seconds.')} />
+              <Input key="add-claim" placeholder="Add a claim: one statement you believe is true" submitLabel="add" onSubmit={(v: string) => v.trim() && void act($, 'add_claim', { text: v.trim(), ...ctx }, 'Added. Undo works for 10 seconds.')} />
+              <Input key="ask-question" placeholder="Ask a question the group needs to answer" submitLabel="ask" onSubmit={(v: string) => v.trim() && void act($, 'ask_question', { text: v.trim(), ...ctx }, 'Asked. Undo works for 10 seconds.')} />
             </Box>
           )}
           {note && <Text dimColor>{note}</Text>}
@@ -308,15 +339,52 @@ export const register: Register = on => {
                   </Text>
                 </Text>
                 {held ? (
-                  <Button key={`undo-${n.key}`} label="Undo" onPress={() => void act($, 'take_back', { id: held.id }, 'Taken back. It never left this machine.')} />
+                  <Button key={`undo-${n.key}`} label="Undo" onPress={() => void act($, 'take_back', { id: held.id, ...ctx }, 'Taken back. It never left this machine.')} />
                 ) : (
                   canWrite &&
-                  (mine || admin) && <Button key={`withdraw-${n.key}`} label="Withdraw" onPress={() => void act($, 'withdraw', { id: n.key }, 'Withdrawn. It stays in the history.')} />
+                  (mine || admin) && <Button key={`withdraw-${n.key}`} label="Withdraw" onPress={() => void act($, 'withdraw', { id: n.key, ...ctx }, 'Withdrawn. It stays in the history.')} />
                 )}
               </Box>
             )
           })}
           {ended > 0 && <Text dimColor>{ended} withdrawn item(s) stay in the history (see the graph).</Text>}
+        </Box>
+      )
+    } else if (current === 'contexts') {
+      const loose = a.your_contexts.filter(n => !a.attached.some(c => c.name === n))
+      const note = await read($, notice)
+      body = (
+        <Box flexDirection="column" gap={1}>
+          <Text dimColor>Attached to this conversation (reads search all of them; ✎ is where writes go unless the agent names another):</Text>
+          {a.attached.map(c => (
+            <Box key={`ctx-${c.name}`} flexDirection="row" gap={1} justifyContent="space-between">
+              <Text>
+                {c.name}
+                {c.writes_here ? ' ✎' : ''}
+                <Text dimColor> · {c.description ?? 'no description'}</Text>
+              </Text>
+              <Box flexDirection="row" gap={1}>
+                {!c.writes_here && <Button key={`write-${c.name}`} label="Write here" onPress={() => void act($, 'attach_context', { name: c.name, write_here: true }, `Writes now go to '${c.name}'.`)} />}
+                {a.attached.length > 1 && (
+                  <Button
+                    key={`detach-${c.name}`}
+                    label="Detach"
+                    onPress={() => void update($, viewing, () => null).then(() => act($, 'detach_context', { name: c.name }, `'${c.name}' is detached from this conversation (it stays on this machine).`))}
+                  />
+                )}
+              </Box>
+            </Box>
+          ))}
+          {loose.length > 0 && (
+            <Box flexDirection="row" gap={1} flexWrap="wrap">
+              <Text dimColor>Also on this machine:</Text>
+              {loose.map(n => (
+                <Button key={`attach-${n}`} label={`+ ${n}`} onPress={() => void act($, 'attach_context', { name: n }, `'${n}' is attached: reads search it too.`)} />
+              ))}
+            </Box>
+          )}
+          <Button key="save-folder" label="Use these contexts for every chat in this folder" onPress={() => void act($, 'save_folder_contexts', {}, 'Saved to .p2p-context in this folder.')} />
+          {note && <Text dimColor>{note}</Text>}
         </Box>
       )
     } else {
@@ -347,7 +415,7 @@ export const register: Register = on => {
                       key={`role-${p.fingerprint}`}
                       value={p.role}
                       options={['reader', 'contributor', 'admin'].map(r => ({ key: r, value: r, label: r }))}
-                      onSelect={(r: string) => r !== p.role && void act($, 'set_peer_role', { name: p.name, role: r }, `${p.name} is now ${r}.`)}
+                      onSelect={(r: string) => r !== p.role && void act($, 'set_peer_role', { name: p.name, role: r, ...ctx }, `${p.name} is now ${r}.`)}
                     />
                   )}
                   {pending === p.fingerprint ? (
@@ -356,7 +424,7 @@ export const register: Register = on => {
                       label="Really remove"
                       onPress={() => {
                         void update($, confirmRemove, () => null)
-                        void act($, 'remove_peer', { name: p.name }, `${p.name} was removed. They keep the copy they already had.`)
+                        void act($, 'remove_peer', { name: p.name, ...ctx }, `${p.name} was removed. They keep the copy they already had.`)
                       }}
                     />
                   ) : (
@@ -368,18 +436,8 @@ export const register: Register = on => {
           ))}
           {admin && (
             <Box flexDirection="column">
-              <Input key="invite" placeholder="Invite someone: who is it for? (Enter makes a join code)" submitLabel="make code" onSubmit={(v: string) => void act($, 'share_graph', v.trim() ? { label: v.trim() } : {}, 'Send this line privately, to that one person:')} />
+              <Input key="invite" placeholder="Invite someone: who is it for? (Enter makes a join code)" submitLabel="make code" onSubmit={(v: string) => void act($, 'share_context', v.trim() ? { label: v.trim(), ...ctx } : ctx, 'Send this line privately, to that one person:')} />
               {line && (Code ? <Code source={line} /> : <Text>{line}</Text>)}
-            </Box>
-          )}
-          {a.your_graphs.length > 1 && (
-            <Box flexDirection="row" gap={1} flexWrap="wrap">
-              <Text dimColor>Switch this chat to:</Text>
-              {a.your_graphs
-                .filter((g: string) => g !== a.graph)
-                .map((g: string) => (
-                  <Button key={`use-${g}`} label={g} onPress={() => void act($, 'use_graph', { name: g }, `This chat now uses '${g}'.`)} />
-                ))}
             </Box>
           )}
           <Text dimColor>

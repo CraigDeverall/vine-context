@@ -1,5 +1,5 @@
-// What the context-graph mod keeps in $.state: the latest activity and
-// snapshot from the p2p-context-graph MCP server, and the panel's choices.
+// What the p2p-context-graph mod keeps in $.state: the latest activity and
+// snapshot of a context from the MCP server, and the panel's choices.
 
 export type Person = {
   name: string
@@ -47,11 +47,15 @@ export type Activity = {
   relays_up: number
   changes: number
   recent: Change[]
-  your_graphs: string[]
+  context: string
+  description: string | null
+  attached: { name: string; description: string | null; writes_here: boolean }[]
+  your_contexts: string[]
+  digest: { at: string; lines: string[] }[]
   snapshot?: { nodes: GraphNode[]; edges: GraphEdge[]; truncated: boolean }
 }
 
-export type Tab = 'graph' | 'items' | 'people'
+export type Tab = 'graph' | 'items' | 'people' | 'contexts'
 
 /** The latest line from someone else, for the band. */
 export type Latest = { by: string; summary: string; at: string }
@@ -66,6 +70,7 @@ declare module 'claude-code' {
       notice: string | null
       error: string | null
       confirmRemove: string | null
+      viewing: string | null
     }
   }
 }

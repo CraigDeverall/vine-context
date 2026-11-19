@@ -37,7 +37,7 @@ describe("p2pcg mcp", () => {
     const { tools } = await client.listTools();
     const names = tools.map((t) => t.name);
     expect(names).toEqual(
-      expect.arrayContaining(["add_claim", "search", "beliefs", "graph_info", "model_guide", "share_graph", "revoke_invite", "join_graph", "remove_peer"]),
+      expect.arrayContaining(["add_claim", "search", "beliefs", "context_info", "model_guide", "share_context", "revoke_invite", "join_context", "remove_peer"]),
     );
     const add = tools.find((t) => t.name === "add_claim")!;
     expect(add.inputSchema.required).toEqual(["text"]);
@@ -46,11 +46,11 @@ describe("p2pcg mcp", () => {
     expect(client.getInstructions()).toMatch(/model_guide/);
   });
 
-  it("offers a join prompt that passes the code to join_graph", async () => {
+  it("offers a join prompt that passes the code to join_context", async () => {
     const { prompts } = await client.listPrompts();
     expect(prompts.map((p) => p.name)).toContain("join");
     const r = await client.getPrompt({ name: "join", arguments: { code: "p2pcg1_abc.def" } });
-    expect((r.messages[0]!.content as { text: string }).text).toMatch(/join_graph with the code exactly as given[\s\S]*fingerprint/);
+    expect((r.messages[0]!.content as { text: string }).text).toMatch(/join_context with the code exactly as given[\s\S]*fingerprint/);
     expect(((r.messages[0]!.content as { text: string }).text)).toContain("p2pcg1_abc.def");
   });
 
@@ -69,7 +69,7 @@ describe("p2pcg mcp", () => {
 
   it("serves the model guide and graph info", async () => {
     expect(textOf(await client.callTool({ name: "model_guide", arguments: {} }))).toMatch(/# Model: Claims and Questions[\s\S]*Before you add/);
-    const info = JSON.parse(textOf(await client.callTool({ name: "graph_info", arguments: {} })));
+    const info = JSON.parse(textOf(await client.callTool({ name: "context_info", arguments: { context: "e2e" } })));
     expect(info).toMatchObject({ graph: "e2e", model: { name: "temporal-claims" }, embedder: "hash-256", created_by: "e2e-user", you: { role: "admin", name: "e2e-user" } });
     expect(info.nodes.Claim).toBeGreaterThanOrEqual(1);
   });

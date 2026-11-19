@@ -197,6 +197,45 @@ describe("replicated graphs", () => {
     }, 30_000);
   });
 
+  it("tells each member what others' changes mean for them: replaced, answered, conflicts, unsettled and possible overlaps", async () => {
+    const alice = await member("alice", `team${++n}`);
+    const old = await alice.call("add_claim", { text: "The outage lasts 4 minutes" });
+    const pool = await alice.call("add_claim", { text: "The firmware update causes the nightly drop" });
+    const why = await alice.call("ask_question", { text: "Why does the WAN drop every night?" });
+    await alice.call("add_claim", { text: "The orders database connection pool ran out at 13:57 on Monday" });
+    await alice.local.request("describe_context", { description: "Our home network outage investigation" });
+    const bob = await join(alice, "bob");
+    const carol = await join(alice, "carol");
+    // The description reached the newcomers with the log, and a joiner gets a briefing.
+    expect((await bob.local.request<Row>("info")).description).toBe("Our home network outage investigation");
+    const brief = await bob.local.request<Row>("briefing");
+    expect(brief).toMatchObject({ holds: { Claim: 3, Question: 1 }, open_question_count: 1, open_questions: [expect.objectContaining({ text: "Why does the WAN drop every night?", by: "alice" })] });
+    await waitFor(async () => (await alice.local.request<Row>("status")).links.filter((l: Row) => l.state === "active").length === 2);
+    await waitFor(async () => (await bob.local.request<Row>("status")).links.filter((l: Row) => l.state === "active").length === 2);
+
+    await bob.call("add_claim", { text: "The outage lasts 6 minutes", replaces: [old.id] });
+    await bob.call("add_claim", { text: "The ISP restarts the ONT every night", answers: [why.id], contradicts: [pool.id] });
+    await carol.call("add_claim", { text: "The outage lasts 5 minutes", replaces: [old.id] });
+    await bob.call("add_claim", { text: "The orders database connection pool ran out of connections at 13:57" });
+
+    const lines = () => alice.events.filter((e) => e.event === "digest").flatMap((e) => e.data.lines as string[]);
+    const expected = [
+      /bob replaced your claim c_\S+ "The outage lasts 4 minutes" with c_\S+ "The outage lasts 6 minutes"/,
+      /bob answered your question q_\S+ "Why does the WAN drop every night\?": c_\S+ "The ISP restarts the ONT every night"/,
+      /New conflict: bob's claim c_\S+ "The ISP restarts the ONT every night" contradicts your claim c_\S+ "The firmware update causes the nightly drop"/,
+      /Unsettled: 2 current claims replace c_\S+ "The outage lasts 4 minutes"/,
+      /Possible overlap: bob's new claim c_\S+ "The orders database connection pool ran out of connections at 13:57" and alice's claim/,
+    ];
+    // Each arrives in its own sync: wait for all of them.
+    await waitFor(() => expected.every((re) => re.test(lines().join("\n"))), 30_000).catch(() => {
+      throw new Error(`digest lines so far:\n${lines().join("\n")}`);
+    });
+    // The mod's feed carries the latest digest too.
+    expect((await alice.local.request<Row>("activity")).digest.length).toBeGreaterThan(0);
+    // Bob's own writes aren't news to bob.
+    expect(bob.events.filter((e) => e.event === "digest").flatMap((e) => e.data.lines).join("\n")).not.toMatch(/bob replaced/);
+  });
+
   it("keeps sharing across a restart, and stop_sharing stays off", async () => {
     const alice = await member("alice", `team${++n}`);
     expect((await alice.local.request<Row>("status")).sharing).toBe(true);

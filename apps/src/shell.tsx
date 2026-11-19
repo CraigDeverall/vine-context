@@ -108,7 +108,7 @@ function Shell() {
   const pick = async (name: string) => {
     setActive(name);
     setGen((g) => g + 1);
-    if (client) setTools(await appTools(client)); // the model's tools change after use_graph or a role change
+    if (client) setTools(await appTools(client)); // the model's tools change after use_context or a role change
     history.replaceState(null, "", `?view=${name}${location.hash}`);
   };
 

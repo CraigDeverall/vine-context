@@ -8,7 +8,7 @@ npm install && npm run build
 node dist/cli.js demo
 ```
 
-`demo` opens the views in your browser on an example graph (a copy; nothing
+`demo` opens the views in your browser on an example context (a copy; nothing
 is changed). No account, API key or model download is needed.
 
 ![The graph explorer on the example incident graph](docs/images/explorer.jpg)
@@ -22,7 +22,7 @@ made a call.
 
 p2p-context-graph gives the group one shared graph of **claims** and
 **questions**. One person creates it and sends each person a join code; they
-paste it into their agent, get their own full copy, and everyone in the graph
+paste it into their agent, get their own full copy, and everyone in the context
 is told who joined. From then on every agent reads and writes its own copy,
 and the members' machines swap what each is missing whenever they're online.
 It keeps working offline, and when the person who made it is away.
@@ -97,11 +97,11 @@ claude plugin install p2p-context-graph@p2p-context-graph
 ```
 
 **In Claude Code, the plugin also adds a mod** to Claude Code's own interface:
-- a band above the prompt: the graph this chat uses, who's online, and the latest thing someone else synced (with *Open*);
-- a status line entry, and a toast when someone else's change arrives;
-- `/graph`: a panel beside the chat with the graph drawn as SVG (desktop app and VS Code), the claims and questions (add, *Undo* while a write is still on your machine, *Withdraw*), and the people (roles, *Remove* and join codes for admins).
+- a band above the prompt: the contexts this chat uses, who's online, and the latest news: what others' changes meant for you, or the latest thing someone synced (with *Open*);
+- a status line entry, and a toast when someone else's change or a sync digest arrives;
+- `/context`: a panel beside the chat with the context drawn as SVG (desktop app and VS Code), the claims and questions (add, *Undo* while a write is still on your machine, *Withdraw*), the people (roles, *Remove* and join codes for admins), and the attached contexts (attach, detach, where writes go, and saving them for the folder).
 
-The mod reads through the `graph_activity` tool, which never uses up the join notices meant for your agent. Its source is [`plugin/hooks/register.tsx`](plugin/hooks/register.tsx); `claude plugin test plugin` runs its tests.
+The mod reads through the `context_activity` tool, which never uses up the join notices meant for your agent. Its source is [`plugin/hooks/register.tsx`](plugin/hooks/register.tsx); `claude plugin test plugin` runs its tests.
 
 **In Codex**, the same `plugin/` folder is a Codex plugin (skills and the MCP server; Codex has no plugin slash commands or mods, so joining is the `join-context-graph` skill: paste the code, and the views show in the chat):
 
@@ -119,8 +119,8 @@ To use the example data instead of a new graph, add `P2PCG_DATA_DIR=<the folder 
 1. **You:** create a graph (*"start a context graph called incident-42"*) or say *"invite Sam to my context graph"*. Either gives you a join code straight away, as a line to send:
    `Join my context graph: /p2p-context-graph:join p2pcg1_…`
    Send it privately, to that one person. Others see you by your git name until you change it (*"set my name to …"*, or *Change* in the console).
-2. **Them:** run that command, or paste the code into their agent, while your machine is online (it answers the code). They're in straight away, with a full copy of the graph.
-3. **Everyone in the graph is told** who joined, on their agent's next action: name, role, which invite, who let them in, key fingerprint, agent and version, operating system. The console's *People* list shows the same. If it isn't who you expected, remove them (*"remove sam"*, or *Remove* in the console).
+2. **Them:** run that command, or paste the code into their agent, while your machine is online (it answers the code). They're in straight away, with a full copy, and their agent gives them a briefing: what it holds, the open questions, the conflicts, the latest.
+3. **Everyone in the context is told** who joined, on their agent's next action: name, role, which invite, who let them in, key fingerprint, agent and version, operating system. The console's *People* list shows the same. If it isn't who you expected, remove them (*"remove sam"*, or *Remove* in the console).
 
 From then on everyone works on their own copy, limited by their role (contributor unless you said otherwise: *"invite Sam as a reader"*). Whatever anyone writes reaches the others the next time their machines are both online, directly or through any other member.
 
@@ -129,12 +129,33 @@ From then on everyone works on their own copy, limited by their role (contributo
 - There's no approval step: the single-use code is the credential, so send it privately.
 - An unused code expires after 24 hours (*"invite Sam, valid for a week"* sets it).
 - `sharing_status` and the console list the invites; `revoke_invite` or *Cancel* stops one working.
-- A code isn't needed again: a joined graph is on the member's machine, so *"use the incident-42 graph"* (`use_graph`) switches to it in any later session.
+- A code isn't needed again: a joined context is on the member's machine, so *"use the incident-42 context"* (`use_context` or `attach_context`) brings it back in any later conversation.
+
+**Several contexts in one conversation.** Each context has a description of what it's for (*"describe this context as …"*, or `describe_context`).
+- *"Also use the infra context"* (`attach_context`) adds one; `detach_context` drops one; `use_context` switches to just one.
+- Reads (`search`, `beliefs`, `open_questions`, `conflicts`, `recent`) run on every attached context, each result saying which.
+- Each write goes to one context: the agent picks it by the descriptions (or asks you), else it goes to the write context.
+
+**A folder's contexts.** A `.p2p-context` file in a project folder attaches its contexts to every new conversation started there:
+
+```json
+{ "contexts": [{ "name": "team", "id": "0193…" }, { "name": "incident-42", "id": "0194…" }], "write_to": "team" }
+```
+
+*"Use these contexts for every chat in this folder"* (`save_folder_contexts`) writes it. Contexts are found by id, so the file works on teammates' machines; it holds no secrets, so it can be committed. A teammate who isn't in one of them is told to ask for a join code.
+
+**What a sync tells you.** When changes from others arrive (live, or catching up after being offline), each member's agent is told what they mean for that person:
+- your claim was **replaced**, or your question **answered**;
+- a **new conflict** (a claim contradicts another, yours first);
+- **unsettled**: two current claims replace the same claim;
+- a **possible overlap**: a new claim close to an existing one by someone else, with no link between them, for the agent to look at.
+
+Nothing is linked automatically: the agent records SUPPORTS, CONTRADICTS or REPLACES with you.
 
 **Undo really undoes, for 10 seconds.** A write stays on your machine for 10 seconds before it is sent: *Undo* on the receipt (or `take_back`) removes it without trace, so a slip such as personal details in the wrong chat never reaches anyone. After that it can only be *withdrawn*, which keeps it in everyone's history.
 
 **Staying in sync.**
-- Sharing is on by default and survives restarts. *"Stop sharing"* takes a graph offline until you share again; your copy keeps working.
+- Sharing is on by default and survives restarts. *"Stop sharing"* takes a context offline until you share again; your copy keeps working.
 - Each graph's host runs while an agent uses it. To keep your graphs syncing without an agent open, and after a reboot, run `node dist/cli.js autostart on` (macOS: `p2pcg up` at login).
 - `p2pcg status --graph <name>` shows the members, the live links to them, and whether the signalling relays are reachable.
 

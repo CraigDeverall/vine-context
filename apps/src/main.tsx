@@ -21,7 +21,7 @@ const VIEWS: Record<string, (p: { b: Bridge; open?: (p: Panel) => void }) => Rea
   conflicts: Conflicts,
 };
 
-const PANEL_TOOL: Record<Panel, string> = { explorer: "explore_graph", console: "open_console" };
+const PANEL_TOOL: Record<Panel, string> = { explorer: "explore_context", console: "open_console" };
 
 function Root() {
   const b = useBridge();

@@ -267,8 +267,8 @@ None at the moment. The four earlier ones are decided in section 2.
   again (for example after losing its copy).
 - **Undo of a link or withdrawal** rebuilds the store from the log; Undo of a
   claim or question just deletes it (nothing else can refer to it yet).
-- **Joined graphs are local graphs.** `join_graph` puts the graph on this
-  machine under its own name (or `name-2` …), and from then on `use_graph`
+- **Joined graphs are local graphs.** `join_context` puts the graph on this
+  machine under its own name (or `name-2` …), and from then on `use_context`
   switches to it; `leave_graph` is gone.
 - **Where it's tested:** `test/replica.test.ts` (real WebRTC between hosts in
   one process: join, sync both ways, Undo in the hold, offline catch-up,
@@ -278,3 +278,30 @@ None at the moment. The four earlier ones are decided in section 2.
   `test/convert.test.ts` (old graphs), `test/nostr.test.ts` (relay keepalive).
   A member link that goes silent is dropped by its pings, but that has no test
   of its own yet.
+
+## 14. Contexts, descriptions and the sync digest (2026-11-19)
+
+- **Contexts.** What people and agents see calls each graph a *context*
+  (context graph); the code still says graph. Tools: `context_info`,
+  `use_context`, `attach_context`, `detach_context`, `join_context`,
+  `share_context`, `explore_context`, `context_activity`, `describe_context`,
+  `save_folder_contexts`.
+- **Several per conversation.** The session keeps a set of attached contexts.
+  Reads run on all of them and label each row with its context; a write goes
+  to the context the call names, else the write context. The write tools'
+  descriptions list the attached contexts with their descriptions, so the
+  agent can route each claim.
+- **Descriptions** are a membership-style change, `describe`, made by an
+  admin; the latest one counts, and the create change may carry the first.
+- **`.p2p-context`** in a folder (or a parent) lists contexts by name and id,
+  and the write context; a session started there attaches them. See
+  `src/mcp/folder.ts`.
+- **The sync digest** (`src/host/digest.ts`): after changes from other members
+  are applied, the host works out what they mean for its person (claims of
+  theirs replaced, questions answered, new conflicts, two current claims
+  replacing one, possible overlaps with no link between them) and sends the
+  lines to its sessions as `News:` and to the mod's feed. A possible overlap
+  is a search hit by another author sharing at least 3 content words and 40%
+  of the shorter text's. Nothing is linked automatically.
+- **Joining** returns a briefing (what the context holds, open questions,
+  conflicts, latest), since everything in it is new to the joiner.

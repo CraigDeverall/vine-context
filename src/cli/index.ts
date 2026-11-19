@@ -9,33 +9,33 @@ const USAGE = `p2pcg ${pkg.version}: a shared context graph of claims and questi
 Usage: p2pcg <command> [options]
 
 Commands:
-  mcp [--graph NAME]                  Run the MCP server on stdio (starts the graph's host if needed)
-  host [--graph NAME] [--share] [--idle SECONDS]
-                                      Run a graph's host in the foreground (--share prints a new join code)
-  host stop [--graph NAME]            Stop a graph's host
-  up                                  Start the host of every graph on this machine that is sharing (in the background)
-  autostart on|off                    Run \`p2pcg up\` at login (macOS), so your graphs sync after a reboot
-  demo [--port N] [--no-open]         Open the views on an example graph (a copy; nothing of yours changes)
-  ui [--graph NAME] [--port N] [--open]
+  mcp [--context NAME]                Run the MCP server on stdio (a folder's .p2p-context picks the contexts; else NAME or default)
+  host [--context NAME] [--share] [--idle SECONDS]
+                                      Run a context's host in the foreground (--share prints a new join code)
+  host stop [--context NAME]          Stop a context's host
+  up                                  Start the host of every context on this machine that is sharing (in the background)
+  autostart on|off                    Run \`p2pcg up\` at login (macOS), so your contexts sync after a reboot
+  demo [--port N] [--no-open]         Open the views on an example context (a copy; nothing of yours changes)
+  ui [--context NAME] [--port N] [--open]
                                       Show the console and explorer in a browser
-  status [--graph NAME]               Show a graph's host: sharing, members, links, relays, invites
+  status [--context NAME]             Show a context's host: sharing, members, links, relays, invites
   whoami                              Show your name and key fingerprint
   doctor                              Check that this machine can run p2pcg
   --version                           Print the version
 
 Environment:
-  P2PCG_USER        Your name in graphs (default: the name you set with set_my_name, else git's user.name, else your login name)
-  P2PCG_GRAPH       The graph to use (default: default)
-  P2PCG_DATA_DIR    Where graphs live (default: ~/.local/share/p2p-context-graph)
-  P2PCG_AUTO_SHARE  off: new graphs don't sync until you share them
+  P2PCG_USER        Your name in contexts (default: the name you set with set_my_name, else git's user.name, else your login name)
+  P2PCG_CONTEXT     The context to use when the folder has no .p2p-context (default: default)
+  P2PCG_DATA_DIR    Where contexts live (default: ~/.local/share/p2p-context-graph)
+  P2PCG_AUTO_SHARE  off: new contexts don't sync until you share them
   P2PCG_HOLD_MS     How long a write stays on this machine (Undo) before it is sent (default 10000)
   P2PCG_RELAYS      Nostr relays for signalling, comma-separated
   P2PCG_ICE         STUN/TURN servers, comma-separated (turn:user:pass@host:port)`;
 
-const graphOpts = { graph: { type: "string" } } as const;
-const graphName = (v?: string) => v ?? process.env.P2PCG_GRAPH ?? "default";
+const graphOpts = { graph: { type: "string" }, context: { type: "string" } } as const;
+const graphName = (v?: string) => v ?? process.env.P2PCG_CONTEXT ?? process.env.P2PCG_GRAPH ?? "default";
 
-async function sessionFactory(values: { graph?: string }) {
+async function sessionFactory(values: { graph?: string; context?: string }) {
   const [{ Session }, { ensureHost }, { defaultDataDir }, { loadIdentity, defaultName }, signal] = await Promise.all([
     import("../mcp/server.js"),
     import("../host/client.js"),
@@ -44,12 +44,13 @@ async function sessionFactory(values: { graph?: string }) {
     import("../p2p/signal.js"),
   ]);
   const dataDir = defaultDataDir();
-  const graph = graphName(values.graph);
+  const graph = graphName(values.context ?? values.graph);
   const log = (m: string) => console.error(`p2pcg: ${m}`);
   let ui: Promise<{ url: string }> | undefined;
   const make = (withBrowserView: boolean): InstanceType<typeof Session> =>
     new Session({
       local: () => ensureHost({ dataDir, graph }),
+      cwd: process.cwd(),
       openLocal: (g) => ensureHost({ dataDir, graph: g }),
       dataDir,
       identity: () => loadIdentity(dataDir, defaultName(dataDir)),
@@ -153,14 +154,14 @@ async function ui(args: string[]): Promise<number> {
 
 async function host(args: string[]): Promise<number> {
   if (args[0] === "stop") {
-    const { values } = parseArgs({ args: args.slice(1), options: { graph: { type: "string" } } });
+    const { values } = parseArgs({ args: args.slice(1), options: graphOpts });
     const [{ LocalHost }, { socketPath }, { defaultDataDir }] = await Promise.all([
       import("../host/client.js"),
       import("../host/state.js"),
       import("../core/graph.js"),
     ]);
     try {
-      const c = await LocalHost.connect(socketPath(defaultDataDir(), graphName(values.graph)));
+      const c = await LocalHost.connect(socketPath(defaultDataDir(), graphName(values.context ?? values.graph)));
       await c.request("shutdown");
       c.close();
       console.log("Host stopped.");
@@ -180,7 +181,7 @@ async function host(args: string[]): Promise<number> {
   try {
     const h = await Host.start({
       dataDir: defaultDataDir(),
-      graph: graphName(values.graph),
+      graph: graphName(values.context ?? values.graph),
       user: defaultName(defaultDataDir()),
       idleSeconds: values.idle ? Number(values.idle) : 0,
       log,
@@ -202,14 +203,14 @@ async function host(args: string[]): Promise<number> {
 }
 
 async function status(args: string[]): Promise<number> {
-  const { values } = parseArgs({ args, options: { graph: { type: "string" } } });
+  const { values } = parseArgs({ args, options: graphOpts });
   const [{ LocalHost }, { socketPath }, { defaultDataDir }] = await Promise.all([
     import("../host/client.js"),
     import("../host/state.js"),
     import("../core/graph.js"),
   ]);
   try {
-    const c = await LocalHost.connect(socketPath(defaultDataDir(), graphName(values.graph)));
+    const c = await LocalHost.connect(socketPath(defaultDataDir(), graphName(values.context ?? values.graph)));
     console.log(JSON.stringify(await c.request("status"), null, 2));
     c.close();
     return 0;

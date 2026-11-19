@@ -80,26 +80,28 @@ describe("MCP sessions on replicated graphs", () => {
     const bob = await agent("bob", "bobs-notes");
 
     await bob.call("add_claim", { text: "Bob's private note" });
-    expect((await bob.call("graph_info")).using).toBe("your graph 'bobs-notes'");
+    expect((await bob.call("context_info")).using).toBe("your context 'bobs-notes'");
     await alice.call("add_claim", { text: "Alice's finding" });
 
-    const shared = await alice.call("share_graph", { label: "for Bob" });
+    const shared = await alice.call("share_context", { label: "for Bob" });
     expect(shared.send).toBe(`Join my context graph: /p2p-context-graph:join ${shared.code}`);
     const before = bob.changes();
-    const joined = await bob.call("join_graph", { code: `Here you go: ${shared.code} thanks` });
-    expect(joined).toMatchObject({ joined: "alice's graph 'team'", here_as: "team", role: "contributor", told: expect.stringMatching(/Everyone/) });
+    const joined = await bob.call("join_context", { code: `Here you go: ${shared.code} thanks` });
+    expect(joined).toMatchObject({ joined: "alice's context 'team'", here_as: "team", role: "contributor", told: expect.stringMatching(/Everyone/) });
     expect(joined.your_fingerprint).toMatch(/^[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}$/);
     expect(bob.changes()).toBeGreaterThan(before);
-    expect((await bob.call("graph_info")).using).toBe("'team' (alice's graph; you are a contributor)");
-    // Bob's copy already has Alice's claim; his own graph is untouched.
-    expect((await bob.call("search", { query: "finding" })).map((r: any) => r.text)).toEqual(["Alice's finding"]);
+    expect((await bob.call("context_info")).using).toBe("'team' (alice's context; you are a contributor)");
+    // Bob's copy already has Alice's claim, and both of bob's contexts are attached: reads search both, saying which.
+    expect((await bob.call("search", { query: "finding", context: "team" })).map((r: any) => r.text)).toEqual(["Alice's finding"]);
+    const both = await bob.call("search", { query: "Alice's finding Bob's note" });
+    expect(new Set(both.map((r: any) => r.context))).toEqual(new Set(["team", "bobs-notes"]));
 
     // Alice's agent hears about Bob on its next tool result, with his agent.
-    const news = await alice.raw("graph_info");
-    expect(news).toMatch(/^News: bob joined your graph 'team' as contributor with the invite 'for Bob'/);
+    const news = await alice.raw("context_info");
+    expect(news).toMatch(/^News: bob joined your context 'team' as contributor with the invite 'for Bob'/);
     expect(news).toContain(joined.your_fingerprint);
     expect(news).toContain("bob-agent 1.2.3");
-    expect(await alice.raw("graph_info")).not.toMatch(/News:/); // once only
+    expect(await alice.raw("context_info")).not.toMatch(/News:/); // once only
 
     // Writes flow both ways.
     await bob.call("add_claim", { text: "Bob adds to the team graph" });
@@ -110,14 +112,14 @@ describe("MCP sessions on replicated graphs", () => {
     await waitFor(async () => Boolean(await find(bob, "Alice replies in the team graph")));
 
     // Bob's own graph is still his.
-    await bob.call("use_graph", { name: "bobs-notes" });
+    await bob.call("use_context", { name: "bobs-notes" });
     expect((await bob.call("search", { query: "note" })).map((r: any) => r.text)).toEqual(["Bob's private note"]);
   });
 
   it("rejects text that isn't a join code, and says what to do with an old link", async () => {
     const bob = await agent("bob", "own");
-    await expect(bob.call("join_graph", { code: "hello there" })).rejects.toThrow(/not a p2pcg join code/);
-    await expect(bob.call("join_graph", { code: "p2pcg://join/abc#k=def" })).rejects.toThrow(/old p2pcg:\/\/ join link/);
-    await expect(bob.call("join_graph", { code: "p2pcg1_abc.def" })).rejects.toThrow(/damaged or cut short/);
+    await expect(bob.call("join_context", { code: "hello there" })).rejects.toThrow(/not a p2pcg join code/);
+    await expect(bob.call("join_context", { code: "p2pcg://join/abc#k=def" })).rejects.toThrow(/old p2pcg:\/\/ join link/);
+    await expect(bob.call("join_context", { code: "p2pcg1_abc.def" })).rejects.toThrow(/damaged or cut short/);
   });
 });

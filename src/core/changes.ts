@@ -19,10 +19,10 @@ export const ROLES: Role[] = ["reader", "contributor", "admin"];
 /** Writes to the graph's content. */
 export type DataKind = "claim" | "question" | "link" | "withdraw" | "import";
 /** Changes to who is in the graph. */
-export type MemberKind = "create" | "add_member" | "set_role" | "remove_member" | "rename";
+export type MemberKind = "create" | "add_member" | "set_role" | "remove_member" | "rename" | "describe";
 export type Kind = DataKind | MemberKind;
 export const DATA_KINDS = new Set<Kind>(["claim", "question", "link", "withdraw", "import"]);
-export const MEMBER_KINDS = new Set<Kind>(["create", "add_member", "set_role", "remove_member", "rename"]);
+export const MEMBER_KINDS = new Set<Kind>(["create", "add_member", "set_role", "remove_member", "rename", "describe"]);
 
 export interface Change {
   /** UUIDv7: unique, and roughly time-ordered. */

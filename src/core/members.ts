@@ -10,6 +10,8 @@
 // Conflicts between admins: removal beats a later role change (a removed key
 // stays out until it is added again); otherwise the later change wins. The
 // graph's creator can't be removed or demoted, so a graph always has an admin.
+// The context's description (what it is for, so agents can tell where a claim
+// belongs) is set by an admin with `describe`; the latest one counts.
 
 import { compareChanges, RANK, ROLES, type Change, type Role } from "./changes.js";
 import { fingerprint, NAME_RE } from "./identity.js";
@@ -38,13 +40,16 @@ export class Members {
   readonly graphId?: string;
   readonly graphName?: string;
   readonly createdAt?: string;
+  /** What this context is for, as its admins described it. */
+  description: string | null = null;
+  descriptionSetBy: string | null = null;
   private members = new Map<string, Member>();
   private spans = new Map<string, Span[]>();
   /** Membership changes that were refused, with why: shown in status, never applied. */
   readonly refused: { id: string; reason: string }[] = [];
 
   constructor(changes: Iterable<Change>) {
-    const list = [...changes].filter((c) => c.kind === "create" || c.kind === "add_member" || c.kind === "set_role" || c.kind === "remove_member" || c.kind === "rename");
+    const list = [...changes].filter((c) => ["create", "add_member", "set_role", "remove_member", "rename", "describe"].includes(c.kind));
     list.sort(compareChanges);
     const create = list.find((c) => c.kind === "create" && c.id === c.graph);
     if (!create) return;
@@ -68,6 +73,11 @@ export class Members {
         const name = cleanName(b.creator_name) ?? "creator";
         this.put({ key: c.author, name, role: "admin", joined_at: c.at, added_by: c.author, creator: true, named_at: c.at });
         this.span(c.author, t, "admin");
+        const d = cleanDescription(b.description);
+        if (d) {
+          this.description = d;
+          this.descriptionSetBy = c.author;
+        }
         return;
       }
       case "add_member": {
@@ -109,6 +119,12 @@ export class Members {
         if (m.creator) return "the graph's creator can't be removed";
         m.removed_at = c.at;
         this.span(m.key, t, null);
+        return;
+      }
+      case "describe": {
+        if (!isAdmin) return "only an admin can describe the context";
+        this.description = cleanDescription(b.description);
+        this.descriptionSetBy = c.author;
         return;
       }
       case "rename": {
@@ -184,6 +200,13 @@ export class Members {
   creator(): Member | undefined {
     return this.all().find((m) => m.creator);
   }
+}
+
+/** A context's description: one line or a short paragraph, up to 500 characters. */
+export function cleanDescription(v: unknown): string | null {
+  if (typeof v !== "string") return null;
+  const d = v.replace(/\s+/g, " ").trim().slice(0, 500);
+  return d || null;
 }
 
 function cleanName(v: unknown): string | undefined {

@@ -206,7 +206,7 @@ export function Explorer({ b }: { b: Bridge }) {
     setBusy(true);
     setError(undefined);
     try {
-      const next = await b.call<Snapshot>("explore_graph", when ? { at: new Date(when).toISOString() } : {});
+      const next = await b.call<Snapshot>("explore_context", when ? { at: new Date(when).toISOString() } : {});
       setSnap(next);
     } catch (e) {
       setError((e as Error).message);

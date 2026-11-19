@@ -643,6 +643,54 @@ export class Graph {
     });
   }
 
+  /**
+   * Items by id, with what the sync digest needs: kind, text, author, and
+   * whether each is current (not withdrawn, and for a claim not replaced by a
+   * current claim).
+   */
+  async items(ids: string[]): Promise<Map<string, { id: string; label: "Claim" | "Question"; text: string; author: string | null; by: string; current: boolean }>> {
+    const out = new Map<string, { id: string; label: "Claim" | "Question"; text: string; author: string | null; by: string; current: boolean }>();
+    const unique = [...new Set(ids)].filter((x) => typeof x === "string").slice(0, 500);
+    if (!unique.length) return out;
+    const rows = await this.serial(() =>
+      this.rows(
+        `MATCH (n:Claim|Question) WHERE n.id IN $ids ` +
+          `RETURN n.id AS id, labels(n) AS labels, n.text AS text, n.author AS author, n.recorded_by AS by, ` +
+          `n.withdrawn_at IS NULL AND NOT EXISTS { MATCH (r:Claim)-[:REPLACES]->(n) WHERE r.withdrawn_at IS NULL } AS current`,
+        { ids: unique },
+      ),
+    );
+    for (const r of rows)
+      out.set(String(r.id), {
+        id: String(r.id),
+        label: (r.labels as string[]).includes("Claim") ? "Claim" : "Question",
+        text: String(r.text ?? ""),
+        author: (r.author as string | null) ?? null,
+        by: String(r.by ?? ""),
+        current: Boolean(r.current),
+      });
+    return out;
+  }
+
+  /** The claims that replace this one and are themselves current: two or more means a conflict nobody settled. */
+  async currentReplacers(id: string): Promise<{ id: string; text: string; by: string }[]> {
+    const rows = await this.serial(() =>
+      this.rows(
+        `MATCH (r:Claim)-[:REPLACES]->(:Claim {id: $id}) WHERE r.withdrawn_at IS NULL ` +
+          `AND NOT EXISTS { MATCH (newer:Claim)-[:REPLACES]->(r) WHERE newer.withdrawn_at IS NULL } ` +
+          `RETURN r.id AS id, r.text AS text, r.recorded_by AS by ORDER BY r.recorded_at`,
+        { id },
+      ),
+    );
+    return rows.map((r) => ({ id: String(r.id), text: String(r.text ?? ""), by: String(r.by ?? "") }));
+  }
+
+  /** The ids of items linked to or from this one, either way. */
+  async linkedIds(id: string): Promise<Set<string>> {
+    const rows = await this.serial(() => this.rows(`MATCH (n:Claim|Question {id: $id})-[]-(m:Claim|Question) RETURN m.id AS id`, { id }));
+    return new Set(rows.map((r) => String(r.id)));
+  }
+
   /** Whether this store holds items from before change logs (to import them once). */
   async legacyItems(): Promise<{ nodes: { label: string; props: Record<string, unknown> }[]; edges: { type: string; from: string; to: string; props: Record<string, unknown> }[] } | null> {
     return this.serial(async () => {

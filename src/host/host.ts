@@ -21,13 +21,14 @@ import { compareChanges, DATA_KINDS, MEMBER_KINDS, ROLES, signChange, uuidv7, we
 import { Graph, ToolError, type ApplyContext, type Caller } from "../core/graph.js";
 import { defaultName, fingerprint, loadIdentity, NAME_RE, type Identity } from "../core/identity.js";
 import { ChangeLog } from "../core/log.js";
-import { Members, type Member } from "../core/members.js";
+import { cleanDescription, Members, type Member } from "../core/members.js";
 import { autoShare } from "../core/paths.js";
 import { InviteDesk, type Admission, type Newcomer } from "../p2p/invites.js";
 import { b64u, formatCode, unb64u } from "../p2p/link.js";
 import { groupLink, Mesh } from "../p2p/mesh.js";
 import { lineReader, type Event, type Message, type Request } from "../p2p/protocol.js";
 import { iceServers, nostrSignaller, type SignalFactory } from "../p2p/signal.js";
+import { briefing, digest } from "./digest.js";
 import { InviteStore, PeerStore, hostDir, inviteLink, socketPath } from "./state.js";
 
 /** How long a write stays on this machine, where Undo removes it without trace, before it is sent. */
@@ -138,6 +139,8 @@ export class Host {
   private refused = new Map<string, string>();
   private maxDataAt = 0;
   private busy: Promise<unknown> = Promise.resolve();
+  /** The latest sync digests (what others' changes meant for this machine's person), newest last. */
+  private digests: { at: string; lines: string[] }[] = [];
 
   private constructor(
     readonly graph: Graph,
@@ -291,6 +294,23 @@ export class Host {
    * were new here, to pass on.
    */
   receive(changes: unknown[], from?: string): Promise<Change[]> {
+    const done = this.receiveNow(changes, from);
+    void done.then((fresh) => this.afterSync(fresh)).catch((e) => this.say(`digest failed: ${(e as Error).message}`));
+    return done;
+  }
+
+  /** Works out what others' new changes mean here, and tells this machine's sessions. */
+  private async afterSync(fresh: Change[]) {
+    const data = fresh.filter((c) => DATA_KINDS.has(c.kind) && c.author !== this.me && !this.refused.has(c.id));
+    if (!data.length) return;
+    const lines = await digest(data, { graph: this.graph, me: this.me, name: (k) => this.members.displayName(k), reader: this.readCaller() });
+    if (!lines.length) return;
+    this.digests.push({ at: new Date().toISOString(), lines });
+    this.digests = this.digests.slice(-20);
+    this.broadcastLocal({ t: "evt", event: "digest", data: { context: this.o.graph, lines } });
+  }
+
+  private receiveNow(changes: unknown[], from?: string): Promise<Change[]> {
     return this.serial(async () => {
       const fresh: Change[] = [];
       for (const c of changes) {
@@ -507,6 +527,14 @@ export class Host {
     await this.member("rename", { name });
   }
 
+  async setDescription(text: unknown) {
+    this.requireAdmin();
+    const d = cleanDescription(text);
+    if (!d) throw new ToolError("Describe the context in a sentence or two: what goes in it, and what doesn't.");
+    await this.member("describe", { description: d });
+    return { context: this.o.graph, description: d };
+  }
+
   async rename(name: string) {
     const m = this.members.get(this.me);
     if (!m || m.removed_at || m.name === name) return { name };
@@ -718,6 +746,10 @@ export class Host {
         return { sharing: Boolean(this.mesh) };
       case "activity":
         return this.activity(Number(p.limit ?? 30));
+      case "describe_context":
+        return this.setDescription(p.description);
+      case "briefing":
+        return briefing(this.graph, this.readCaller());
       case "status":
         return this.status();
       case "set_role":
@@ -739,13 +771,14 @@ export class Host {
     const creator = this.members.creator();
     const caller = this.readCaller();
     const d = this.graph.describe(creator ? this.members.displayName(creator.key) : "unknown", caller);
-    return { ...d, graph_id: this.group.id, creator: creator?.key === this.me, member: this.members.isMember(this.me) };
+    return { ...d, graph_id: this.group.id, creator: creator?.key === this.me, member: this.members.isMember(this.me), description: this.members.description };
   }
 
   async info() {
     return {
       ...(await this.graph.info()),
       graph_id: this.group.id,
+      description: this.members.description,
       created_by: this.members.creator() ? this.members.displayName(this.members.creator()!.key) : null,
       you: { name: this.members.displayName(this.me), role: this.members.roleAt(this.me, new Date().toISOString()), fingerprint: fingerprint(this.me) },
       sharing: { sharing: Boolean(this.mesh), online: this.mesh?.online().filter((l) => l.state === "active").length ?? 0 },
@@ -788,12 +821,16 @@ export class Host {
           return `removed ${name(b.key)}`;
         case "rename":
           return `is now called ${b.name}`;
+        case "describe":
+          return `described the context: ${String(b.description ?? "").slice(0, 120)}`;
       }
       return c.kind;
     };
     return {
       graph: this.o.graph,
       graph_id: this.group.id,
+      description: this.members.description,
+      digest: this.digests.slice(-3),
       created_by: this.members.creator() ? this.members.displayName(this.members.creator()!.key) : null,
       you: { name: this.members.displayName(this.me), role: this.members.roleAt(this.me, new Date().toISOString()), fingerprint: fingerprint(this.me) },
       sharing: Boolean(this.mesh),
@@ -837,6 +874,7 @@ export class Host {
     return {
       graph: this.o.graph,
       graph_id: this.group.id,
+      description: this.members.description,
       host: this.members.creator() ? this.members.displayName(this.members.creator()!.key) : null,
       you: { name: this.members.displayName(this.me), role: this.members.roleAt(this.me, new Date().toISOString()), fingerprint: fingerprint(this.me) },
       sharing: Boolean(this.mesh),

@@ -118,7 +118,7 @@ async function build() {
   const g = await Graph.open({ dataDir: scratch, name: "incident" });
   const w = new Writer(graphId, g, ids);
   const alice = ids.get("alice")!;
-  w.member(alice, "create", at(10, "14:00"), { name: "incident", creator_name: "alice" }, graphId);
+  w.member(alice, "create", at(10, "14:00"), { name: "incident", creator_name: "alice", description: "The checkout slowdown of 10 Nov 2026: what we found, what we still don't know, and what we disagreed about" }, graphId);
   for (const name of ["bob", "carol"])
     w.member(alice, "add_member", at(10, "14:01"), { key: ids.get(name)!.publicKey, name, role: "contributor", invite: { id: `inv_${name}`, label: `for ${name}` }, about: { agent: "claude-code", platform: "macOS arm64" } });
   await incident(w, callers.alice!, callers.bob!, callers.carol!);

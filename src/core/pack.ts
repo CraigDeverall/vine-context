@@ -127,19 +127,25 @@ export const SERVER_PARAMS = ["now", "by", "key", "role"] as const;
 
 /** Tool names the server provides itself. */
 export const RESERVED_TOOL_NAMES = [
-  "graph_info",
+  "context_info",
+  "context_activity",
   "model_guide",
-  "share_graph",
+  "describe_context",
+  "set_my_name",
+  "share_context",
   "stop_sharing",
   "sharing_status",
   "revoke_invite",
   "set_peer_role",
   "remove_peer",
-  "join_graph",
+  "join_context",
+  "use_context",
+  "attach_context",
+  "detach_context",
+  "save_folder_contexts",
   "take_back",
   "open_console",
-  "explore_graph",
-  "use_graph",
+  "explore_context",
   "browser_view",
 ] as const;
 
