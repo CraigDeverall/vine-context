@@ -4,14 +4,19 @@
 // kept in step with the other members by its host, so reads and writes always
 // work, offline too.
 //
-// A conversation can have several contexts attached (attach_context, or a
-// folder's `.p2p-context` file). Reads run across all of them, each result
-// saying which context it came from; a write goes to one: the one the call
-// names (`context`), else the write context. Each context has a description,
-// shown in the tools' descriptions, so the agent can tell where a claim goes.
+// A chat usually uses one context, and can use several. Which ones is
+// remembered on this machine under the chat's id (links.json in the data
+// folder), so reopening the chat brings them back. A chat with none yet starts
+// with the contexts linked to its folder, if the person linked any, or the one
+// the agent's configuration names; else the agent asks (there's no default).
+//
+// With one context, the tools simply act on it. With several, reads run on
+// all of them (each row saying which), each write goes to the context the call
+// names or else the write context, and the tools say what each context is for
+// so the agent can choose.
 //
 // The model's tools are re-registered (with tools/list_changed) when the
-// attached contexts or a role change.
+// contexts or a role change.
 
 import { spawn } from "node:child_process";
 import { McpServer, type RegisteredTool } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -19,6 +24,7 @@ import { z } from "zod";
 import { RANK } from "../core/changes.js";
 import { inputShape, type Role, type Snapshot } from "../core/graph.js";
 import { fingerprint, nameSource, setName, type Identity } from "../core/identity.js";
+import { claimsPack } from "../core/pack.js";
 import { packageInfo } from "../core/package-root.js";
 import { autoShare, defaultDataDir } from "../core/paths.js";
 import type { LocalHost } from "../host/client.js";
@@ -28,7 +34,7 @@ import { parseCode } from "../p2p/link.js";
 import type { GraphDescription } from "../p2p/protocol.js";
 import type { SignalFactory } from "../p2p/signal.js";
 import { registerViews, uiMeta } from "./apps.js";
-import { FOLDER_FILE, findFolderFile, localContexts, readFolderFile, resolveFolder, writeFolderFile } from "./folder.js";
+import { chatLink, folderLink, localContexts, resolveRef, setChatLink, setFolderLink, type Link } from "./links.js";
 
 type Content = { content: { type: "text"; text: string }[]; structuredContent?: Record<string, unknown>; isError?: boolean };
 const text = (value: unknown): Content => ({
@@ -46,6 +52,8 @@ interface Attached {
   host: LocalHost;
   d: Description;
 }
+
+type Origin = "chat" | "folder" | "configured" | "chosen";
 
 /** One line about a newcomer, for every agent in the graph. */
 function joinNotice(p: Record<string, any>, where: string): string {
@@ -69,8 +77,8 @@ function openInBrowser(url: string): boolean {
 }
 
 export interface SessionOptions {
-  /** Connects to (and if needed starts) this machine's host for the session's first context. */
-  local: () => Promise<LocalHost>;
+  /** A context named for this session (the CLI's --context or P2PCG_CONTEXT), used when the chat has none yet. */
+  local?: () => Promise<LocalHost>;
   /** Connects to (and if needed starts) this machine's host for a context by name. */
   openLocal?: (graph: string) => Promise<LocalHost>;
   identity: () => Identity;
@@ -80,7 +88,9 @@ export interface SessionOptions {
   joinWaitMs?: number;
   /** Where contexts live. */
   dataDir?: string;
-  /** The folder the conversation started in: its `.p2p-context` (or a parent's) attaches contexts. Default: none read. */
+  /** The chat's id (Claude Code's session id): its contexts are remembered under it. Without one, the choice lasts this session. */
+  chat?: string;
+  /** The folder the chat started in: contexts linked to it (or a parent) are where a new chat starts. */
   cwd?: string;
   /** Starts (once) the localhost page that shows the views, and returns its link: browser_view. */
   browserView?: () => Promise<string>;
@@ -91,15 +101,15 @@ const contextArg = z.string().regex(GRAPH_RE).optional();
 
 export class Session {
   readonly server: McpServer;
-  /** The attached contexts, in the order attached. */
+  /** This chat's contexts, in the order added. Usually one. */
   private contexts = new Map<string, Attached>();
   /** Where writes go unless a call names another context. */
   private writeTo?: string;
   private modelTools = new Map<string, RegisteredTool>();
   /** Notices not yet shown to the agent: they ride on its next tool result. */
   private news: string[] = [];
-  /** What the folder's `.p2p-context` asked for, if there was one. */
-  private folder?: { file: string; missing: { name: string; id?: string }[] };
+  /** Where the contexts came from when the chat started. */
+  private origin: Origin | null = null;
 
   constructor(private o: SessionOptions) {
     this.server = new McpServer(
@@ -108,10 +118,9 @@ export class Session {
         capabilities: { tools: { listChanged: true }, resources: {}, prompts: {} },
         instructions:
           "This server holds context graphs (contexts): what a group knows, as claims and questions, shared peer to peer. Every member keeps a full copy, so it works offline. " +
-          "A conversation can have several contexts attached: reads search all of them; each write goes to one, so pick it by the contexts' descriptions (context_info lists them). " +
+          "A chat usually uses one context (context_info says which); use_context switches it, add_context adds another, remove_context drops one, and the chat keeps them when reopened. " +
           "Call model_guide once before you first write, and follow it. " +
-          "To invite someone, use share_context: it makes a join code for one person. To join someone else's context, call join_context with the p2pcg1_ code they sent. " +
-          "attach_context, detach_context and use_context change which contexts this conversation uses.",
+          "To invite someone, use share_context: it makes a join code for one person. To join someone else's context, call join_context with the p2pcg1_ code they sent.",
       },
     );
     registerViews(this.server);
@@ -151,42 +160,68 @@ export class Session {
     void this.server.close().catch(() => undefined);
   }
 
-  /** Attaches the folder's contexts (`.p2p-context`), else the session's default context. */
+  /** Picks up the chat's contexts: the ones it used before, else its folder's, else the configured one; else none until one is chosen. */
   async start(): Promise<void> {
-    const file = this.o.cwd ? findFolderFile(this.o.cwd) : undefined;
-    if (file && this.o.openLocal) {
-      try {
-        const r = resolveFolder(readFolderFile(file), this.dataDir);
-        this.folder = { file, missing: r.missing };
-        for (const f of r.found) await this.attach(f.local, false);
-        if (r.write_to) this.writeTo = r.write_to;
-        for (const m of r.missing)
+    const remembered = this.o.chat ? chatLink(this.dataDir, this.o.chat) : undefined;
+    const folder = !remembered && this.o.cwd ? folderLink(this.dataDir, this.o.cwd) : undefined;
+    const link: Link | undefined = remembered ?? folder;
+    if (link && this.o.openLocal) {
+      const origin: Origin = remembered ? "chat" : "folder";
+      for (const ref of link.contexts) {
+        const name = resolveRef(this.dataDir, ref);
+        if (!name) {
           this.news.push(
-            `News: this folder's ${FOLDER_FILE} asks for the context '${m.name}'${m.id ? ` (id ${m.id})` : ""}, which isn't on this machine. Ask one of its members for a join code (join_context).`,
+            `News: this ${origin} uses the context '${ref.name}'${ref.id ? ` (id ${ref.id})` : ""}, which isn't on this machine. Ask one of its members for a join code (join_context), or use another.`,
           );
-      } catch (e) {
-        this.news.push(`News: couldn't read ${file}: ${(e as Error).message}`);
+          continue;
+        }
+        try {
+          await this.attach(name, false);
+          this.origin = origin;
+        } catch (e) {
+          this.news.push(`News: couldn't open the context '${name}': ${(e as Error).message}`);
+        }
       }
+      const w = link.write_to && link.contexts.find((r) => r.name === link.write_to);
+      const local = w ? resolveRef(this.dataDir, w) : undefined;
+      if (local && this.contexts.has(local)) this.writeTo = local;
     }
-    if (!this.contexts.size) {
+    if (!this.contexts.size && this.o.local) {
       const host = await this.o.local();
       const d = await host.request<Description>("describe");
       this.add(d.graph, host, d);
+      this.origin = "configured";
     }
+    this.remember();
     this.offer();
   }
 
-  // ---- Attached contexts -------------------------------------------------
+  // ---- The chat's contexts -----------------------------------------------
+
+  /** Saves the chat's contexts under its id, so reopening the chat brings them back. */
+  private remember() {
+    if (!this.o.chat || !this.contexts.size) return;
+    setChatLink(this.dataDir, this.o.chat, this.link());
+  }
+
+  private link(): Omit<Link, "at"> {
+    return {
+      contexts: [...this.contexts.values()].map((c) => ({ name: c.name, ...(c.d.graph_id ? { id: c.d.graph_id } : {}) })),
+      ...(this.writeTo ? { write_to: this.writeTo } : {}),
+    };
+  }
 
   private add(name: string, host: LocalHost, d: Description) {
+    this.contexts.get(name)?.host.close();
     this.contexts.set(name, { name, host, d });
     this.writeTo ??= name;
     host.on("close", () => this.o.log?.(`local host connection for '${name}' closed`));
     host.on("event", (e: { event: string; data: any }) => {
       if (this.contexts.get(name)?.host !== host) return;
       const where = this.where(name);
+      const tag = this.contexts.size > 1 ? ` (${name})` : "";
       if (e.event === "joined") this.news.push(joinNotice(e.data, where));
-      if (e.event === "digest" && Array.isArray(e.data?.lines)) for (const l of e.data.lines) this.news.push(`News (${name}): ${l}`);
+      if (e.event === "digest" && Array.isArray(e.data?.lines)) for (const l of e.data.lines) this.news.push(`News${tag}: ${l}`);
       if (e.event === "removed") {
         this.news.push(`News: ${e.data?.by ?? "An admin"} removed you from ${where}. You keep your copy to read, but can't write to it any more.`);
         void this.refresh(name);
@@ -209,47 +244,51 @@ export class Session {
     }
   }
 
-  private async connect(name: string): Promise<LocalHost> {
-    if (!this.o.openLocal) throw new Error("This session can't open other contexts.");
-    return this.o.openLocal(name);
-  }
-
-  /** Attaches a context on this machine (starting it if new), and re-offers the tools. */
+  /** Adds a context on this machine (starting it if new) to the chat. */
   private async attach(name: string, offer = true): Promise<Attached> {
     const existing = this.contexts.get(name);
     if (existing && !existing.host.closed) return existing;
-    const host = await this.connect(name);
+    if (!this.o.openLocal) throw new Error("This session can't open other contexts.");
+    const host = await this.o.openLocal(name);
     const d = await host.request<Description>("describe");
     this.add(name, host, d);
-    if (offer) this.offer();
+    if (offer) {
+      this.remember();
+      this.offer();
+    }
     return this.contexts.get(name)!;
   }
 
   private detach(name: string) {
     const c = this.contexts.get(name);
-    if (!c) throw new Error(`'${name}' isn't attached to this conversation.`);
-    if (this.contexts.size === 1) throw new Error("It's the only context attached; attach another first, or use use_context to switch.");
+    if (!c) throw new Error(`This chat doesn't use '${name}'.`);
     c.host.close();
     this.contexts.delete(name);
     if (this.writeTo === name) this.writeTo = [...this.contexts.keys()][0];
+    if (this.o.chat) setChatLink(this.dataDir, this.o.chat, this.contexts.size ? this.link() : null);
     this.offer();
   }
 
-  /** The context a call acts on: the one it names (attached on the way if it's on this machine), else the write context. */
+  /** The context a call acts on: the one it names (if this chat uses it), else the write context. */
   private async target(name?: string): Promise<Attached> {
-    if (name) {
-      const c = this.contexts.get(name);
-      if (c && !c.host.closed) return c;
-      if (c) return this.attach(name, false);
-      if (!localContexts(this.dataDir).some((x) => x.name === name)) throw new Error(`There's no context '${name}' on this machine. context_info lists them (your_contexts).`);
-      return this.attach(name);
-    }
-    const w = this.writeTo && this.contexts.get(this.writeTo);
-    if (w && !w.host.closed) return w;
-    if (w) return this.attach(w.name, false);
-    const first = [...this.contexts.values()][0];
-    if (!first) throw new Error("No context is attached.");
-    return first;
+    const c = name ? this.contexts.get(name) : this.writeTo ? this.contexts.get(this.writeTo) : undefined;
+    if (name && !c)
+      throw new Error(`This chat doesn't use '${name}': it uses ${[...this.contexts.keys()].map((n) => `'${n}'`).join(", ") || "no context"}. add_context adds one.`);
+    if (!c) throw new Error(this.noContext());
+    if (!c.host.closed) return c;
+    c.host = await this.o.openLocal!(c.name);
+    c.d = await c.host.request<Description>("describe");
+    return c;
+  }
+
+  /** What to do when the chat has no context: there's no default, so the agent asks the person. */
+  private noContext(): string {
+    const mine = this.localNames();
+    return (
+      "This chat has no context yet, and there's no default. Ask the person which context this chat is for" +
+      (mine.length ? ` (on this machine: ${mine.map((n) => `'${n}'`).join(", ")}), then use_context it.` : ", then start one with use_context.") +
+      " use_context with a new name starts one (ask what it's for); join_context joins someone else's with their code. The chat keeps its context when reopened."
+    );
   }
 
   private async request<T>(method: string, params?: unknown, name?: string): Promise<T> {
@@ -259,68 +298,84 @@ export class Session {
     } catch (e) {
       if (!c.host.closed) throw e;
       // The host restarted: reconnect once.
-      const again = await this.attach(c.name, false);
+      const again = await this.target(c.name);
       return again.host.request<T>(method, params);
     }
   }
 
   private where(name?: string): string {
-    const c = name ? this.contexts.get(name) : this.contexts.get(this.writeTo ?? "");
+    const c = this.contexts.get(name ?? this.writeTo ?? "");
     if (!c) return name ? `'${name}'` : "no context";
-    const d = c.d;
-    if (d.creator) return `your context '${c.name}'`;
-    return `'${c.name}' (${d.host}'s context${d.member === false ? "; you were removed" : `; you are a ${d.you.role}`})`;
+    if (c.d.creator) return `your context '${c.name}'`;
+    return `'${c.name}' (${c.d.host}'s context${c.d.member === false ? "; you were removed" : `; you are a ${c.d.you.role}`})`;
   }
 
   private roleIn(c: Attached): Role {
     return c.d.member === false ? "reader" : c.d.you.role;
   }
 
-  /** A line per attached context, for tool descriptions: name, what it's for, and the write context. */
-  private contextsLine(): string {
-    if (this.contexts.size <= 1) return "";
-    const parts = [...this.contexts.values()].map(
-      (c) => `'${c.name}'${c.name === this.writeTo ? " (writes go here by default)" : ""}: ${c.d.description ?? "no description yet"}`,
-    );
-    return ` Attached contexts: ${parts.join("; ")}.`;
+  private get many(): boolean {
+    return this.contexts.size > 1;
   }
 
-  /** Registers the model's tools for the attached contexts, as far as this machine's roles allow. */
+  /** The chat's contexts, for tool descriptions: name, what it's for, and the write context. */
+  private contextsLine(): string {
+    const parts = [...this.contexts.values()].map((c) => `'${c.name}'${c.name === this.writeTo ? " (writes go here by default)" : ""}: ${c.d.description ?? "no description yet"}`);
+    return ` This chat's contexts: ${parts.join("; ")}.`;
+  }
+
+  /** Registers the model's tools for the chat's contexts, as far as this machine's roles allow. */
   private offer(): void {
     for (const t of this.modelTools.values()) t.remove();
     this.modelTools.clear();
     const all = [...this.contexts.values()];
-    const first = all[0];
-    if (!first) return;
-    const many = all.length > 1;
-    for (const tool of first.d.tools) {
+    if (!all.length) {
+      // No context yet: the model's tools are still offered, and say what to do first.
+      for (const tool of claimsPack().tools) {
+        const registered = this.server.registerTool(
+          tool.name,
+          {
+            title: tool.title,
+            description: `${tool.description} This chat has no context yet: this tells you how to choose one.`,
+            inputSchema: inputShape(tool.input),
+            annotations: { readOnlyHint: tool.kind === "read", destructiveHint: false, idempotentHint: tool.kind === "read", openWorldHint: false },
+          },
+          async () => this.withNews(failure(this.noContext())),
+        );
+        this.modelTools.set(tool.name, registered);
+      }
+      if (this.server.isConnected()) this.server.sendToolListChanged();
+      return;
+    }
+    const many = this.many;
+    for (const tool of all[0]!.d.tools) {
       const allowed = all.filter((c) => RANK[this.roleIn(c)] >= RANK[tool.role] && !(tool.kind === "write" && c.d.member === false));
       if (!allowed.length) continue;
-      const routing =
-        tool.kind === "write"
-          ? many
-            ? ` Goes to the context named in \`context\`, else '${this.writeTo}'. Pick the context whose description fits.${this.contextsLine()}`
-            : ""
-          : many
-            ? ` Without \`context\`, it runs on every attached context and each result says which one it came from.${this.contextsLine()}`
-            : "";
+      // With one context, nothing about routing: the tool just acts on it.
+      const routing = !many
+        ? ""
+        : tool.kind === "write"
+          ? ` Goes to the context named in \`context\`, else '${this.writeTo}'. Pick the context whose description fits; if none clearly does, ask the person.${this.contextsLine()}`
+          : ` Without \`context\`, it runs on each of this chat's contexts and every result says which one it came from.${this.contextsLine()}`;
       const registered = this.server.registerTool(
         tool.name,
         {
           title: tool.title,
           description: tool.description + routing,
-          inputSchema: { ...inputShape(tool.input), context: contextArg.describe(tool.kind === "write" ? "The context to write to (default: the write context)" : "Only this context (default: all attached)") },
+          inputSchema: {
+            ...inputShape(tool.input),
+            ...(many ? { context: contextArg.describe(tool.kind === "write" ? "The context to write to (default: the write context)" : "Only this context (default: all of this chat's)") } : {}),
+          },
           annotations: { readOnlyHint: tool.kind === "read", destructiveHint: false, idempotentHint: tool.kind === "read", openWorldHint: false },
           ...(tool.view ? { _meta: uiMeta(tool.view) } : {}),
         },
         async (raw: Record<string, unknown>) => {
           const { context, ...args } = raw as Record<string, unknown> & { context?: string };
           try {
-            if (tool.kind === "read" && !context && this.contexts.size > 1) return this.withNews(await this.readAll(tool.name, args));
+            if (tool.kind === "read" && !context && this.many) return this.withNews(await this.readAll(tool.name, args));
             const c = await this.target(context);
             let result = await this.request<Record<string, unknown>>("call", { tool: tool.name, args }, c.name);
-            // With several contexts attached, every row says which one it's from.
-            if (Array.isArray(result) && this.contexts.size > 1) result = result.map((row) => ({ context: c.name, ...row })) as unknown as Record<string, unknown>;
+            if (Array.isArray(result) && this.many) result = result.map((row) => ({ context: c.name, ...row })) as unknown as Record<string, unknown>;
             const out = text(result);
             const held =
               tool.kind === "write" && result && typeof result === "object" && result.shared_at
@@ -349,7 +404,7 @@ export class Session {
     if (this.server.isConnected()) this.server.sendToolListChanged();
   }
 
-  /** A read across every attached context: lists are merged, each row saying its context; one item is looked for in each. */
+  /** A read across the chat's contexts: lists are merged, each row saying its context; one item is looked for in each. */
   private async readAll(tool: string, args: Record<string, unknown>): Promise<Content> {
     const results: { name: string; value?: unknown; error?: string }[] = [];
     for (const c of this.contexts.values()) {
@@ -368,7 +423,7 @@ export class Session {
       out.content.push({ type: "text", text: `(from ${ok.length} contexts: ${ok.map((r) => r.name).join(", ")})` });
       return out;
     }
-    // One item (history): the context that has it.
+    // One item (history, thread): the context that has it.
     const hit = ok[0]!;
     const out = text(hit.value);
     out.content.push({ type: "text", text: `(from ${this.where(hit.name)})` });
@@ -387,27 +442,18 @@ export class Session {
     return localContexts(this.dataDir).map((c) => c.name);
   }
 
-  /** What context_info says about each attached context. */
-  private async attachedInfo() {
-    const out = [];
-    for (const c of this.contexts.values()) {
-      let holds: unknown = null;
-      try {
-        holds = ((await this.request<Record<string, unknown>>("info", undefined, c.name)) as { nodes?: unknown }).nodes ?? null;
-      } catch {
-        // its host is restarting
-      }
-      out.push({
-        context: c.name,
-        id: c.d.graph_id ?? null,
-        where: this.where(c.name),
-        description: c.d.description ?? null,
-        role: c.d.member === false ? null : c.d.you.role,
-        writes_here: c.name === this.writeTo,
-        holds,
-      });
-    }
-    return out;
+  /** The chat's contexts, briefly. */
+  private list() {
+    return [...this.contexts.values()].map((c) => ({ name: c.name, description: c.d.description ?? null, role: c.d.member === false ? null : c.d.you.role, writes_here: c.name === this.writeTo }));
+  }
+
+  /** Whether the folder this chat started in (or a parent) starts new chats with exactly this chat's contexts. */
+  private folderState(): { folder: string; linked: boolean } | null {
+    if (!this.o.cwd) return null;
+    const f = folderLink(this.dataDir, this.o.cwd);
+    const mine = [...this.contexts.keys()].sort().join(",");
+    const theirs = f ? f.contexts.map((r) => resolveRef(this.dataDir, r) ?? "?").sort().join(",") : "";
+    return { folder: f?.folder ?? this.o.cwd, linked: !!f && !!mine && mine === theirs };
   }
 
   private registerSessionTools(): void {
@@ -419,30 +465,36 @@ export class Session {
         return this.withNews(failure((e as Error).message));
       }
     };
-    const which = contextArg.describe("Which context (default: the write context)");
+    const which = contextArg.describe("Which of this chat's contexts (default: the one writes go to)");
 
     this.server.registerTool(
       "context_info",
       {
         title: "Context info",
         description:
-          "The contexts attached to this conversation (what each is for, your role, how much each holds, which one writes go to), the contexts on this machine (your_contexts), and this folder's .p2p-context if it has one. " +
-          "With `context`, the details of one: everyone in it, who is online, and the sharing state.",
-        inputSchema: { context: contextArg.describe("One context's details") },
+          "This chat's context: what it's for, your role, how much it holds, everyone in it and who is online, and the sharing state. Also the other contexts on this machine (your_contexts). " +
+          "If the chat uses several, `contexts` lists them and `context` picks which one to detail.",
+        inputSchema: { context: which },
         annotations: ro,
       },
       wrap(async ({ context }: { context?: string }) => {
-        if (context) return { context, where: this.where(context), ...(await this.request<Record<string, unknown>>("info", undefined, context)) };
+        if (!this.contexts.size) return { using: "no context", context: null, contexts: [], your_contexts: this.localNames(), next: this.noContext() };
+        const c = await this.target(context);
         return {
-          using: this.where(),
-          attached: await this.attachedInfo(),
+          using: this.where(c.name),
+          context: c.name,
+          id: c.d.graph_id ?? null,
+          description: c.d.description ?? null,
+          role: c.d.member === false ? null : c.d.you.role,
+          ...(await this.request<Record<string, unknown>>("info", undefined, c.name)),
+          contexts: this.list(),
           write_to: this.writeTo,
           your_contexts: this.localNames(),
-          folder: this.folder ? { file: this.folder.file, missing: this.folder.missing } : null,
-          next:
-            this.contexts.size > 1
-              ? "Reads search every attached context; for each write, pick the context whose description fits (the `context` argument), or it goes to write_to."
-              : "attach_context adds another context to this conversation.",
+          folder: this.folderState(),
+          started_from: this.origin,
+          next: this.many
+            ? "Reads search every context in this chat; put each write in the one whose description fits (the `context` argument), else it goes to write_to."
+            : "use_context switches this chat to another context; add_context adds one alongside (the chat keeps them when reopened).",
         };
       }),
     );
@@ -452,7 +504,7 @@ export class Session {
       {
         title: "Context activity",
         description:
-          "What happened lately in a context, newest first: who wrote what (yours and synced from others), what others' changes meant for you (the sync digest: your claims replaced, your questions answered, new conflicts, possible overlaps), joins and role changes, and who is online. " +
+          "What happened lately in one of this chat's contexts (default: the write context), newest first: who wrote what (yours and synced from others), what others' changes meant for you (the sync digest), joins and role changes, who is online, and (for an admin) the open join codes. " +
           "With snapshot, also its items and links. Read-only; it never uses up the notices meant for you (it's what the Claude Code mod's band and panel poll).",
         inputSchema: {
           limit: z.number().int().min(1).max(200).optional().describe("How many recent changes (default 30)"),
@@ -463,15 +515,26 @@ export class Session {
       },
       async (a: { limit?: number; snapshot?: boolean; context?: string }) => {
         try {
-          const c = await this.target(a.context);
+          if (!this.contexts.size) {
+            const none = { using: "no context", context: null, contexts: [], your_contexts: this.localNames(), next: this.noContext() };
+            return { ...text(none), structuredContent: none };
+          }
+          // A context the chat no longer uses falls back to the write context (the panel may ask for one just removed).
+          const c = await this.target(a.context && this.contexts.has(a.context) ? a.context : undefined);
           const activity = await this.request<Record<string, unknown>>("activity", { limit: a.limit }, c.name);
           const out: Record<string, unknown> = {
             using: this.where(c.name),
             context: c.name,
-            attached: [...this.contexts.values()].map((x) => ({ name: x.name, description: x.d.description ?? null, writes_here: x.name === this.writeTo })),
+            contexts: this.list(),
             your_contexts: this.localNames(),
+            folder: this.folderState(),
             ...activity,
           };
+          // An admin's open join codes (who each is for, its role, when it expires): the panel lists them, to send or cancel.
+          if ((activity.you as { role?: string } | undefined)?.role === "admin") {
+            const s = await this.request<{ invites?: { state: string }[] }>("status", undefined, c.name);
+            out.invites = (s.invites ?? []).filter((i) => i.state === "open");
+          }
           if (a.snapshot) out.snapshot = await this.request<Snapshot>("snapshot", { limit: 300 }, c.name);
           return { ...text(out), structuredContent: out };
         } catch (e) {
@@ -489,8 +552,13 @@ export class Session {
       },
       wrap(async () => {
         const first = [...this.contexts.values()][0];
-        if (!first) return "No context is attached.";
-        return first.d.guide + (this.contexts.size > 1 ? `\n\n## Several contexts\n\nThis conversation has ${this.contexts.size} contexts attached.${this.contextsLine()} Reads search all of them. Put each write in the context whose description fits (the \`context\` argument); if none clearly fits, ask the person.` : "");
+        if (!first) return `${this.noContext()} Then call model_guide again.`;
+        return (
+          first.d.guide +
+          (this.many
+            ? `\n\n## Several contexts\n\nThis chat uses ${this.contexts.size} contexts.${this.contextsLine()} Reads search all of them. Put each write in the context whose description fits (the \`context\` argument); if none clearly fits, ask the person. Links (supports, answers, replies) stay inside one context.`
+            : "")
+        );
       }),
     );
 
@@ -499,7 +567,7 @@ export class Session {
       {
         title: "Describe a context",
         description:
-          "Set what a context is for, in a sentence or two (you must be an admin): what goes in it and what doesn't. Every member's agent sees it and uses it to decide which context a claim belongs in. " +
+          "Set what a context is for, in a sentence or two (you must be an admin): what goes in it and what doesn't. Every member's agent sees it. " +
           "Ask the person for it; don't invent it.",
         inputSchema: { description: z.string().min(1).max(500).describe("What the context is for"), context: which },
         annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
@@ -526,7 +594,7 @@ export class Session {
         if (process.env.P2PCG_USER) throw new Error(`Your name is set by P2PCG_USER ('${process.env.P2PCG_USER}') in this agent's configuration; change it there.`);
         const n = setName(this.dataDir, name);
         for (const c of this.contexts.values()) await this.request("rename", { name: n }, c.name);
-        return { name: n, fingerprint: fingerprint(this.o.identity().publicKey), note: "The attached contexts have it now; your other contexts take it when their hosts next start." };
+        return { name: n, fingerprint: fingerprint(this.o.identity().publicKey), note: "This chat's contexts have it now; your other contexts take it when their hosts next start." };
       }),
     );
 
@@ -535,7 +603,7 @@ export class Session {
       {
         title: "Invite someone",
         description:
-          "Invite one person to a context (you must be an admin of it): makes a new join code (p2pcg1_…) for that person. " +
+          "Invite one person to a context (you must be an admin of it; default: the chat's context): makes a new join code (p2pcg1_…) for that person. " +
           "Your machine answers the code, so it must be online when they use it. The first person to use it is let straight in with the code's role and gets a full copy; anyone else using it is turned away. " +
           "Everyone in the context is told when someone joins, with their name, key fingerprint and agent. remove_peer takes anyone out. " +
           "An unused code expires (default 24 hours). Call it once per person. sharing_status lists invites; revoke_invite cancels one.",
@@ -547,7 +615,10 @@ export class Session {
         },
         annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
       },
-      wrap(async ({ context, ...a }) => this.invited(await this.request<Record<string, any>>("share", a, context), context)),
+      wrap(async ({ context, ...a }) => {
+        const c = await this.target(context);
+        return this.invited(await this.request<Record<string, any>>("share", a, c.name), c.name);
+      }),
     );
 
     this.server.registerTool(
@@ -566,12 +637,24 @@ export class Session {
       {
         title: "Go offline",
         description:
-          "Stop syncing a context with the other members, and stop answering your join codes for it, until you share again (share_context, or the console). " +
+          "Stop syncing a context with the other members, and stop answering your join codes for it, until you share again (start_sharing, or the console). " +
           "Your copy keeps working; what you write is sent when you're back. Sharing is on by default.",
         inputSchema: { context: which },
         annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       },
       wrap(({ context }) => this.request("unshare", undefined, context)),
+    );
+
+    this.server.registerTool(
+      "start_sharing",
+      {
+        title: "Go online",
+        description:
+          "Start syncing a context with the other members again after stop_sharing, and answer your join codes for it. It makes no new join code (share_context does). Sharing is on by default, so this is only needed after going offline.",
+        inputSchema: { context: which },
+        annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      },
+      wrap(({ context }) => this.request("start_sharing", undefined, context)),
     );
 
     this.server.registerTool(
@@ -618,96 +701,120 @@ export class Session {
         description:
           "Join someone else's context with the join code they sent (p2pcg1_…; it can be inside other text). Use it when the person pastes such a code. " +
           "The machine that made the code must be online. You are let in at once and get your own full copy, kept in step with the others; everyone is told you joined (your name, key fingerprint and agent). " +
-          "It is attached to this conversation and writes go to it; the result includes a briefing (open questions, conflicts, latest). Later sessions don't need the code: attach_context or use_context with its name.",
+          "It's added to this chat and writes go to it; the result includes a briefing (open questions, conflicts, latest). Other chats don't need the code: use_context with its name.",
         inputSchema: { code: z.string().describe("The p2pcg1_… join code, exactly as sent") },
         annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
       },
       wrap(async ({ code }: { code: string }) => this.join(code)),
     );
 
+    const nameArg = z.string().regex(GRAPH_RE).describe("Context name: lower-case letters, digits and dashes");
+    const descriptionArg = z.string().max(500).optional().describe("For a new context: what it's for (what goes in it), in a sentence or two");
+
+    /** Starts a context of one's own if the name is new: describes it, and shares it if sharing is on by default. */
+    const created = async (name: string, isNew: boolean, description?: string) => {
+      const c = this.contexts.get(name)!;
+      if (isNew && description) {
+        await this.request("describe_context", { description }, name);
+        c.d = await c.host.request<Description>("describe");
+        this.offer();
+      }
+      if (!isNew) return {};
+      const shared = autoShare() ? this.invited(await this.request<Record<string, any>>("share", {}, name), name) : {};
+      return {
+        created: this.where(name),
+        ...shared,
+        next:
+          (c.d.description ? "" : "Ask the person what this context is for and set it with describe_context. ") +
+          (autoShare()
+            ? "Show the person this join code now, and say: send it privately to one person; whoever uses it first is let in at once and gets a full copy, and everyone is told who joined. Then call model_guide before writing."
+            : "Call model_guide before writing."),
+      };
+    };
+
     this.server.registerTool(
       "use_context",
       {
-        title: "Switch to one context",
+        title: "Use a context in this chat",
         description:
-          "Make this conversation use just one context on this machine (yours, or one you joined; context_info lists your_contexts), detaching the others. A name that isn't here yet starts a new context of your own: give it a description of what it's for.",
-        inputSchema: {
-          name: z.string().regex(GRAPH_RE).describe("Context name: lower-case letters, digits and dashes"),
-          description: z.string().max(500).optional().describe("For a new context: what it's for (what goes in it), in a sentence or two"),
-        },
+          "Make a context this chat's context, replacing the ones it had: one on this machine (yours, or one you joined; context_info lists your_contexts). The chat keeps it when reopened. " +
+          "A name that isn't here yet starts a new context of your own: ask the person what it's for and give that as its description. To use another alongside, add_context.",
+        inputSchema: { name: nameArg, description: descriptionArg },
         annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       },
       wrap(async ({ name, description }: { name: string; description?: string }) => {
         const isNew = !this.localNames().includes(name);
-        const c = await this.attach(name, false);
+        await this.attach(name, false);
         for (const other of [...this.contexts.keys()]) if (other !== name) (this.contexts.get(other)!.host.close(), this.contexts.delete(other));
         this.writeTo = name;
-        if (isNew && description) {
-          await this.request("describe_context", { description }, name);
-          c.d = await c.host.request<Description>("describe");
-        }
+        this.origin = "chosen";
+        this.remember();
         this.offer();
-        if (isNew && autoShare())
-          return {
-            created: this.where(name),
-            description: c.d.description ?? null,
-            ...this.invited(await this.request<Record<string, any>>("share", {}, name), name),
-            next:
-              (c.d.description ? "" : "Ask the person what this context is for and set it with describe_context. ") +
-              "Show the person this join code now, and say: send it privately to one person; whoever uses it first is let in at once and gets a full copy, and everyone is told who joined. " +
-              "Call share_context for a code for each other person. Then call model_guide before writing.",
-          };
-        return { using: this.where(name), description: c.d.description ?? null, next: "Call model_guide before writing to it." };
+        const c = this.contexts.get(name)!;
+        return { using: this.where(name), description: c.d.description ?? null, next: "Call model_guide before writing to it.", ...(await created(name, isNew, description)) };
       }),
     );
 
     this.server.registerTool(
-      "attach_context",
+      "add_context",
       {
-        title: "Attach a context",
+        title: "Also use a context",
         description:
-          "Add another context on this machine to this conversation (context_info lists your_contexts). Reads then search it too; with write_here, writes go to it by default.",
-        inputSchema: { name: z.string().regex(GRAPH_RE).describe("The context's name"), write_here: z.boolean().optional().describe("Make it where writes go by default") },
+          "Add another context to this chat, alongside the ones it uses (most chats need one). Reads then search it too, and writes go to whichever context fits. A new name starts a new context of your own: ask what it's for. " +
+          "With write_here, writes go to it unless a call names another.",
+        inputSchema: { name: nameArg, description: descriptionArg, write_here: z.boolean().optional().describe("Make it where writes go by default") },
         annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       },
-      wrap(async ({ name, write_here }: { name: string; write_here?: boolean }) => {
-        if (!this.localNames().includes(name)) throw new Error(`There's no context '${name}' on this machine. To start one, use use_context; to join someone's, join_context with their code.`);
+      wrap(async ({ name, description, write_here }: { name: string; description?: string; write_here?: boolean }) => {
+        const isNew = !this.localNames().includes(name);
         await this.attach(name, false);
         if (write_here) this.writeTo = name;
+        this.remember();
         this.offer();
-        return { attached: [...this.contexts.keys()], write_to: this.writeTo, next: "Reads now search all attached contexts. Call model_guide again: it lists them." };
+        return {
+          contexts: this.list(),
+          write_to: this.writeTo,
+          next: this.many ? "Call model_guide again: it says how to pick a context for each write." : "Call model_guide before writing.",
+          ...(await created(name, isNew, description)),
+        };
       }),
     );
 
     this.server.registerTool(
-      "detach_context",
+      "remove_context",
       {
-        title: "Detach a context",
-        description: "Remove a context from this conversation (nothing is deleted; it stays on this machine and keeps syncing).",
-        inputSchema: { name: z.string().regex(GRAPH_RE).describe("The context's name") },
-        annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-      },
-      wrap(async ({ name }: { name: string }) => {
-        this.detach(name);
-        return { attached: [...this.contexts.keys()], write_to: this.writeTo };
-      }),
-    );
-
-    this.server.registerTool(
-      "save_folder_contexts",
-      {
-        title: "Use these contexts in this folder",
+        title: "Stop using a context",
         description:
-          `Write this conversation's attached contexts (and the write context) to a ${FOLDER_FILE} file in the folder the conversation started in, so every new conversation there starts with them. ` +
-          "It holds context names and ids, no secrets, so it can be committed for the team. Ask the person first.",
+          "Take a context out of this chat (nothing is deleted: it stays on this machine and keeps syncing). Without `name`, takes them all out, leaving the chat with no context.",
+        inputSchema: { name: z.string().regex(GRAPH_RE).optional().describe("The context to take out (default: all of them)") },
         annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       },
-      wrap(async () => {
+      wrap(async ({ name }: { name?: string }) => {
+        for (const n of name ? [name] : [...this.contexts.keys()]) this.detach(n);
+        return { contexts: this.list(), write_to: this.writeTo ?? null, ...(this.contexts.size ? {} : { next: this.noContext() }) };
+      }),
+    );
+
+    this.server.registerTool(
+      "link_folder",
+      {
+        title: "Start this folder's chats here",
+        description:
+          "Make new chats started in this chat's folder (or below it) start with this chat's contexts, or with `off`, stop that. " +
+          "It's kept on this machine (nothing is written into the folder). Ask the person first.",
+        inputSchema: { off: z.boolean().optional().describe("Stop linking the folder") },
+        annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      },
+      wrap(async ({ off }: { off?: boolean }) => {
         if (!this.o.cwd) throw new Error("This session doesn't know which folder it started in.");
-        const list = [...this.contexts.values()].map((c) => ({ name: c.name, ...(c.d.graph_id ? { id: c.d.graph_id } : {}) }));
-        const file = writeFolderFile(this.o.cwd, list, this.writeTo);
-        this.folder = { file, missing: [] };
-        return { wrote: file, contexts: list, write_to: this.writeTo, note: "New conversations in this folder start with these contexts. Teammates who aren't in one are told to ask for a join code." };
+        if (off) {
+          const f = folderLink(this.dataDir, this.o.cwd);
+          if (f) setFolderLink(this.dataDir, f.folder, null);
+          return { folder: f?.folder ?? this.o.cwd, linked: null };
+        }
+        if (!this.contexts.size) throw new Error(this.noContext());
+        setFolderLink(this.dataDir, this.o.cwd, this.link());
+        return { folder: this.o.cwd, linked: [...this.contexts.keys()], note: "New chats started in this folder, or below it, start with these contexts." };
       }),
     );
 
@@ -718,11 +825,11 @@ export class Session {
         description:
           "Undo something you just wrote, while it is still only on this machine (for a few seconds after writing): it is removed and never reaches anyone. " +
           "Use it when something was recorded by mistake, such as personal details in the wrong chat. After that, use withdraw (which keeps it in the history).",
-        inputSchema: { id: z.string().describe("The change id (change) or the item's id from the write's result"), context: contextArg.describe("The context it was written to (default: each attached, in turn)") },
+        inputSchema: { id: z.string().describe("The change id (change) or the item's id from the write's result"), context: contextArg.describe("The context it was written to (default: each of this chat's, in turn)") },
         annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
       },
       wrap(async ({ id, context }: { id: string; context?: string }) => {
-        if (context) return this.request("take_back", { id }, context);
+        if (context || !this.many) return this.request("take_back", { id }, context);
         let last: unknown;
         for (const c of this.contexts.values()) {
           try {
@@ -745,7 +852,6 @@ export class Session {
       using: this.where(c.name),
       ...status,
       you: { ...status.you, name_from: nameSource(this.dataDir) },
-      attached: [...this.contexts.keys()],
       graphs: this.localNames(),
     };
   }
@@ -760,7 +866,7 @@ export class Session {
       }
     };
     const both = (summary: unknown, structured: Record<string, unknown>): Content => ({ ...text(summary), structuredContent: structured });
-    const which = contextArg.describe("Which context (default: the write context)");
+    const which = contextArg.describe("Which of this chat's contexts (default: the one writes go to)");
 
     this.server.registerTool(
       "open_console",
@@ -838,10 +944,10 @@ export class Session {
   }
 
   /** What share_context says about a new invite. */
-  private invited(r: Record<string, any>, context?: string) {
+  private invited(r: Record<string, any>, context: string) {
     const identity = this.o.identity();
     return {
-      context: context ?? this.writeTo,
+      context,
       code: r.code,
       send: `Join my context graph: /p2p-context-graph:join ${r.code}`,
       invite: { id: r.id, label: r.label, role: r.role, expires_at: r.expires_at },
@@ -853,7 +959,7 @@ export class Session {
     };
   }
 
-  /** Joins a context with a code: gets its whole log from the machine that made the code, keeps a copy here, attaches it and briefs the agent. */
+  /** Joins a context with a code: gets its whole log from the machine that made the code, keeps a copy here, adds it to this chat (writes go to it) and briefs the agent. */
   private async join(codeText: string): Promise<unknown> {
     const link = parseCode(codeText);
     const identity = this.o.identity();
@@ -881,6 +987,7 @@ export class Session {
     if (!name) throw new Error("Couldn't find a free name for this context on this machine.");
     const c = await this.attach(name, false);
     this.writeTo = name;
+    this.remember();
     this.offer();
     const brief = await this.request<Record<string, unknown>>("briefing", undefined, name).catch(() => null);
     return {
@@ -890,12 +997,11 @@ export class Session {
       role: c.d.you.role,
       as: c.d.you.id,
       your_fingerprint: fingerprint(identity.publicKey),
-      attached: [...this.contexts.keys()],
+      contexts: this.list(),
       copy: `You have your own full copy (${welcome.changes.length} changes), kept in step with the other members whenever you're both online. It works offline too.`,
       briefing: brief,
       told: "Everyone in this context has been told you joined, with your name, key fingerprint and agent.",
-      next: `Tell the person what it's for and give them the briefing in a few lines. Call model_guide before writing. In later sessions, attach_context or use_context '${name}' (no code needed).`,
+      next: `Tell the person what it's for and give them the briefing in a few lines. Call model_guide before writing. It's in this chat now (and stays when the chat is reopened); in other chats, use_context '${name}' (no code needed).`,
     };
   }
 }
-

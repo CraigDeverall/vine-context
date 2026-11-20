@@ -9,7 +9,7 @@ const USAGE = `p2pcg ${pkg.version}: a shared context graph of claims and questi
 Usage: p2pcg <command> [options]
 
 Commands:
-  mcp [--context NAME]                Run the MCP server on stdio (a folder's .p2p-context picks the contexts; else NAME or default)
+  mcp [--context NAME]                Run the MCP server on stdio (a chat keeps the context it chose; a new chat starts with its folder's linked context, else NAME, else none until one is chosen)
   host [--context NAME] [--share] [--idle SECONDS]
                                       Run a context's host in the foreground (--share prints a new join code)
   host stop [--context NAME]          Stop a context's host
@@ -25,7 +25,8 @@ Commands:
 
 Environment:
   P2PCG_USER        Your name in contexts (default: the name you set with set_my_name, else git's user.name, else your login name)
-  P2PCG_CONTEXT     The context to use when the folder has no .p2p-context (default: default)
+  P2PCG_CONTEXT     The context a new chat starts with when its folder has none linked (default: none; the agent asks)
+  P2PCG_CHAT        The chat's id, to remember its context (default: Claude Code's session id)
   P2PCG_DATA_DIR    Where contexts live (default: ~/.local/share/p2p-context-graph)
   P2PCG_AUTO_SHARE  off: new contexts don't sync until you share them
   P2PCG_HOLD_MS     How long a write stays on this machine (Undo) before it is sent (default 10000)
@@ -33,24 +34,32 @@ Environment:
   P2PCG_ICE         STUN/TURN servers, comma-separated (turn:user:pass@host:port)`;
 
 const graphOpts = { graph: { type: "string" }, context: { type: "string" } } as const;
-const graphName = (v?: string) => v ?? process.env.P2PCG_CONTEXT ?? process.env.P2PCG_GRAPH ?? "default";
+const graphName = (v?: string): string => {
+  const name = v ?? process.env.P2PCG_CONTEXT ?? process.env.P2PCG_GRAPH;
+  if (name) return name;
+  console.error("Name a context with --context NAME (there's no default context).");
+  process.exit(2);
+};
 
 async function sessionFactory(values: { graph?: string; context?: string }) {
-  const [{ Session }, { ensureHost }, { defaultDataDir }, { loadIdentity, defaultName }, signal] = await Promise.all([
+  const [{ Session }, { chatIdFromEnv }, { ensureHost }, { defaultDataDir }, { loadIdentity, defaultName }, signal] = await Promise.all([
     import("../mcp/server.js"),
+    import("../mcp/links.js"),
     import("../host/client.js"),
     import("../core/graph.js"),
     import("../core/identity.js"),
     import("../p2p/signal.js"),
   ]);
   const dataDir = defaultDataDir();
-  const graph = graphName(values.context ?? values.graph);
+  // A chat keeps the context it chose (by its id); a new one starts with its folder's linked context, or one named here; there's no default.
+  const graph = values.context ?? values.graph ?? process.env.P2PCG_CONTEXT ?? process.env.P2PCG_GRAPH;
   const log = (m: string) => console.error(`p2pcg: ${m}`);
   let ui: Promise<{ url: string }> | undefined;
   const make = (withBrowserView: boolean): InstanceType<typeof Session> =>
     new Session({
-      local: () => ensureHost({ dataDir, graph }),
+      local: graph ? () => ensureHost({ dataDir, graph }) : undefined,
       cwd: process.cwd(),
+      chat: chatIdFromEnv(),
       openLocal: (g) => ensureHost({ dataDir, graph: g }),
       dataDir,
       identity: () => loadIdentity(dataDir, defaultName(dataDir)),
@@ -74,7 +83,7 @@ async function mcp(args: string[]) {
   const session = make(true);
   await session.start();
   await session.server.connect(new StdioServerTransport());
-  log(`session on graph '${graph}' ready on stdio`);
+  log(`session ready on stdio${graph ? ` (context '${graph}')` : ""}`);
 }
 
 async function demo(args: string[]): Promise<number> {
@@ -167,7 +176,7 @@ async function host(args: string[]): Promise<number> {
       console.log("Host stopped.");
       return 0;
     } catch {
-      console.log("No host is running for that graph.");
+      console.log("No host is running for that context.");
       return 1;
     }
   }
@@ -215,7 +224,7 @@ async function status(args: string[]): Promise<number> {
     c.close();
     return 0;
   } catch {
-    console.log("No host is running for that graph.");
+    console.log("No host is running for that context.");
     return 1;
   }
 }

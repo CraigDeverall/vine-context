@@ -52,7 +52,7 @@ export function newId(prefix: string): string {
 
 /** What a write tool will do, once checked: a change's kind and body. */
 export interface Prepared {
-  kind: "claim" | "question" | "link" | "withdraw";
+  kind: "claim" | "question" | "reply" | "link" | "withdraw";
   body: Record<string, unknown>;
 }
 
@@ -135,7 +135,7 @@ interface Store {
 const openStores = new Map<string, Store>();
 
 const CLAIM_RELS = new Set(["SUPPORTS", "CONTRADICTS", "REPLACES"]);
-const REL_TYPES = new Set(["SUPPORTS", "CONTRADICTS", "REPLACES", "ANSWERS", "ABOUT"]);
+const REL_TYPES = new Set(["SUPPORTS", "CONTRADICTS", "REPLACES", "ANSWERS", "ABOUT", "REPLIES_TO"]);
 const isArray = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && x.length <= 64) : []);
 const str = (v: unknown, max = 20_000): string | null => (typeof v === "string" ? v.slice(0, max) : null);
 const day = (v: unknown): string | null => (typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null);
@@ -393,6 +393,8 @@ export class Graph {
         };
       case "question":
         return { kind: "question", body: { node: params.id, text: input.text, about: input.about ?? [] } };
+      case "reply":
+        return { kind: "reply", body: { node: params.id, text: input.text, question: input.question } };
       case "link":
         return { kind: "link", body: { from: input.from, relation: input.relation, to: input.to } };
       case "withdraw":
@@ -411,7 +413,7 @@ export class Graph {
       this.conn.begin();
       try {
         const out = await this.applyOne(c, ctx);
-        if (out.status === "applied" && (c.kind === "claim" || c.kind === "question" || c.kind === "import")) await this.retryPending(ctx);
+        if (out.status === "applied" && (c.kind === "claim" || c.kind === "question" || c.kind === "reply" || c.kind === "import")) await this.retryPending(ctx);
         this.conn.commit();
         return out;
       } catch (e) {
@@ -463,11 +465,25 @@ export class Graph {
         }
         return { status: "applied", result: { id: node, recorded_at: c.at, ...counts } };
       }
+      case "reply": {
+        const node = str(b.node, 64);
+        const text = str(b.text, 2000);
+        const question = str(b.question, 64);
+        if (!node || !text || !question || !node.startsWith("r_")) return { status: "refused", reason: "bad reply" };
+        const exists = await this.rows(`OPTIONAL MATCH (n:Reply {id: $node}) RETURN n.change AS change`, { node });
+        if (exists[0]?.change !== null && exists[0]?.change !== undefined)
+          return exists[0].change === c.id ? { status: "applied", result: { id: node, recorded_at: c.at } } : { status: "refused", reason: `${node} already exists` };
+        await this.rows(`CREATE (n:Reply {id: $node, text: $text, recorded_at: datetime($at), recorded_by: $by, author: $author, change: $change})`, { node, text, at: c.at, by, author: c.author, change: c.id });
+        const e = { change: c.id, author: c.author, at: c.at, from: node, relation: "REPLIES_TO", to: question };
+        const r = await this.link(e, ctx);
+        if (r.status === "pending") await this.addPending(c.id, "edge", e);
+        return { status: "applied", result: { id: node, question, recorded_at: c.at } };
+      }
       case "link": {
         const from = str(b.from, 64);
         const to = str(b.to, 64);
         const relation = str(b.relation, 20);
-        if (!from || !to || !relation || !REL_TYPES.has(relation) || relation === "ABOUT") return { status: "refused", reason: "bad link" };
+        if (!from || !to || !relation || !REL_TYPES.has(relation) || relation === "ABOUT" || relation === "REPLIES_TO") return { status: "refused", reason: "bad link" };
         const r = await this.link({ change: c.id, author: c.author, at: c.at, from, relation, to }, ctx);
         if (r.status === "pending") await this.addPending(c.id, "edge", { change: c.id, author: c.author, at: c.at, from, relation, to });
         return r.status === "applied" ? { status: "applied", result: { from, relation, to } } : r;
@@ -489,17 +505,21 @@ export class Graph {
   private async link(e: { change: string; author: string; at: string; from: string; relation: string; to: string }, ctx: ApplyContext): Promise<Applied> {
     if (e.from === e.to) return { status: "refused", reason: "an item can't link to itself" };
     const ends = await this.rows(
-      `OPTIONAL MATCH (a:Claim|Question {id: $from}) OPTIONAL MATCH (b:Claim|Question {id: $to}) ` +
-        `RETURN a IS NOT NULL AS a, b IS NOT NULL AS b, a:Claim AS a_claim, b:Claim AS b_claim, b:Question AS b_question`,
+      `OPTIONAL MATCH (a:Claim|Question|Reply {id: $from}) OPTIONAL MATCH (b:Claim|Question {id: $to}) ` +
+        `RETURN a IS NOT NULL AS a, b IS NOT NULL AS b, a:Claim AS a_claim, a:Reply AS a_reply, b:Claim AS b_claim, b:Question AS b_question`,
       { from: e.from, to: e.to },
     );
     const x = ends[0] ?? {};
     const waiting = [...(x.a ? [] : [e.from]), ...(x.b ? [] : [e.to])];
     if (waiting.length) return { status: "pending", waiting };
-    const fromLabel = x.a_claim ? "Claim" : "Question";
+    const fromLabel = x.a_claim ? "Claim" : x.a_reply ? "Reply" : "Question";
     const toLabel = x.b_claim ? "Claim" : "Question";
     const ok =
-      e.relation === "ABOUT"
+      e.relation === "REPLIES_TO"
+        ? fromLabel === "Reply" && toLabel === "Question"
+        : fromLabel === "Reply"
+          ? false
+          : e.relation === "ABOUT"
         ? fromLabel === "Question"
         : fromLabel === "Claim" && (CLAIM_RELS.has(e.relation) ? toLabel === "Claim" : e.relation === "ANSWERS" && toLabel === "Question");
     if (!ok) return { status: "refused", reason: `${e.relation} can't link a ${fromLabel} to a ${toLabel}` };
@@ -520,14 +540,14 @@ export class Graph {
   }
 
   private async withdraw(w: { change: string; author: string; at: string; node: string; reason: string | null }, ctx: ApplyContext): Promise<Applied> {
-    const found = await this.rows(`OPTIONAL MATCH (n:Claim|Question {id: $node}) RETURN n IS NOT NULL AS found, n.author AS author, n.recorded_by AS by, n.withdrawn_at AS w`, { node: w.node });
+    const found = await this.rows(`OPTIONAL MATCH (n:Claim|Question|Reply {id: $node}) RETURN n IS NOT NULL AS found, n.author AS author, n.recorded_by AS by, n.withdrawn_at AS w`, { node: w.node });
     const n = found[0] ?? {};
     if (!n.found) return { status: "pending", waiting: [w.node] };
     const own = n.author ? n.author === w.author : n.by === ctx.name(w.author);
     if (!own && !ctx.isAdmin(w.author, w.at)) return { status: "refused", reason: "only its author or an admin can withdraw it" };
     if (n.w === null || n.w === undefined || Date.parse(w.at) < Date.parse(String(n.w)))
       await this.rows(
-        `MATCH (n:Claim|Question {id: $node}) SET n.withdrawn_at = datetime($at), n.withdrawn_by = $by, n.withdrawn_author = $author, n.withdraw_reason = $reason, n.withdraw_change = $change`,
+        `MATCH (n:Claim|Question|Reply {id: $node}) SET n.withdrawn_at = datetime($at), n.withdrawn_by = $by, n.withdrawn_author = $author, n.withdraw_reason = $reason, n.withdraw_change = $change`,
         { ...w, by: ctx.name(w.author) },
       );
     return { status: "applied", result: { id: w.node, withdrawn_at: w.at } };
@@ -607,8 +627,8 @@ export class Graph {
   /** Takes back a claim or question this machine just made and hasn't sent: it was never shared. */
   async discard(changeId: string): Promise<boolean> {
     return this.serial(async () => {
-      const found = await this.rows(`MATCH (n:Claim|Question {change: $change}) RETURN count(n) AS n`, { change: changeId });
-      await this.rows(`MATCH (n:Claim|Question {change: $change}) DETACH DELETE n`, { change: changeId });
+      const found = await this.rows(`MATCH (n:Claim|Question|Reply {change: $change}) RETURN count(n) AS n`, { change: changeId });
+      await this.rows(`MATCH (n:Claim|Question|Reply {change: $change}) DETACH DELETE n`, { change: changeId });
       await this.rows(`MATCH (p:_P2pcgPending {change: $change}) DELETE p`, { change: changeId });
       return Number(found[0]?.n ?? 0) > 0;
     });
@@ -636,8 +656,8 @@ export class Graph {
   async refreshNames(names: Map<string, string>): Promise<void> {
     await this.serial(async () => {
       for (const [key, name] of names) {
-        await this.rows(`MATCH (n:Claim|Question) WHERE n.author = $key AND n.recorded_by <> $name SET n.recorded_by = $name`, { key, name });
-        await this.rows(`MATCH (n:Claim|Question) WHERE n.withdrawn_author = $key AND n.withdrawn_by <> $name SET n.withdrawn_by = $name`, { key, name });
+        await this.rows(`MATCH (n:Claim|Question|Reply) WHERE n.author = $key AND n.recorded_by <> $name SET n.recorded_by = $name`, { key, name });
+        await this.rows(`MATCH (n:Claim|Question|Reply) WHERE n.withdrawn_author = $key AND n.withdrawn_by <> $name SET n.withdrawn_by = $name`, { key, name });
         await this.rows(`MATCH ()-[r]->() WHERE r.author = $key AND r.recorded_by <> $name SET r.recorded_by = $name`, { key, name });
       }
     });

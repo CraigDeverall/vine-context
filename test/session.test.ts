@@ -91,7 +91,7 @@ describe("MCP sessions on replicated graphs", () => {
     expect(joined.your_fingerprint).toMatch(/^[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}$/);
     expect(bob.changes()).toBeGreaterThan(before);
     expect((await bob.call("context_info")).using).toBe("'team' (alice's context; you are a contributor)");
-    // Bob's copy already has Alice's claim, and both of bob's contexts are attached: reads search both, saying which.
+    // Bob's copy already has Alice's claim; joining added 'team' beside bob's own context: reads search both, saying which.
     expect((await bob.call("search", { query: "finding", context: "team" })).map((r: any) => r.text)).toEqual(["Alice's finding"]);
     const both = await bob.call("search", { query: "Alice's finding Bob's note" });
     expect(new Set(both.map((r: any) => r.context))).toEqual(new Set(["team", "bobs-notes"]));

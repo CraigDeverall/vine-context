@@ -56,6 +56,28 @@ describe("temporal-claims", () => {
     expect(ids(await act(g, "open_questions", {}, reader))).toEqual([q.id]);
   });
 
+  it("keeps a thread of replies on a question, until a claim answers it", async () => {
+    const g = await openGraph();
+    const q = (await act(g, "ask_question", { text: "Which day is the team lunch?" }, alice)) as Row;
+    const r1 = (await act(g, "reply", { question: q.id, text: "Friday suits most people" }, bob)) as Row;
+    expect(r1.id).toMatch(/^r_/);
+    await pause();
+    await act(g, "reply", { question: q.id, text: "Not this week: Friday is a holiday" }, alice);
+    expect(await act(g, "open_questions", {}, reader)).toEqual([expect.objectContaining({ id: q.id, replies: 2 })]);
+    let t = (await act(g, "thread", { question: q.id }, reader)) as Row;
+    expect(t.replies.map((r: Row) => r.recorded_by)).toEqual(["bob", "alice"]);
+    expect(t).toMatchObject({ answered: false, answers: [] });
+    // A reply is a reply, not an answer: a claim closes the question.
+    const c = (await act(g, "add_claim", { text: "The team lunch is on Thursday this week", answers: [q.id], source: `reply ${r1.id}` }, bob)) as Row;
+    t = (await act(g, "thread", { question: q.id }, reader)) as Row;
+    expect(t).toMatchObject({ answered: true, answers: [expect.objectContaining({ id: c.id })] });
+    expect(await act(g, "open_questions", {}, reader)).toEqual([]);
+    // Its author can withdraw a reply; a reply to an unknown question is refused.
+    await act(g, "withdraw", { id: r1.id }, bob);
+    expect(((await act(g, "thread", { question: q.id }, reader)) as Row).replies).toHaveLength(1);
+    await expect(act(g, "reply", { question: "q_nope", text: "hi" }, bob)).rejects.toThrow(/No current question/);
+  });
+
   it("lists conflicts between current claims only", async () => {
     const g = await openGraph();
     const a = (await act(g, "add_claim", { text: "The firmware causes the drop" }, alice)) as Row;

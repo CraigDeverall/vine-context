@@ -7,9 +7,9 @@ Join the shared context with this join code: $ARGUMENTS
 
 1. Call the `join_context` tool of the p2p-context-graph MCP server with the
    code exactly as given above. If no code was given, call `context_info` and
-   offer the contexts in `your_contexts` instead (`attach_context` adds one to
-   this conversation, no code needed).
-2. I'm let in at once, with my own full copy, attached to this conversation.
+   offer the contexts in `your_contexts` instead (`use_context` makes one this
+   chat's context, no code needed).
+2. I'm let in at once, with my own full copy, and it's added to this chat.
    Tell me whose context it is, what it's for, my role, and that everyone in it
    has been told I joined (my name, key fingerprint and agent). Then give me its
    briefing in a few lines: open questions, conflicts, the latest.

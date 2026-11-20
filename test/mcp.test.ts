@@ -69,7 +69,7 @@ describe("p2pcg mcp", () => {
 
   it("serves the model guide and graph info", async () => {
     expect(textOf(await client.callTool({ name: "model_guide", arguments: {} }))).toMatch(/# Model: Claims and Questions[\s\S]*Before you add/);
-    const info = JSON.parse(textOf(await client.callTool({ name: "context_info", arguments: { context: "e2e" } })));
+    const info = JSON.parse(textOf(await client.callTool({ name: "context_info", arguments: {} })));
     expect(info).toMatchObject({ graph: "e2e", model: { name: "temporal-claims" }, embedder: "hash-256", created_by: "e2e-user", you: { role: "admin", name: "e2e-user" } });
     expect(info.nodes.Claim).toBeGreaterThanOrEqual(1);
   });

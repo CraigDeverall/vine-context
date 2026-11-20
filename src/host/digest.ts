@@ -42,7 +42,7 @@ export function overlap(a: string, b: string): number {
 }
 
 export async function digest(changes: Change[], ctx: DigestContext): Promise<string[]> {
-  const others = changes.filter((c) => c.author !== ctx.me && ["claim", "question", "link", "withdraw"].includes(c.kind));
+  const others = changes.filter((c) => c.author !== ctx.me && ["claim", "question", "reply", "link", "withdraw"].includes(c.kind));
   if (!others.length) return [];
   const g = ctx.graph;
 
@@ -52,6 +52,7 @@ export async function digest(changes: Change[], ctx: DigestContext): Promise<str
     const b = c.body;
     if (typeof b.node === "string") ids.push(b.node);
     ids.push(...arr(b.replaces), ...arr(b.answers), ...arr(b.contradicts), ...arr(b.supports));
+    if (typeof b.question === "string") ids.push(b.question);
     if (typeof b.from === "string") ids.push(b.from);
     if (typeof b.to === "string") ids.push(b.to);
   }
@@ -74,6 +75,8 @@ export async function digest(changes: Change[], ctx: DigestContext): Promise<str
       for (const t of arr(b.contradicts)) rels.push(["CONTRADICTS", b.node, t]);
     } else if (c.kind === "link" && typeof b.from === "string" && typeof b.to === "string" && typeof b.relation === "string") {
       rels.push([b.relation, b.from, b.to]);
+    } else if (c.kind === "reply" && typeof b.question === "string" && mine(b.question)) {
+      yours.push(`${who} replied to your question ${b.question} ${text(b.question)}: ${q(String(b.text ?? ""))}.`);
     } else if (c.kind === "withdraw" && typeof b.node === "string" && mine(b.node)) {
       yours.push(`${who} withdrew your ${items.get(b.node)?.label === "Question" ? "question" : "claim"} ${b.node} ${text(b.node)}.`);
     }

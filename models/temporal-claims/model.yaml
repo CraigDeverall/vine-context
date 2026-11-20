@@ -4,6 +4,8 @@ title: Claims and Questions
 description: >-
   What a group knows about a piece of work, as dated claims and open questions.
   Claims support, contradict or replace each other, and answer questions.
+  A question has a thread of replies, where people work it out before a
+  claim answers it.
   Nothing is deleted: a replaced or withdrawn claim stays in the graph, so you
   can ask what the group believed at any moment.
 
@@ -41,6 +43,22 @@ nodes:
       withdrawn_by: { type: string }
       withdraw_reason: { type: string }
 
+  Reply:
+    description: >-
+      One message in a question's thread: what someone (through their agent)
+      said about it, before or instead of an answer. A reply never answers the
+      question itself: a claim does, once the thread has settled it.
+    key: id
+    properties:
+      id: { type: id, required: true }
+      text: { type: string, required: true }
+      recorded_at: { type: datetime, required: true }
+      recorded_by: { type: string, required: true, description: The author's name }
+      author: { type: string, description: The author's public key (their machine) }
+      withdrawn_at: { type: datetime }
+      withdrawn_by: { type: string }
+      withdraw_reason: { type: string }
+
 relationships:
   SUPPORTS:
     description: The first claim is evidence for the second.
@@ -64,6 +82,10 @@ relationships:
     description: The question asks about this claim or question.
     from: [Question]
     to: [Claim, Question]
+  REPLIES_TO:
+    description: The reply is part of this question's thread.
+    from: [Reply]
+    to: [Question]
 
 # Every relationship also carries recorded_at and recorded_by, so the graph
 # can be read as it stood at any time.

@@ -97,9 +97,15 @@ claude plugin install p2p-context-graph@p2p-context-graph
 ```
 
 **In Claude Code, the plugin also adds a mod** to Claude Code's own interface:
-- a band above the prompt: the contexts this chat uses, who's online, and the latest news: what others' changes meant for you, or the latest thing someone synced (with *Open*);
+- a band above the prompt in every chat (*loading…* while it connects): this chat's context, who's online, and the latest news: what others' changes meant for you, or the latest thing someone synced (with *Open*);
 - a status line entry, and a toast when someone else's change or a sync digest arrives;
-- `/context`: a panel beside the chat with the context drawn as SVG (desktop app and VS Code), the claims and questions (add, *Undo* while a write is still on your machine, *Withdraw*), the people (roles, *Remove* and join codes for admins), and the attached contexts (attach, detach, where writes go, and saving them for the folder).
+- `/contexts`: a panel beside the chat, with four tabs. It updates by itself.
+  - **Overview**: what needs you (claims that contradict each other, replies to your questions, open questions, a missing description, being offline), what others' changes meant for you, and the recent activity. *Catch me up* and *Save what this chat learned* ask your agent to do just that.
+  - **Questions**: open, answered or yours, each with its thread. A question opens on its own, where *Answer* and *Answer with this* hand your answer to your agent to record as a claim, and *Ask my agent to look into it* sets it to work.
+  - **Claims**: current, yours, in conflict, or history (replaced and withdrawn). A conflict shows both sides with *Keep this one*. A claim opens on its own with everything linked to it (evidence, what it answers, earlier versions), and *Correct it*, which your agent records as a claim that replaces it. *Undo* works while a write is still on your machine, *Withdraw* after.
+  - **People**: who's in, what each has recorded and when they were last active; roles and *Remove* for admins; the join codes still waiting to be used, each with *Copy* and *Cancel*, and *Invite someone*; and *Go offline* / *Go online*.
+  - Both lists filter by words, a person or an id. ✎ edits the description, and *⇄ Contexts* (or the context's name in the band) opens a view that turns the chat's contexts on and off. Editing something (a description, an answer, a correction, an invite, your name, a new context) takes the whole panel until it's saved or cancelled.
+  - The panel never writes a claim or question itself: your agent does, from what you tell it.
 
 The mod reads through the `context_activity` tool, which never uses up the join notices meant for your agent. Its source is [`plugin/hooks/register.tsx`](plugin/hooks/register.tsx); `claude plugin test plugin` runs its tests.
 
@@ -129,23 +135,18 @@ From then on everyone works on their own copy, limited by their role (contributo
 - There's no approval step: the single-use code is the credential, so send it privately.
 - An unused code expires after 24 hours (*"invite Sam, valid for a week"* sets it).
 - `sharing_status` and the console list the invites; `revoke_invite` or *Cancel* stops one working.
-- A code isn't needed again: a joined context is on the member's machine, so *"use the incident-42 context"* (`use_context` or `attach_context`) brings it back in any later conversation.
+- A code isn't needed again: a joined context is on the member's machine, so *"use the incident-42 context"* (`use_context`) brings it back in any later chat.
 
-**Several contexts in one conversation.** Each context has a description of what it's for (*"describe this context as …"*, or `describe_context`).
-- *"Also use the infra context"* (`attach_context`) adds one; `detach_context` drops one; `use_context` switches to just one.
-- Reads (`search`, `beliefs`, `open_questions`, `conflicts`, `recent`) run on every attached context, each result saying which.
-- Each write goes to one context: the agent picks it by the descriptions (or asks you), else it goes to the write context.
+**A chat's contexts.** A chat usually uses one context, and keeps it when you reopen the chat: it's remembered on your machine under the chat's id (Claude Code's session id, or `P2PCG_CHAT`), with nothing written into your project.
+- *"Use the incident-42 context"* (`use_context`) sets or switches it; a new name starts a new context, and the agent asks what it's for (its description, which `describe_context` or ✎ in the panel changes).
+- *"Also use the infra context"* (`add_context`) adds another; `remove_context` takes one out (or all). With several, reads search them all, and the agent puts each write in the one whose description fits.
+- There's no default: a new chat has none until you choose, so the agent asks before its first write, and the band shows *No context · Choose*.
+- Optionally, *"start this folder's chats with these contexts"* (`link_folder`) makes new chats in that folder, or below it, start with them. That's kept on your machine too.
 
-**A folder's contexts.** A `.p2p-context` file in a project folder attaches its contexts to every new conversation started there:
-
-```json
-{ "contexts": [{ "name": "team", "id": "0193…" }, { "name": "incident-42", "id": "0194…" }], "write_to": "team" }
-```
-
-*"Use these contexts for every chat in this folder"* (`save_folder_contexts`) writes it. Contexts are found by id, so the file works on teammates' machines; it holds no secrets, so it can be committed. A teammate who isn't in one of them is told to ask for a join code.
+**Questions have threads.** Agents `reply` to a question with partial findings, ideas and follow-ups, and read the whole `thread` before adding to it. A reply never closes a question: when you give an answer (in the chat, or with *Answer* in the panel), your agent records it as a claim that `answers` the question.
 
 **What a sync tells you.** When changes from others arrive (live, or catching up after being offline), each member's agent is told what they mean for that person:
-- your claim was **replaced**, or your question **answered**;
+- your claim was **replaced**, or your question **answered** or **replied to**;
 - a **new conflict** (a claim contradicts another, yours first);
 - **unsettled**: two current claims replace the same claim;
 - a **possible overlap**: a new claim close to an existing one by someone else, with no link between them, for the agent to look at.

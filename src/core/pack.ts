@@ -117,7 +117,7 @@ export const ToolSchema = z.object({
   /** A built-in view that shows this tool's result: receipt (for writes) or conflicts (pairs of items). */
   view: z.enum(["receipt", "conflicts"]).optional(),
   /** For write tools: the kind of change it makes. Its steps only check the input. */
-  apply: z.enum(["claim", "question", "link", "withdraw"]).optional(),
+  apply: z.enum(["claim", "question", "reply", "link", "withdraw"]).optional(),
   /** How to undo a write from its receipt: call `tool` with { [arg]: result[field] }. */
   undo: z.object({ tool: toolName, arg: identifier.default("id"), field: identifier.default("id") }).optional(),
 });
@@ -134,15 +134,16 @@ export const RESERVED_TOOL_NAMES = [
   "set_my_name",
   "share_context",
   "stop_sharing",
+  "start_sharing",
   "sharing_status",
   "revoke_invite",
   "set_peer_role",
   "remove_peer",
   "join_context",
   "use_context",
-  "attach_context",
-  "detach_context",
-  "save_folder_contexts",
+  "add_context",
+  "remove_context",
+  "link_folder",
   "take_back",
   "open_console",
   "explore_context",

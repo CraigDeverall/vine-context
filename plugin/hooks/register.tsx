@@ -1,37 +1,71 @@
-// The p2p-context-graph mod: shared contexts inside Claude Code's own UI.
+// The p2p-context-graph mod: this chat's shared contexts inside Claude Code's own UI.
 //
-// - A band above the prompt: the contexts this chat uses, who's online, and the
-//   latest news (what others' changes meant for you, from the sync digest, or
-//   the latest thing someone synced), with a button that opens the panel.
+// - A band above the prompt, in every chat: the chat's context (usually one),
+//   who's online and the latest news. The context's name opens the panel's
+//   Contexts view, where contexts are turned on and off for the chat.
 // - A status line entry, and a toast when someone else's change or a digest arrives.
-// - A panel (/context): the context drawn as SVG, the claims and questions with
-//   add, Undo and Withdraw, the people with roles, removal and join codes, and
-//   the attached contexts (attach, detach, write here, save for the folder).
+// - A panel (/contexts) with four tabs: an Overview (what needs you, what
+//   changed, recent activity), the context's Questions with their threads, its
+//   Claims (with conflicts and history), and its People. An item opens on its
+//   own, with everything linked to it. Anything being edited (the description,
+//   an answer, a correction, an invite, a new context, the chat's contexts)
+//   takes the whole panel until it's done or cancelled.
+//
+// Agents write; people steer. The panel never writes a claim itself: Answer,
+// "Answer with this", Correct, "Keep this one", Look into it, Catch me up and
+// "Save what this chat learned" hand the person's words to the agent as a
+// prompt, and the agent records them (see `prompts`).
 //
 // It reads through the p2p-context-graph MCP server's `context_activity` tool,
 // which never uses up the join notices meant for the agent, and acts through
-// the server's ordinary tools.
+// the server's ordinary tools. It polls, so there's nothing to refresh.
 
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register } from 'claude-code'
+import type { EngineInterface, Register, UiPressArgument } from 'claude-code'
 
-import type { Activity, Change, GraphEdge, GraphNode, Latest, Person, Tab } from '../types'
+import type { Activity, Change, Compose, Filters, GraphEdge, GraphNode, Invite, Latest, Person, Tab } from '../types'
 
 const PANE = 'context-graph'
 const POLL_MS = 4000
+const TICK_MS = 400
+const NOTICE_MS = 6000
+/** How many items a list shows before "Show more". */
+const PAGE = 20
 const SERVERS = ['plugin_p2p-context-graph_p2p-context-graph', 'plugin:p2p-context-graph:p2p-context-graph', 'p2p-context-graph']
+const NAME_RE = /^[a-z0-9][a-z0-9-]{0,62}$/
 
-const activity = atom({ plugin: 'p2p-context-graph', key: 'activity' } as const, null, { shape: 'activity-1' })
+const activity = atom({ plugin: 'p2p-context-graph', key: 'activity' } as const, null, { shape: 'activity-3' })
 const latest = atom({ plugin: 'p2p-context-graph', key: 'latest' } as const, null)
-const tab = atom({ plugin: 'p2p-context-graph', key: 'tab' } as const, 'graph')
+const tab = atom({ plugin: 'p2p-context-graph', key: 'tab' } as const, 'overview', { shape: 'tab-3' })
 const code = atom({ plugin: 'p2p-context-graph', key: 'code' } as const, null)
 const notice = atom({ plugin: 'p2p-context-graph', key: 'notice' } as const, null)
 const error = atom({ plugin: 'p2p-context-graph', key: 'error' } as const, null)
 const confirmRemove = atom({ plugin: 'p2p-context-graph', key: 'confirmRemove' } as const, null)
-/** The context the panel shows; null is the conversation's write context. */
+const draftName = atom({ plugin: 'p2p-context-graph', key: 'draftName' } as const, null)
+const editing = atom({ plugin: 'p2p-context-graph', key: 'editing' } as const, false)
+const switching = atom({ plugin: 'p2p-context-graph', key: 'switching' } as const, false)
+const detail = atom({ plugin: 'p2p-context-graph', key: 'detail' } as const, null)
+const composing = atom({ plugin: 'p2p-context-graph', key: 'composing' } as const, null)
+const renaming = atom({ plugin: 'p2p-context-graph', key: 'renaming' } as const, false)
+const filters = atom({ plugin: 'p2p-context-graph', key: 'filters' } as const, { text: '', claims: 'current', questions: 'open' })
+const more = atom({ plugin: 'p2p-context-graph', key: 'more' } as const, 0)
+const unattached = atom({ plugin: 'p2p-context-graph', key: 'unattached' } as const, null)
 const viewing = atom({ plugin: 'p2p-context-graph', key: 'viewing' } as const, null)
+const tick = atom({ plugin: 'p2p-context-graph', key: 'tick' } as const, 0)
+const inviting = atom({ plugin: 'p2p-context-graph', key: 'inviting' } as const, null)
 
 type Engine = EngineInterface
+
+/** What's typed in the new invite's note, for its Make button (the field's own submit works too). */
+let inviteNote = ''
+
+/** The tabs, each with its icon. */
+const TABS: { tab: Tab; icon: string; label: string }[] = [
+  { tab: 'overview', icon: '🏠', label: 'Overview' },
+  { tab: 'questions', icon: '❓', label: 'Questions' },
+  { tab: 'claims', icon: '📌', label: 'Claims' },
+  { tab: 'people', icon: '👥', label: 'People' },
+]
 
 const short = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s)
 const ago = (iso: string, now: number) => {
@@ -41,89 +75,124 @@ const ago = (iso: string, now: number) => {
   if (s < 86400) return `${Math.round(s / 3600)}h ago`
   return `${Math.round(s / 86400)}d ago`
 }
-const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+const prop = (n: GraphNode, k: string) => (typeof n.props[k] === 'string' ? (n.props[k] as string) : '')
 
-/** Lays the graph out (a small force simulation, the same every time for the same graph) and draws it as SVG. */
-export function graphSvg(nodes: GraphNode[], edges: GraphEdge[], width = 640, height = 420): string {
-  const shown = nodes.slice(0, 120)
-  const index = new Map(shown.map((n, i) => [n.id, i]))
-  const links = edges.filter(e => index.has(e.source) && index.has(e.target))
-  const n = shown.length
-  const pos = shown.map((_, i) => {
-    const a = (2 * Math.PI * i) / Math.max(n, 1)
-    return { x: width / 2 + Math.cos(a) * width * 0.3, y: height / 2 + Math.sin(a) * height * 0.3, vx: 0, vy: 0 }
-  })
-  for (let step = 0; step < 160; step++) {
-    for (let i = 0; i < n; i++)
-      for (let j = i + 1; j < n; j++) {
-        const a = pos[i]!
-        const b = pos[j]!
-        let dx = a.x - b.x
-        let dy = a.y - b.y
-        const d2 = Math.max(dx * dx + dy * dy, 1)
-        const f = 1800 / d2
-        dx *= f / Math.sqrt(d2)
-        dy *= f / Math.sqrt(d2)
-        a.vx += dx
-        a.vy += dy
-        b.vx -= dx
-        b.vy -= dy
-      }
-    for (const l of links) {
-      const a = pos[index.get(l.source)!]!
-      const b = pos[index.get(l.target)!]!
-      const dx = b.x - a.x
-      const dy = b.y - a.y
-      const d = Math.max(Math.sqrt(dx * dx + dy * dy), 1)
-      const f = (d - 90) * 0.02
-      a.vx += (dx / d) * f
-      a.vy += (dy / d) * f
-      b.vx -= (dx / d) * f
-      b.vy -= (dy / d) * f
-    }
-    for (const p of pos) {
-      p.vx += (width / 2 - p.x) * 0.004
-      p.vy += (height / 2 - p.y) * 0.004
-      p.x = Math.min(width - 20, Math.max(20, p.x + p.vx * 0.5))
-      p.y = Math.min(height - 16, Math.max(16, p.y + p.vy * 0.5))
-      p.vx *= 0.6
-      p.vy *= 0.6
-    }
+/** A question with its thread and the claims that answer it, from the snapshot. */
+export type Thread = { q: GraphNode; replies: GraphNode[]; answers: GraphNode[] }
+
+/** Builds the questions' threads and the current claims from a snapshot. */
+export function threads(nodes: GraphNode[], edges: GraphEdge[]): { open: Thread[]; answered: Thread[]; claims: GraphNode[]; withdrawn: number } {
+  const byId = new Map(nodes.map(n => [n.id, n]))
+  const live = (n: GraphNode | undefined): n is GraphNode => !!n && !n.ended
+  // A claim is current unless withdrawn or replaced by a current claim.
+  const replaced = new Set(edges.filter(e => e.type === 'REPLACES' && live(byId.get(e.source))).map(e => e.target))
+  const current = (n: GraphNode | undefined): n is GraphNode => live(n) && n.label === 'Claim' && !replaced.has(n.id)
+  const all: Thread[] = nodes
+    .filter(n => n.label === 'Question' && !n.ended)
+    .map(q => ({
+      q,
+      replies: edges
+        .filter(e => e.type === 'REPLIES_TO' && e.target === q.id)
+        .map(e => byId.get(e.source))
+        .filter(live)
+        .sort((a, b) => Date.parse(prop(a, 'recorded_at')) - Date.parse(prop(b, 'recorded_at'))),
+      answers: edges
+        .filter(e => e.type === 'ANSWERS' && e.target === q.id)
+        .map(e => byId.get(e.source))
+        .filter(current),
+    }))
+  return {
+    open: all.filter(t => !t.answers.length),
+    answered: all.filter(t => t.answers.length),
+    claims: nodes.filter(current),
+    withdrawn: nodes.filter(n => n.ended).length,
   }
-  const dash: Record<string, string> = { SUPPORTS: '', CONTRADICTS: '6 4', REPLACES: '2 3', ANSWERS: '8 3 2 3', ABOUT: '1 3' }
-  const stroke: Record<string, string> = { SUPPORTS: '#6b7a90', CONTRADICTS: '#d0453b', REPLACES: '#8a8a8a', ANSWERS: '#3a9a5b', ABOUT: '#a0a0a0' }
-  const parts: string[] = [
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" font-family="system-ui, sans-serif" font-size="11">`,
-    `<defs><marker id="arrow" viewBox="0 0 10 10" refX="16" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#8a8a8a"/></marker></defs>`,
-  ]
-  for (const l of links) {
-    const a = pos[index.get(l.source)!]!
-    const b = pos[index.get(l.target)!]!
-    parts.push(
-      `<line x1="${a.x.toFixed(1)}" y1="${a.y.toFixed(1)}" x2="${b.x.toFixed(1)}" y2="${b.y.toFixed(1)}" stroke="${stroke[l.type] ?? '#888'}" stroke-width="1.4"${dash[l.type] ? ` stroke-dasharray="${dash[l.type]}"` : ''} marker-end="url(#arrow)"><title>${esc(l.type)}</title></line>`,
-    )
+}
+
+/** How a snapshot's items relate: what replaced what, what contradicts what, and each item's links. */
+export function relations(nodes: GraphNode[], edges: GraphEdge[]) {
+  const byId = new Map(nodes.map(n => [n.id, n]))
+  const byKey = new Map(nodes.map(n => [n.key, n]))
+  const live = (n: GraphNode | undefined): n is GraphNode => !!n && !n.ended
+  /** A claim's newer version, where a claim that still stands replaced it. */
+  const replacedBy = new Map<string, GraphNode>()
+  for (const e of edges) {
+    const by = byId.get(e.source)
+    if (e.type === 'REPLACES' && live(by)) replacedBy.set(e.target, by)
   }
-  shown.forEach((node, i) => {
-    const p = pos[i]!
-    const fill = node.ended ? 'none' : node.label === 'Claim' ? '#3b6fd6' : '#e07a2e'
-    const edge = node.ended ? '#9a9a9a' : fill
-    const by = typeof node.props.recorded_by === 'string' ? ` (${node.props.recorded_by})` : ''
-    parts.push(
-      `<g><circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="7" fill="${fill}" stroke="${edge}" stroke-width="1.5"${node.ended ? ' stroke-dasharray="2 2"' : ''}/>` +
-        `<text x="${(p.x + 10).toFixed(1)}" y="${(p.y + 4).toFixed(1)}" fill="${node.ended ? '#9a9a9a' : '#5a5a5a'}"${node.ended ? ' text-decoration="line-through"' : ''}>${esc(short(node.title, 28))}</text>` +
-        `<title>${esc(node.label)}: ${esc(node.title)}${esc(by)}</title></g>`,
-    )
-  })
-  parts.push('</svg>')
-  return parts.join('')
+  const current = (n: GraphNode | undefined): n is GraphNode => live(n) && n.label === 'Claim' && !replacedBy.has(n.id)
+  const linked = (id: string, type: string, dir: 'out' | 'in') =>
+    edges
+      .filter(e => e.type === type && (dir === 'out' ? e.source : e.target) === id)
+      .map(e => byId.get(dir === 'out' ? e.target : e.source))
+      .filter((n): n is GraphNode => !!n)
+  // Pairs of claims that both still stand and can't both be true, each pair once.
+  const pairs = new Map<string, [GraphNode, GraphNode]>()
+  for (const e of edges) {
+    if (e.type !== 'CONTRADICTS') continue
+    const a = byId.get(e.source)
+    const b = byId.get(e.target)
+    if (current(a) && current(b)) pairs.set([a.id, b.id].sort().join('|'), [a, b])
+  }
+  const conflicts = [...pairs.values()]
+  const inConflict = new Set(conflicts.flatMap(([a, b]) => [a.id, b.id]))
+  /** Claims that no longer stand: replaced or withdrawn. */
+  const history = nodes.filter(n => n.label === 'Claim' && !current(n))
+  return { byId, byKey, replacedBy, current, linked, conflicts, inConflict, history }
+}
+
+/** Whether an item matches the filter's words: all of them, anywhere in its text, author, source or id. */
+export function matches(n: GraphNode, text: string): boolean {
+  const words = text.toLowerCase().split(/\s+/).filter(Boolean)
+  if (!words.length) return true
+  const hay = `${n.title} ${prop(n, 'recorded_by')} ${prop(n, 'source')} ${n.key}`.toLowerCase()
+  return words.every(w => hay.includes(w))
+}
+
+/** What the agent is asked from the panel's other buttons: the person steers, the agent records. */
+export const prompts = {
+  catchUp: (context: string) =>
+    `Catch me up on the context '${context}': what changed lately and who changed it, which questions are still open, and any claims that contradict each other. Keep it short, and end with what needs me.`,
+  saveChat: (context: string) =>
+    `Record what we've learned in this chat in the context '${context}'. Search it first, so you link to what's already there instead of repeating it. Add a claim for each finding and a question for each thing we still don't know, then tell me what you recorded, with the ids.`,
+  investigate: (q: GraphNode, context?: string) =>
+    `Look into the open question ${q.key} ("${short(q.title, 200)}")${context ? ` in the context '${context}'` : ''}. Search the context for what's already known about it, find out what you can, and reply on its thread with what you find. If that settles it, record a claim that answers it.`,
+  correct: (claim: GraphNode, text: string, context?: string) =>
+    `The claim ${claim.key} ("${short(claim.title, 200)}")${context ? ` in the context '${context}'` : ''} is wrong or out of date. What's right: ${text}\n\n` +
+    `Record it: paraphrase it as a claim that stands alone, and add it with replaces: [${claim.key}]${context ? ` (context: ${context})` : ''}.`,
+  settle: (keep: GraphNode, drop: GraphNode, context?: string) =>
+    `The claims ${keep.key} ("${short(keep.title, 200)}") and ${drop.key} ("${short(drop.title, 200)}") contradict each other${context ? ` in the context '${context}'` : ''}. ${keep.key} is the one that's right.\n\n` +
+    `Settle it so only one stands: withdraw ${drop.key} with that as the reason if you may, otherwise record a claim that replaces it (replaces: [${drop.key}])${context ? ` (context: ${context})` : ''}. Then tell me what you did.`,
+}
+
+/** What the agent is asked when the person answers a question, or picks a reply as the answer. */
+export function answerPrompt(q: GraphNode, answer: { text: string } | { reply: GraphNode }, context?: string): string {
+  const question = `the open question ${q.key} ("${short(q.title, 200)}")${context ? ` in the context '${context}'` : ''}`
+  const where = context ? ` (context: ${context})` : ''
+  if ('text' in answer)
+    return `My answer to ${question}: ${answer.text}\n\nRecord it: paraphrase it as a claim that stands alone, and add it with answers: [${q.key}]${where}.`
+  const r = answer.reply
+  return (
+    `Answer ${question} with ${prop(r, 'recorded_by') || 'its'}'s reply ${r.key}: "${short(r.title, 400)}"\n\n` +
+    `Paraphrase it as a claim that stands alone and record it with answers: [${q.key}], with source "reply ${r.key}"${where}.`
+  )
 }
 
 // Module state: starts over on a reload (the values in $.state stay).
 let server: string | undefined
 let poll: { cancel(): void } | undefined
+let loading: { cancel(): void } | undefined
 let seen: Set<string> | undefined
 let seenDigest: string | undefined
 let wantSnapshot = false
+/** How many times in a row the server hasn't answered: after a few, the band stops saying "loading". */
+let failures = 0
+const GIVE_UP_AFTER = 3
+let noticeTimer: { cancel(): void } | undefined
+/** The items opened one after another, so Back returns to the one before. */
+let trail: string[] = []
+/** What's typed in the correction box, for its Send button. */
+let composeText = ''
 
 /** Calls a tool on the p2p-context-graph server, finding its name on first use. */
 async function call($: Engine, tool: string, args: Record<string, unknown> = {}): Promise<any> {
@@ -149,15 +218,43 @@ async function call($: Engine, tool: string, args: Record<string, unknown> = {})
   throw last instanceof Error ? last : new Error('The p2p-context-graph MCP server is not connected.')
 }
 
+/** Why the server didn't answer, in words that say what to do about it. */
+export function trouble(message: string): string {
+  if (/context_activity|unknown tool|not found|no such tool/i.test(message))
+    return 'This chat is still running an older p2p-context-graph server. Start a new chat (or restart this one) to pick up the new one.'
+  if (/not connected|no server|disconnected|closed/i.test(message)) return 'The p2p-context-graph server isn’t connected in this chat. Check it’s enabled, then start a new chat.'
+  return message
+}
+
+/** The server answered, or clearly won't: the band's "loading…" stops. */
+function loaded() {
+  loading?.cancel()
+  loading = undefined
+}
+
 async function refresh($: Engine) {
   try {
     const which = await read($, viewing)
-    const a = (await call($, 'context_activity', { limit: 40, snapshot: wantSnapshot, ...(which ? { context: which } : {}) })) as Activity
-    await update($, activity, () => a)
+    const r = (await call($, 'context_activity', { limit: 40, snapshot: wantSnapshot, ...(which ? { context: which } : {}) })) as Activity | { context: null; your_contexts: string[] }
+    loaded()
+    failures = 0
     await update($, error, () => null)
+    if (r.context === null) {
+      // No context in this chat (there's no default): the band and panel offer to choose one.
+      await update($, unattached, () => r.your_contexts)
+      await update($, activity, () => null)
+      await update($, latest, () => null)
+      await update($, viewing, () => null)
+      $.ui.status('no context')
+      return
+    }
+    const a = r as Activity
+    await update($, unattached, () => null)
+    await update($, activity, () => a)
+    if (which && which !== a.context) await update($, viewing, () => null) // it was taken out of the chat
     const others = a.recent.filter(c => !c.mine && !c.held)
     if (seen) {
-      const fresh = others.filter(c => !seen!.has(c.id) && ['claim', 'question', 'add_member', 'withdraw', 'remove_member'].includes(c.kind))
+      const fresh = others.filter(c => !seen!.has(c.id) && ['claim', 'question', 'reply', 'add_member', 'withdraw', 'remove_member'].includes(c.kind))
       for (const c of fresh.slice(0, 3)) $.ui.toast(`${c.by} ${short(c.summary, 90)}`)
     }
     seen = new Set(a.recent.map(c => c.id))
@@ -168,76 +265,149 @@ async function refresh($: Engine) {
     const top = others.find(c => c.kind !== 'create')
     await update($, latest, (): Latest | null => (top ? { by: top.by, summary: top.summary, at: top.at } : null))
     const away = a.members - 1
-    const more = a.attached.length > 1 ? ` +${a.attached.length - 1}` : ''
-    $.ui.status(`context ${a.context}${more}${a.sharing ? (away ? ` · ${a.online.length}/${away} online` : '') : ' · offline'}`)
+    const more = a.contexts.length > 1 ? ` +${a.contexts.length - 1}` : ''
+    $.ui.status(`context ${a.contexts.find(c => c.writes_here)?.name ?? a.context}${more}${a.sharing ? (away ? ` · ${a.online.length}/${away} online` : '') : ' · offline'}`)
   } catch (e) {
-    await update($, error, () => (e as Error).message)
+    // A new chat's server takes a moment to connect, so the first failures still read as loading.
+    if (++failures >= GIVE_UP_AFTER) loaded()
+    await update($, error, () => trouble((e as Error).message))
   }
+}
+
+/** Shows a line in the panel for a few seconds (or clears it). */
+async function say($: Engine, text: string | null) {
+  noticeTimer?.cancel()
+  noticeTimer = undefined
+  await update($, notice, () => text)
+  if (text) noticeTimer = $.clock.after(NOTICE_MS, () => void update($, notice, () => null))
+}
+
+/** Opens an item on its own (a claim or a question), remembering where from. */
+async function openItem($: Engine, key: string | null) {
+  if (key) trail.push(key)
+  else trail = []
+  await update($, detail, () => key)
+}
+
+/** Back from an item: to the one opened before it, else to the list. */
+async function backItem($: Engine) {
+  trail.pop()
+  await update($, detail, () => trail.at(-1) ?? null)
 }
 
 /** Runs a tool from a button or field, then refreshes; errors show in the panel. */
 async function act($: Engine, tool: string, args: Record<string, unknown>, done?: string) {
   try {
     const r = await call($, tool, args)
-    await update($, notice, () => done ?? null)
-    if (tool === 'share_context' && r && typeof r === 'object' && 'send' in r) await update($, code, () => String((r as { send: string }).send))
+    await say($, done ?? null)
+    // A new join code (from Invite, or a new context's first): marked in the People tab's list.
+    const made = r && typeof r === 'object' ? (r as { invite?: { id?: string } }).invite?.id : undefined
+    if (made) await update($, code, () => made)
   } catch (e) {
     await update($, error, () => (e as Error).message)
   }
   await refresh($)
 }
 
-async function openPane($: Engine) {
+/** Hands the person's words to the agent, as their own prompt: it shows in the chat, so the panel says nothing more. */
+async function ask($: Engine, text: string) {
+  await update($, composing, () => null)
+  await openItem($, null)
+  await say($, null)
+  try {
+    await $.prompt.submit({ text, asUser: true })
+  } catch (e) {
+    await update($, error, () => (e as Error).message)
+  }
+}
+
+/** Opens the panel: on the chat's contexts (to turn them on and off), or on a context. */
+async function openPane($: Engine, contexts = false) {
   wantSnapshot = true
+  await update($, switching, () => contexts)
+  if (contexts) await openItem($, null)
   await refresh($)
-  return $.ui.open({ id: PANE, title: 'Contexts', closeOnEscape: true })
+  return $.ui.open({ id: PANE, title: 'Context', closeOnEscape: true })
 }
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
-    await $.command.register({ name: 'context', description: 'Open the contexts panel: the attached context graphs, their claims and questions, and their people' })
+    await $.command.register({ name: 'contexts', description: "Open this chat's context: what needs you, its questions and threads, claims, people, and the chat's contexts" })
     poll?.cancel()
+    loading?.cancel()
     seen = undefined
+    failures = 0
+    await update($, tick, () => 0)
+    // "loading." "loading.." "loading..." until the server first answers.
+    loading = $.clock.every(TICK_MS, () => void update($, tick, n => (n + 1) % 3))
     poll = $.clock.every(POLL_MS, () => void refresh($))
     void refresh($)
     return next(e)
   })
 
-  on('command.run', { command: 'context' }, async $ => {
+  on('command.run', { command: 'contexts' }, async $ => {
     const r = await openPane($)
-    return { text: r.isPlaced ? 'Contexts panel opened.' : `The panel couldn't open here: ${r.reason}` }
+    return { text: r.isPlaced ? 'Context panel opened.' : `The panel couldn't open here: ${r.reason}` }
   })
 
-  // The band above the prompt.
+  // The band above the prompt: always there.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    const a = await read($, activity)
-    if (e.props.hasSurvey || !a) return next(e)
+    if (e.props.hasSurvey) return next(e)
     const { Box, Text, Button } = $.ui.resolve(e)
+    const none = await read($, unattached)
+    const a = await read($, activity)
+    if (!none && !a) {
+      // The MCP server hasn't answered yet: a new chat's first seconds.
+      const n = await read($, tick)
+      const err = await read($, error)
+      if (failures < GIVE_UP_AFTER || !err)
+        return (
+          <Box flexDirection="row" gap={1}>
+            <Text dimColor>○ loading{'.'.repeat(n + 1)}</Text>
+          </Box>
+        )
+      return (
+        <Box flexDirection="row" gap={1} alignItems="center">
+          <Text color="warning">○</Text>
+          <Text dimColor>{short(err, 150)}</Text>
+          <Button key="retry" label="Retry" onPress={() => void refresh($)} />
+        </Box>
+      )
+    }
+    if (!a)
+      return (
+        <Box flexDirection="row" gap={1} alignItems="center">
+          <Text dimColor>○</Text>
+          <Text>
+            No context
+            <Text dimColor> · your agent will ask which this chat is for</Text>
+          </Text>
+          <Button key="choose-context" label="Choose" onPress={() => void openPane($, true)} />
+        </Box>
+      )
     const l = await read($, latest)
     const now = await $.clock.now()
     const away = a.members - 1
-    const others = a.attached.filter(c => c.name !== a.context).map(c => c.name)
     const d = a.digest?.at(-1)
+    const main = a.contexts.find(c => c.writes_here)?.name ?? a.context
     // The latest news: what others' changes meant for you if that's newest, else the latest change from someone else.
     const news = d && (!l || d.at >= l.at) ? `${short(d.lines[0] ?? '', 70)} (${ago(d.at, now)})` : l ? `${l.by} ${short(l.summary, 60)} (${ago(l.at, now)})` : ''
+    const more = a.contexts.filter(c => c.name !== main).map(c => ` +${c.name}`).join('')
     return (
-      <Box flexDirection="row" gap={1}>
+      <Box flexDirection="row" gap={1} alignItems="center">
         <Text color={a.sharing ? 'green' : undefined} dimColor={!a.sharing}>
           ●
         </Text>
-        <Text>
-          {a.context}
-          <Text dimColor>
-            {a.created_by && a.created_by !== a.you.name ? ` (${a.created_by}'s)` : ''}
-            {others.length ? ` + ${others.join(', ')}` : ''}
-            {a.sharing ? (away ? ` · ${a.online.length}/${away} online` : ' · just you') : ' · offline'}
-            {news ? ` · ${news}` : ''}
-          </Text>
+        <Button key="band-contexts" label={`${main}${more}`} plain onPress={() => void openPane($, true)} />
+        <Text dimColor>
+          {a.sharing ? (away ? `${a.online.length}/${away} online` : 'just you') : 'offline'}
+          {news ? ` · ${news}` : ''}
         </Text>
-        <Button key="open-graph" label="Open" onPress={() => void openPane($)} />
+        <Button key="open-context" label="Open" onPress={() => void openPane($)} />
       </Box>
     )
   })
+
 
   // The panel.
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
@@ -245,210 +415,1106 @@ export const register: Register = on => {
     const { Box, Text, Button, Input, Select, Code } = els
     const a = await read($, activity)
     const err = await read($, error)
-    if (!a) return <Text dimColor>{err ? `Can't reach p2p-context-graph: ${err}` : 'Loading the contexts…'}</Text>
-    const ctx = { context: a.context }
-    const current = await read($, tab)
-    const now = await $.clock.now()
-    const admin = a.you.role === 'admin'
-    const canWrite = a.you.role === 'admin' || a.you.role === 'contributor'
-    const heldByNode = new Map(a.recent.filter((c: Change) => c.held && c.node).map((c: Change) => [c.node!, c]))
-    const tabButton = (t: Tab, label: string) => (
-      <Button key={`tab-${t}`} label={current === t ? `[${label}]` : label} onPress={() => void update($, tab, () => t)} />
+    // The terminal draws borders as box characters: cards there would be heavy, so it gets plain rows.
+    const graphical = e.surface !== 'terminal'
+    const card = (key: string, children: unknown, tone?: string) =>
+      graphical ? (
+        <Box key={key} flexDirection="column" borderStyle="round" borderColor={tone ?? 'subtle'} paddingX={1} paddingY="xs" gap="xs">
+          {children}
+        </Box>
+      ) : (
+        <Box key={key} flexDirection="column">
+          {children}
+        </Box>
+      )
+    const heading = (text: string, count?: number | string) => (
+      <Text size="heading" weight="semibold" bold>
+        {text}
+        {count !== undefined && <Text dimColor weight="regular"> {count}</Text>}
+      </Text>
+    )
+    const meta = (text: string) => (
+      <Text size="footnote" dimColor wrap="wrap">
+        {text}
+      </Text>
+    )
+    /** One of a row of choices: the chosen one stands out. */
+    const chip = (key: string, label: string, active: boolean, onPress: () => void) => (
+      <Button key={key} label={`${active ? '▸ ' : ''}${label}`} variant={active ? 'primary' : 'secondary'} dimColor={!active} onPress={onPress} />
+    )
+    const note = await read($, notice)
+    const draft = await read($, draftName)
+    const made = await read($, code)
+    const none = await read($, unattached)
+    const dismiss = () => void update($, error, () => null).then(() => say($, null))
+    const messages =
+      err || note
+        ? card(
+            err ? 'error' : 'notice',
+            <Box flexDirection="row" gap={1} justifyContent="space-between" alignItems="flex-start">
+              <Box flexShrink={1}>
+                <Text color={err ? 'error' : 'success'} wrap="wrap">
+                  {err ?? note}
+                </Text>
+              </Box>
+              <Button key="dismiss-message" label="×" plain dimColor onPress={dismiss} />
+            </Box>,
+            err ? 'error' : 'success',
+          )
+        : null
+    /** A view that takes the whole panel: a title, what it's about, its body, and a way out. */
+    const modal = (key: string, title: string, about: string | null, body: unknown, close?: { label: string; onPress: () => void }) => (
+      <Box key={key} flexDirection="column" gap="md" paddingX={graphical ? 1 : 0}>
+        <Box flexDirection="column" gap="xs">
+          <Box flexDirection="row" justifyContent="space-between" alignItems="center">
+            <Text size="title" weight="semibold" bold>
+              {title}
+            </Text>
+            {close && <Button key={`close-${key}`} label={close.label} variant="secondary" dimColor onPress={close.onPress} />}
+          </Box>
+          {about && <Text wrap="wrap">{about}</Text>}
+        </Box>
+        {messages}
+        {body}
+      </Box>
     )
 
-    const header = (
-      <Box flexDirection="column" marginBottom={1}>
-        <Text bold>
-          {a.using}
-          <Text dimColor>
-            {' '}
-            · you are {a.you.name} ({a.you.role ?? 'removed'}) · {a.sharing ? `${a.online.length} online` : 'offline'} · {a.changes} changes
+    // A new context's second step: what it's for. Only that.
+    if (draft && !draft.startsWith('!'))
+      return modal(
+        'new-context-step',
+        `New context: ${draft}`,
+        'What goes in it? Every member’s agent reads this to decide what belongs there.',
+        <Box flexDirection="column" gap="xs">
+          <Input
+            key="new-description"
+            label={`What is '${draft}' for?`}
+            placeholder="What goes in it, in a sentence or two"
+            submitLabel="Create"
+            autoFocus
+            onSubmit={(v: string) =>
+              v.trim() &&
+              void update($, draftName, () => null)
+                .then(() => update($, switching, () => false))
+                .then(() => update($, viewing, () => draft))
+                .then(() => act($, a ? 'add_context' : 'use_context', { name: draft, description: v.trim() }, `Created '${draft}'${a ? ' and added it to this chat' : ''}. Its first join code is under People.`))
+            }
+          />
+          {meta('It’s yours: you’re its admin. Invite people from its People tab.')}
+        </Box>,
+        { label: 'Cancel', onPress: () => void update($, draftName, () => null) },
+      )
+
+    // The chat's contexts, each with a switch: on means this chat uses it.
+    if (none !== null || (await read($, switching))) {
+      const here = none ?? a?.your_contexts ?? []
+      const using = a?.contexts ?? []
+      const inChat = (n: string) => using.find(c => c.name === n)
+      const many = using.length > 1
+      return modal(
+        'contexts',
+        'Contexts in this chat',
+        none
+          ? here.length
+            ? 'This chat has no context yet, so your agent will ask which it’s for. Turn one on, or start one.'
+            : 'A context holds what a group knows, as claims and questions, shared with the people you invite. Start one for this chat, or ask your agent to join one with a code someone sent you.'
+          : many
+            ? 'Your agent reads all of these, and puts each new item in the one whose description fits. ✎ marks where it writes when none clearly does.'
+            : 'Most chats use one context. Turn another on to use it too: your agent then picks the right one for each item.',
+        <Box flexDirection="column" gap="sm">
+          {here.map(n => {
+            const c = inChat(n)
+            return card(
+              `ctx-${n}`,
+              <Box flexDirection="row" gap={1} justifyContent="space-between" alignItems="center">
+                <Box flexDirection="column" flexShrink={1}>
+                  <Text weight="semibold" bold>
+                    {n}
+                    {c && <Text dimColor weight="regular"> · {c.role ?? 'removed'}</Text>}
+                    {c && many && c.writes_here ? <Text color="suggestion"> ✎ writes here</Text> : ''}
+                  </Text>
+                  {c && (
+                    <Text size="footnote" dimColor italic={!c.description} wrap="wrap">
+                      {c.description ?? 'No description yet'}
+                    </Text>
+                  )}
+                </Box>
+                <Box flexDirection="row" gap="xs" alignItems="center">
+                  {c && many && !c.writes_here && (
+                    <Button key={`write-${n}`} label="✎ Write here" variant="secondary" dimColor onPress={() => void act($, 'add_context', { name: n, write_here: true }, `New items go to '${n}' unless another fits better.`)} />
+                  )}
+                  <Button
+                    key={`toggle-${n}`}
+                    label={c ? '◉ On' : '○ Off'}
+                    variant={c ? 'primary' : 'secondary'}
+                    dimColor={!c}
+                    onPress={() =>
+                      void (c
+                        ? act($, 'remove_context', { name: n }, `'${n}' is off for this chat. It stays on this machine.`)
+                        : act($, using.length ? 'add_context' : 'use_context', { name: n }, `'${n}' is on for this chat.`))
+                    }
+                  />
+                </Box>
+              </Box>,
+              c ? 'suggestion' : undefined,
+            )
+          })}
+          {card(
+            'new-context',
+            <Box flexDirection="column" gap="xs">
+              <Text weight="semibold" bold>
+                New context
+              </Text>
+              <Input
+                key="new-name"
+                placeholder="A short name: lower-case letters, digits and dashes"
+                submitLabel="Next"
+                onSubmit={(v: string) => {
+                  const name = v.trim().toLowerCase().replace(/\s+/g, '-')
+                  if (!NAME_RE.test(name)) return update($, draftName, () => `!A context name is lower-case letters, digits and dashes, such as "checkout-incident".`)
+                  if (here.includes(name)) return update($, draftName, () => `!There's already a context '${name}' on this machine: turn it on above.`)
+                  return update($, draftName, () => name)
+                }}
+              />
+              {draft?.startsWith('!') && <Text color="error">{draft.slice(1)}</Text>}
+            </Box>,
+          )}
+          {a?.folder && (
+            <Box flexDirection="column" gap="xs">
+              <Button
+                key="link-folder"
+                label={a.folder.linked ? 'Stop starting this folder’s chats with these' : 'Start new chats in this folder with these contexts'}
+                variant="secondary"
+                dimColor={a.folder.linked}
+                onPress={() =>
+                  void act($, 'link_folder', a.folder!.linked ? { off: true } : {}, a.folder!.linked ? 'New chats in this folder start with no context.' : 'New chats in this folder start with these contexts.')
+                }
+              />
+              {meta(`${short(a.folder.folder, 70)} · kept on this machine, nothing is written there`)}
+            </Box>
+          )}
+          {meta('Got a join code? Paste it to your agent, or run /p2p-context-graph:join with it.')}
+        </Box>,
+        none ? undefined : { label: 'Done', onPress: () => void update($, switching, () => false) },
+      )
+    }
+
+    if (!a)
+      return (
+        <Box flexDirection="column" padding={1} gap="sm">
+          <Text bold>Context</Text>
+          <Text dimColor wrap="wrap">
+            {err ?? 'Loading the context…'}
           </Text>
-        </Text>
-        <Text dimColor>{a.description ?? 'No description yet: an admin can set one (describe_context), so agents know what goes here.'}</Text>
-        {a.attached.length > 1 && (
-          <Box flexDirection="row" gap={1} flexWrap="wrap">
-            <Text dimColor>Show:</Text>
-            {a.attached.map(c => (
+        </Box>
+      )
+    const many = a.contexts.length > 1
+    /** The context a panel action is about: named only when the chat has several (the tools take `context` then). */
+    const ctx = many ? { context: a.context } : {}
+    const named = many ? a.context : undefined
+    const admin = a.you.role === 'admin'
+    const invites: Invite[] = admin ? (a.invites ?? []) : []
+    const canWrite = a.you.role === 'admin' || a.you.role === 'contributor'
+    const snap = a.snapshot
+    const t = snap ? threads(snap.nodes, snap.edges) : undefined
+    const rel = snap ? relations(snap.nodes, snap.edges) : undefined
+    const now = await $.clock.now()
+    const heldByNode = new Map(a.recent.filter((c: Change) => c.held && c.node).map((c: Change) => [c.node!, c]))
+    const isMine = (n: GraphNode) => prop(n, 'recorded_by') === a.you.name
+    const byline = (n: GraphNode) => {
+      const by = prop(n, 'recorded_by') || '?'
+      const at = prop(n, 'recorded_at')
+      return `${by === a.you.name ? 'you' : by}${at ? ` · ${ago(at, now)}` : ''}`
+    }
+    const held = (n: GraphNode) => (heldByNode.has(n.key) ? <Text color="warning"> · still only on this machine</Text> : '')
+    const undo = (n: GraphNode) => {
+      const change = heldByNode.get(n.key)
+      return change ? <Button key={`undo-${n.key}`} label="Undo" variant="primary" onPress={() => void act($, 'take_back', { id: change.id, ...ctx }, 'Taken back. It never left this machine.')} /> : null
+    }
+    /** Withdraw, for its author or an admin, once it has been shared (before that, Undo). */
+    const withdraw = (n: GraphNode) =>
+      !heldByNode.has(n.key) && !n.ended && canWrite && (isMine(n) || admin) ? (
+        <Button
+          key={`withdraw-${n.key}`}
+          label="Withdraw"
+          variant="secondary"
+          dimColor
+          onPress={() => void openItem($, null).then(() => act($, 'withdraw', { id: n.key, ...ctx }, 'Withdrawn. It stays in the history.'))}
+        />
+      ) : null
+
+    // Editing the description: only that.
+    if (await read($, editing))
+      return modal(
+        'describe-step',
+        `Describe ${a.context}`,
+        'What goes in it, and what doesn’t. It syncs to every member, and their agents use it to decide what belongs here.',
+        <Input
+          key="describe"
+          label={`What is '${a.context}' for?`}
+          value={a.description ?? ''}
+          placeholder="What goes in it, in a sentence or two"
+          submitLabel="Save"
+          autoFocus
+          onSubmit={(v: string) => {
+            void update($, editing, () => false)
+            if (v.trim() && v.trim() !== a.description) void act($, 'describe_context', { description: v.trim(), ...ctx }, 'Saved. Every member’s agent sees it.')
+          }}
+        />,
+        { label: 'Cancel', onPress: () => void update($, editing, () => false) },
+      )
+
+    // Changing your name: only that.
+    if (await read($, renaming))
+      return modal(
+        'rename-step',
+        'Your name',
+        `Everyone sees you as ${a.you.name}. Each person names themselves: the name travels with your key, to every context on this machine, and every member sees the change.`,
+        <Input
+          key="my-name"
+          label="The name you’d like others to see"
+          value={a.you.name}
+          submitLabel="Rename"
+          autoFocus
+          onSubmit={(v: string) => {
+            void update($, renaming, () => false)
+            if (v.trim() && v.trim() !== a.you.name) void act($, 'set_my_name', { name: v.trim() }, `You're now ${v.trim()} in every context on this machine.`)
+          }}
+        />,
+        { label: 'Cancel', onPress: () => void update($, renaming, () => false) },
+      )
+
+    // Correcting a claim: only the claim and what's right instead. The agent records it.
+    const compose = await read($, composing)
+    const composeOn = compose && rel ? rel.byKey.get(compose.key) : undefined
+    if (compose && composeOn) {
+      const close = () => void update($, composing, () => null)
+      const send = (v: string) => {
+        composeText = ''
+        if (v.trim()) void ask($, prompts.correct(composeOn, v.trim(), named))
+      }
+      return modal(
+        'correct-step',
+        'Correct this claim',
+        composeOn.title,
+        <Box flexDirection="column" gap="sm">
+          {meta(`${byline(composeOn)} · ${composeOn.key}`)}
+          <Input
+            key={`correct-input-${composeOn.key}`}
+            label="What’s right instead?"
+            placeholder="In your own words: your agent records it as a claim that replaces this one"
+            rows={3}
+            autoFocus
+            onInput={(v: string) => (composeText = v)}
+            onSubmit={send}
+          />
+          <Box flexDirection="row">
+            <Button key="send-correction" label="Send to agent" variant="primary" onPress={() => send(composeText)} />
+          </Box>
+          {meta('The old claim stays in the history, marked as replaced, so anyone can see what was believed before.')}
+        </Box>,
+        { label: 'Cancel', onPress: close },
+      )
+    }
+
+    // Making a join code: who it's for and their role, then back to the list, where it waits to be sent.
+    const invitingRole = admin ? await read($, inviting) : null
+    if (invitingRole) {
+      const close = () => void update($, inviting, () => null)
+      const make = (text: string) => {
+        inviteNote = ''
+        close()
+        void update($, tab, () => 'people' as Tab)
+        void act($, 'share_context', { ...(text.trim() ? { label: text.trim() } : {}), ...(invitingRole !== 'contributor' ? { role: invitingRole } : {}), ...ctx }, 'Join code made. Copy it and send it privately, to that one person.')
+      }
+      return modal(
+        'invite-step',
+        `Invite someone to ${a.context}`,
+        'A join code lets one person in: whoever uses it first. Send it to them privately. It expires in 24 hours if no one uses it.',
+        <Box flexDirection="column" gap="sm">
+          {Select && (
+            <Select
+              key="invite-role"
+              label="They can"
+              value={invitingRole}
+              options={[
+                { key: 'contributor', value: 'contributor', label: 'Read and add (contributor)' },
+                { key: 'reader', value: 'reader', label: 'Only read (reader)' },
+                { key: 'admin', value: 'admin', label: 'Read, add and invite (admin)' },
+              ]}
+              onSelect={(r: string) => void update($, inviting, () => r as Invite['role'])}
+            />
+          )}
+          <Input
+            key="invite-note"
+            label="Who is it for? (optional)"
+            placeholder="e.g. Sam: shown when they join, so a code used by someone else stands out"
+            autoFocus
+            onInput={(v: string) => (inviteNote = v)}
+            onSubmit={make}
+          />
+          <Box flexDirection="row">
+            <Button key="make-code" label="Make join code" variant="primary" onPress={() => make(inviteNote)} />
+          </Box>
+          {meta('This machine answers the code, so it must be online when they use it. Everyone in the context is told who joined.')}
+        </Box>,
+        { label: 'Cancel', onPress: close },
+      )
+    }
+
+    // Confirming a removal: only that.
+    const pending = await read($, confirmRemove)
+    const leaving = pending ? a.people.find((p: Person) => p.fingerprint === pending) : undefined
+    if (leaving)
+      return modal(
+        'remove-step',
+        `Remove ${leaving.name}?`,
+        `Every member’s machine stops syncing with ${leaving.name} and refuses their later changes. What they wrote stays, and they keep the copy they already had.`,
+        <Box flexDirection="row" gap="xs">
+          <Button
+            key={`confirm-${leaving.fingerprint}`}
+            label={`Remove ${leaving.name}`}
+            variant="primary"
+            onPress={() => {
+              void update($, confirmRemove, () => null)
+              void act($, 'remove_peer', { name: leaving.name, ...ctx }, `${leaving.name} was removed. They keep the copy they already had.`)
+            }}
+          />
+        </Box>,
+        { label: 'Cancel', onPress: () => void update($, confirmRemove, () => null) },
+      )
+
+    // One item on its own: a question with its thread, or a claim with everything linked to it.
+    const openKey = await read($, detail)
+    const item = openKey && rel ? rel.byKey.get(openKey) : undefined
+    if (item && rel && t) {
+      const back = { label: trail.length > 1 ? '‹ Back' : '‹ Back to the list', onPress: () => void backItem($) }
+      /** A linked item: its text, who and when, and a way to open it. */
+      const related = (label: string, tone: string | undefined, n: GraphNode) => (
+        <Box key={`rel-${label}-${n.key}`} flexDirection="row" gap={1} justifyContent="space-between" alignItems="flex-start">
+          <Box flexDirection="column" flexShrink={1}>
+            <Text wrap="wrap" strikethrough={n.label === 'Claim' && !rel.current(n)} dimColor={n.ended}>
+              <Text color={tone} dimColor={!tone}>
+                {label}{' '}
+              </Text>
+              {short(n.title, 300)}
+            </Text>
+            <Text size="footnote" dimColor>
+              {byline(n)} · {n.key}
+            </Text>
+          </Box>
+          <Button key={`open-${n.key}`} label="Open" variant="secondary" dimColor onPress={() => void openItem($, n.key)} />
+        </Box>
+      )
+      const group = (title: string, label: string, tone: string | undefined, list: GraphNode[]) =>
+        list.length > 0 && (
+          <Box key={`group-${title}`} flexDirection="column" gap="xs">
+            {heading(title, list.length)}
+            {list.map(n => related(label, tone, n))}
+          </Box>
+        )
+      const copy = (text: string) => (press: UiPressArgument) => void $.ui.copy({ text, surface: press.surface }).then(r => r.isCopied && $.ui.toast('Copied.'))
+
+      if (item.label === 'Question') {
+        const th = [...t.open, ...t.answered].find(x => x.q.id === item.id)
+        const answered = !!th?.answers.length
+        const about = rel.linked(item.id, 'ABOUT', 'out')
+        const asked = rel.linked(item.id, 'ABOUT', 'in')
+        return modal(
+          'question-view',
+          item.ended ? 'Withdrawn question' : answered ? 'Answered question' : 'Open question',
+          item.title,
+          <Box flexDirection="column" gap="sm">
+            <Text size="footnote" dimColor>
+              asked by {byline(item)} · {item.key}
+              {held(item)}
+            </Text>
+            {group('It’s about', '→', undefined, about)}
+            {th && th.replies.length > 0 && (
+              <Box flexDirection="column" gap="xs">
+                {heading('Thread', th.replies.length)}
+                {th.replies.map(r => (
+                  <Box key={`ar-${r.key}`} flexDirection="row" gap={1} justifyContent="space-between" alignItems="flex-start">
+                    <Box flexDirection="column" flexShrink={1}>
+                      <Text wrap="wrap">
+                        <Text dimColor>↳ </Text>
+                        {short(r.title, 600)}
+                      </Text>
+                      <Text size="footnote" dimColor>
+                        {byline(r)}
+                        {held(r)}
+                      </Text>
+                    </Box>
+                    <Box flexDirection="row" gap="xs">
+                      {undo(r)}
+                      {!answered && !item.ended && canWrite && (
+                        <Button key={`answer-with-${r.key}`} label="Answer with this" variant="secondary" dimColor onPress={() => void ask($, answerPrompt(item, { reply: r }, named))} />
+                      )}
+                    </Box>
+                  </Box>
+                ))}
+              </Box>
+            )}
+            {th && group('Answer', '✓', 'success', th.answers)}
+            {group('Questions about this one', '?', 'warning', asked)}
+            {!answered && !item.ended && canWrite && (
+              <Input
+                key={`answer-input-${item.key}`}
+                label="Your answer"
+                placeholder="In your own words: your agent records it as a claim that answers this"
+                submitLabel="Send to agent"
+                autoFocus
+                onSubmit={(v: string) => v.trim() && void ask($, answerPrompt(item, { text: v.trim() }, named))}
+              />
+            )}
+            <Box flexDirection="row" gap="xs" flexWrap="wrap">
+              {!answered && !item.ended && canWrite && <Button key={`investigate-${item.key}`} label="Ask my agent to look into it" variant="secondary" onPress={() => void ask($, prompts.investigate(item, named))} />}
+              <Button key={`copy-${item.key}`} label="Copy" variant="secondary" dimColor onPress={copy(`${item.title} (${item.key})`)} />
+              {undo(item)}
+              {withdraw(item)}
+            </Box>
+            {!answered && !item.ended && meta('Agents reply on the thread. Your answer goes to your agent, which records it as a claim that answers the question.')}
+          </Box>,
+          back,
+        )
+      }
+
+      const newer = rel.replacedBy.get(item.id)
+      const state = item.ended ? 'Withdrawn claim' : newer ? 'Replaced claim' : rel.inConflict.has(item.id) ? 'Claim in conflict' : 'Claim'
+      const from = prop(item, 'about_from')
+      const to = prop(item, 'about_to')
+      const contradicts = [...rel.linked(item.id, 'CONTRADICTS', 'out'), ...rel.linked(item.id, 'CONTRADICTS', 'in')].filter((n, i, all) => all.findIndex(x => x.id === n.id) === i)
+      return modal(
+        'claim-view',
+        state,
+        null,
+        <Box flexDirection="column" gap="sm">
+          <Text wrap="wrap" strikethrough={!rel.current(item)}>
+            {item.title}
+          </Text>
+          <Box flexDirection="column">
+            <Text size="footnote" dimColor>
+              recorded by {byline(item)} · {item.key}
+              {held(item)}
+            </Text>
+            {prop(item, 'source') && meta(`Source: ${prop(item, 'source')}`)}
+            {(from || to) && meta(`About ${from && to ? `${from.slice(0, 10)} to ${to.slice(0, 10)}` : from ? `${from.slice(0, 10)} onwards` : `up to ${to.slice(0, 10)}`}`)}
+            {item.ended && (
+              <Text size="footnote" color="warning" wrap="wrap">
+                Withdrawn{prop(item, 'withdrawn_by') ? ` by ${prop(item, 'withdrawn_by')}` : ''}
+                {prop(item, 'withdrawn_at') ? ` · ${ago(prop(item, 'withdrawn_at'), now)}` : ''}
+                {prop(item, 'withdraw_reason') ? `: ${prop(item, 'withdraw_reason')}` : ''}
+              </Text>
+            )}
+          </Box>
+          {newer && group('Replaced by', '↑', 'success', [newer])}
+          {group('Can’t be true alongside', '⚡', 'warning', contradicts)}
+          {group('Answers', '?', undefined, rel.linked(item.id, 'ANSWERS', 'out'))}
+          {group('Evidence for it', '+', 'success', rel.linked(item.id, 'SUPPORTS', 'in'))}
+          {group('It’s evidence for', '→', undefined, rel.linked(item.id, 'SUPPORTS', 'out'))}
+          {group('Earlier versions', '↓', undefined, rel.linked(item.id, 'REPLACES', 'out'))}
+          {group('Questions about it', '?', 'warning', rel.linked(item.id, 'ABOUT', 'in'))}
+          <Box flexDirection="row" gap="xs" flexWrap="wrap">
+            {rel.current(item) && canWrite && !heldByNode.has(item.key) && (
+              <Button key={`correct-${item.key}`} label="Correct it" variant="primary" onPress={() => ((composeText = ''), void update($, composing, (): Compose => ({ kind: 'correct', key: item.key })))} />
+            )}
+            <Button key={`copy-${item.key}`} label="Copy" variant="secondary" dimColor onPress={copy(`${item.title} (${item.key})`)} />
+            {undo(item)}
+            {withdraw(item)}
+          </Box>
+          {rel.current(item) && canWrite && meta('Correct it when it’s wrong or out of date: the new claim replaces this one, which stays in the history. Withdraw it when it should never have been recorded.')}
+        </Box>,
+        back,
+      )
+    }
+
+    const stored = await read($, tab)
+    const current: Tab = TABS.some(x => x.tab === stored) ? stored : 'overview'
+    const f: Filters = await read($, filters)
+    const extra = await read($, more)
+    /** Another tab starts from the top, without the last tab's filter words. */
+    const setTab = (x: Tab) =>
+      void update($, more, () => 0)
+        .then(() => (x === current ? undefined : update($, filters, (v: Filters): Filters => ({ ...v, text: '' }))))
+        .then(() => update($, tab, () => x))
+    const setFilter = (patch: Partial<Filters>) => void update($, more, () => 0).then(() => update($, filters, (v: Filters): Filters => ({ ...v, ...patch })))
+    const away = a.members - 1
+    const members = a.people.filter((p: Person) => p.role)
+    const counts: Record<Tab, number | undefined> = { overview: undefined, questions: t?.open.length, claims: t?.claims.length, people: members.length }
+    const goOnline = <Button key="go-online" label="Go online" variant="primary" onPress={() => void act($, 'start_sharing', { ...ctx }, 'Back online: syncing with the other members.')} />
+
+    const header = (
+      <Box flexDirection="column" gap="xs">
+        <Box flexDirection="row" justifyContent="space-between" alignItems="center">
+          <Box flexDirection="row" gap="xs" alignItems="center">
+            <Text size="title" weight="semibold" bold>
+              {a.context}
+            </Text>
+            <Button key="switch" label={many ? `⇄ ${a.contexts.length} contexts` : '⇄ Contexts'} plain dimColor onPress={() => void update($, switching, () => true)} />
+          </Box>
+          <Text size="footnote" color={a.sharing ? 'success' : 'warning'}>
+            ● {a.sharing ? (away ? `${a.online.length} of ${away} online` : 'just you') : 'offline'}
+          </Text>
+        </Box>
+        {many && (
+          <Box flexDirection="row" gap="xs" flexWrap="wrap">
+            {a.contexts.map(c => (
               <Button
                 key={`view-${c.name}`}
-                label={`${c.name === a.context ? '[' : ''}${c.name}${c.writes_here ? ' ✎' : ''}${c.name === a.context ? ']' : ''}`}
+                label={`${c.name}${c.writes_here ? ' ✎' : ''}`}
+                variant={c.name === a.context ? 'primary' : 'secondary'}
+                dimColor={c.name !== a.context}
                 onPress={() => void update($, viewing, () => c.name).then(() => refresh($))}
               />
             ))}
           </Box>
         )}
-        <Box flexDirection="row" gap={1}>
-          {tabButton('graph', 'Graph')}
-          {tabButton('items', 'Claims and questions')}
-          {tabButton('people', 'People')}
-          {tabButton('contexts', 'Contexts')}
-          <Button key="refresh" label="Refresh" onPress={() => void refresh($)} />
+        <Box flexDirection="row" gap="xs" alignItems="flex-start">
+          <Box flexShrink={1}>
+            {a.description ? (
+              <Text wrap="wrap">{a.description}</Text>
+            ) : (
+              <Text italic dimColor wrap="wrap">
+                No description yet{admin ? '' : ': an admin can add one'}, so agents won’t know what belongs here.
+              </Text>
+            )}
+          </Box>
+          {admin && <Button key="edit-description" label="✎" plain dimColor onPress={() => void update($, editing, () => true)} />}
         </Box>
-        {err && <Text color="red">{err}</Text>}
+        <Box flexDirection="row" gap="sm" flexWrap="wrap" alignItems="center">
+          {members.map((p: Person) => (
+            <Box key={`who-${p.fingerprint}`} hover={{ scope: `who-${p.fingerprint}` }}>
+              <Text size="footnote" dimColor={!p.online} hover={{ underline: true }}>
+                <Text color={p.online ? 'success' : undefined}>●</Text> {p.name}
+                {p.you ? ' (you)' : ''}
+                {!graphical ? ` ${p.role}` : ''}
+              </Text>
+            </Box>
+          ))}
+        </Box>
+        {graphical &&
+          members.map((p: Person) => (
+            <Box key={`who-card-${p.fingerprint}`} display="none" hover={{ scope: `who-${p.fingerprint}`, display: 'flex' }}>
+              <Text size="footnote" dimColor>
+                {p.name} · {p.role}
+                {p.creator ? ' · made this context' : ''} · {p.online ? 'online now' : 'offline'} · key {p.fingerprint}
+                {p.agent ? ` · ${p.agent}` : ''}
+                {p.platform ? ` · ${p.platform}` : ''}
+              </Text>
+            </Box>
+          ))}
+        <Box flexDirection="row" gap="xs" marginTop="sm" flexWrap="wrap">
+          {TABS.map(x => chip(`tab-${x.tab}`, `${x.icon} ${x.label}${counts[x.tab] !== undefined ? ` ${counts[x.tab]}` : ''}`, current === x.tab, () => setTab(x.tab)))}
+        </Box>
+        {messages}
       </Box>
     )
 
-    const snap = a.snapshot
-    let body
-    if (current === 'graph') {
-      // The terminal has no Svg element (it would draw only the alt text): say where the picture shows.
-      const Svg = e.surface === 'terminal' ? undefined : els.Svg
-      if (!snap) body = <Text dimColor>Loading the graph…</Text>
-      else if (!snap.nodes.length) body = <Text dimColor>Nothing in this graph yet.</Text>
-      else if (!Svg) body = <Text dimColor>The picture shows in Claude Code desktop and VS Code. "Claims and questions" lists them here.</Text>
-      else {
-        const width = Math.min(900, Math.max(360, (e.props.bodyColumns ?? 80) * 8))
-        body = (
-          <Box flexDirection="column">
-            <Svg source={graphSvg(snap.nodes, snap.edges, width, Math.round(width * 0.62))} alt={`The graph: ${snap.nodes.length} items and ${snap.edges.length} links`} isInteractive />
-            <Text dimColor>
-              blue: claim · orange: question · dashed circle: withdrawn · red dashes: contradicts · green: answers{snap.truncated ? ' · newest items only' : ''}
+    /** The filter box above a list, and what it's filtering by. */
+    const filterBox = (what: string) => (
+      <Box flexDirection="column" gap="xs">
+        <Input key="filter" value={f.text} placeholder={`Filter ${what} by words, a person or an id`} submitLabel="Filter" onSubmit={(v: string) => setFilter({ text: v.trim() })} />
+        {f.text && (
+          <Box flexDirection="row" gap="xs" alignItems="center">
+            <Text size="footnote" dimColor>
+              Showing {what} matching “{short(f.text, 40)}”
             </Text>
+            <Button key="clear-filter" label="× Clear" plain dimColor onPress={() => setFilter({ text: '' })} />
           </Box>
+        )}
+      </Box>
+    )
+    /** The first page of a list, and a button for the rest. */
+    const paged = <T,>(list: T[]) => list.slice(0, PAGE + extra)
+    const showMore = (total: number) =>
+      total > PAGE + extra && <Button key="show-more" label={`Show ${Math.min(PAGE, total - PAGE - extra)} more of ${total}`} variant="secondary" dimColor onPress={() => void update($, more, (n: number) => n + PAGE)} />
+
+    let body
+    if (!snap || !t || !rel) body = <Text dimColor>Loading…</Text>
+    else if (current === 'overview') {
+      const heldMine = a.recent.filter((c: Change) => c.held && c.mine)
+      const waiting = t.open.filter(th => th.replies.length)
+      const mineOpen = t.open.filter(th => isMine(th.q) && th.replies.length)
+      const digest = a.digest?.at(-1)
+      const feed = a.recent.filter((c: Change) => c.kind !== 'import')
+      const ICON: Record<string, string> = { claim: '📌', question: '❓', reply: '↳', link: '🔗', withdraw: '✕', add_member: '👋', remove_member: '🚪', set_role: '🔑', rename: '✎', describe: '✎', create: '✦' }
+      const need = (key: string, tone: string, text: unknown, button: unknown) =>
+        card(
+          `need-${key}`,
+          <Box flexDirection="row" gap={1} justifyContent="space-between" alignItems="center">
+            <Box flexShrink={1}>
+              <Text wrap="wrap">{text}</Text>
+            </Box>
+            {button}
+          </Box>,
+          tone,
         )
-      }
-    } else if (current === 'items') {
-      const items = (snap?.nodes ?? []).filter((n: GraphNode) => !n.ended)
-      const ended = (snap?.nodes ?? []).length - items.length
-      const note = await read($, notice)
+      const needs = [
+        !a.sharing && need('offline', 'warning', 'You’re offline: what you write stays on this machine, and you don’t see what others add, until you’re back.', goOnline),
+        a.sharing && a.relays_up === 0 && need('relays', 'warning', 'No signalling relay is reachable, so the other members can’t find this machine right now.', null),
+        rel.conflicts.length > 0 &&
+          need(
+            'conflicts',
+            'warning',
+            `⚡ ${rel.conflicts.length} pair${rel.conflicts.length === 1 ? '' : 's'} of claims can’t both be true. Someone needs to say which stands.`,
+            <Button key="see-conflicts" label="Settle" variant="primary" onPress={() => void update($, filters, (v: Filters): Filters => ({ ...v, text: '', claims: 'conflicts' })).then(() => setTab('claims'))} />,
+          ),
+        mineOpen.length > 0 &&
+          need(
+            'replies',
+            'suggestion',
+            `↳ ${mineOpen.length} of your questions ${mineOpen.length === 1 ? 'has' : 'have'} replies: ${short(mineOpen[0]!.q.title, 80)}`,
+            <Button key="see-replies" label="Read" variant="primary" onPress={() => void openItem($, mineOpen[0]!.q.key)} />,
+          ),
+        t.open.length > 0 &&
+          need(
+            'questions',
+            'subtle',
+            `❓ ${t.open.length} open question${t.open.length === 1 ? '' : 's'}${waiting.length ? `, ${waiting.length} with replies` : ''}.`,
+            <Button key="see-questions" label="See" variant="secondary" onPress={() => void update($, filters, (v: Filters): Filters => ({ ...v, text: '', questions: 'open' })).then(() => setTab('questions'))} />,
+          ),
+        admin && !a.description && need('describe', 'suggestion', 'This context has no description, so agents can’t tell what belongs in it.', <Button key="need-describe" label="Describe" variant="primary" onPress={() => void update($, editing, () => true)} />),
+        admin &&
+          members.length === 1 &&
+          !invites.length &&
+          need(
+            'alone',
+            'suggestion',
+            'It’s just you here so far.',
+            <Button key="need-invite" label="Invite someone" variant="primary" onPress={() => ((inviteNote = ''), void update($, inviting, () => 'contributor' as Invite['role']))} />,
+          ),
+        invites.length > 0 && need('invites', 'subtle', `${invites.length} join code${invites.length === 1 ? ' is' : 's are'} waiting to be used.`, <Button key="see-invites" label="See" variant="secondary" onPress={() => setTab('people')} />),
+      ].filter(Boolean)
       body = (
-        <Box flexDirection="column" gap={1}>
-          {canWrite && (
-            <Box flexDirection="column">
-              <Input key="add-claim" placeholder="Add a claim: one statement you believe is true" submitLabel="add" onSubmit={(v: string) => v.trim() && void act($, 'add_claim', { text: v.trim(), ...ctx }, 'Added. Undo works for 10 seconds.')} />
-              <Input key="ask-question" placeholder="Ask a question the group needs to answer" submitLabel="ask" onSubmit={(v: string) => v.trim() && void act($, 'ask_question', { text: v.trim(), ...ctx }, 'Asked. Undo works for 10 seconds.')} />
+        <Box flexDirection="column" gap="sm">
+          {heldMine.length > 0 &&
+            card(
+              'held',
+              <Box flexDirection="column" gap="xs">
+                <Text color="warning">Just written, still only on this machine:</Text>
+                {heldMine.map((c: Change) => (
+                  <Box key={`held-${c.id}`} flexDirection="row" gap={1} justifyContent="space-between" alignItems="center">
+                    <Box flexShrink={1}>
+                      <Text wrap="wrap">{short(c.summary, 140)}</Text>
+                    </Box>
+                    <Button key={`undo-change-${c.id}`} label="Undo" variant="primary" onPress={() => void act($, 'take_back', { id: c.id, ...ctx }, 'Taken back. It never left this machine.')} />
+                  </Box>
+                ))}
+              </Box>,
+              'warning',
+            )}
+          {heading('Needs you', needs.length || undefined)}
+          {needs.length ? needs : card('all-clear', <Text color="success">✓ Nothing needs you right now.</Text>, 'success')}
+          {digest && digest.lines.length > 0 && (
+            <Box flexDirection="column" gap="xs">
+              {heading('What changed for you')}
+              {card(
+                'digest',
+                <Box flexDirection="column" gap="xs">
+                  {digest.lines.slice(0, 6).map((line, i) => (
+                    <Text key={`digest-${i}`} wrap="wrap">
+                      {line}
+                    </Text>
+                  ))}
+                  {meta(ago(digest.at, now))}
+                </Box>,
+                'suggestion',
+              )}
             </Box>
           )}
-          {note && <Text dimColor>{note}</Text>}
-          {items.length === 0 && <Text dimColor>No current claims or questions.</Text>}
-          {items.slice(0, 60).map((n: GraphNode) => {
-            const held = heldByNode.get(n.key)
-            const by = typeof n.props.recorded_by === 'string' ? n.props.recorded_by : '?'
-            const mine = n.props.author === undefined ? by === a.you.name : by === a.you.name
-            const at = typeof n.props.recorded_at === 'string' ? n.props.recorded_at : ''
-            return (
-              <Box key={`item-${n.key}`} flexDirection="row" gap={1} justifyContent="space-between">
-                <Text>
-                  <Text color={n.label === 'Claim' ? 'blue' : 'yellow'}>{n.label === 'Claim' ? 'claim' : 'question'}</Text> {short(n.title, 140)}
-                  <Text dimColor>
-                    {' '}
-                    · {by}
-                    {at ? ` · ${ago(at, now)}` : ''}
-                    {held ? ' · on this machine' : ''}
-                  </Text>
+          {heading('Ask your agent')}
+          <Box flexDirection="row" gap="xs" flexWrap="wrap">
+            <Button key="catch-up" label="Catch me up" variant="secondary" onPress={() => void ask($, prompts.catchUp(a.context))} />
+            {canWrite && <Button key="save-chat" label="Save what this chat learned" variant="secondary" onPress={() => void ask($, prompts.saveChat(a.context))} />}
+          </Box>
+          {heading('Recent activity')}
+          {!feed.length && meta('Nothing yet. What your agent and the other members’ agents record shows up here.')}
+          {paged(feed).map((c: Change) => (
+            <Box key={`act-${c.id}`} flexDirection="row" gap={1} justifyContent="space-between" alignItems="flex-start">
+              <Box flexDirection="column" flexShrink={1}>
+                <Text wrap="wrap">
+                  <Text dimColor>{ICON[c.kind] ?? '·'} </Text>
+                  <Text weight="semibold" bold>
+                    {c.mine ? 'you' : c.by}
+                  </Text>{' '}
+                  {short(c.summary, 200)}
                 </Text>
-                {held ? (
-                  <Button key={`undo-${n.key}`} label="Undo" onPress={() => void act($, 'take_back', { id: held.id, ...ctx }, 'Taken back. It never left this machine.')} />
-                ) : (
-                  canWrite &&
-                  (mine || admin) && <Button key={`withdraw-${n.key}`} label="Withdraw" onPress={() => void act($, 'withdraw', { id: n.key, ...ctx }, 'Withdrawn. It stays in the history.')} />
-                )}
+                <Text size="footnote" dimColor>
+                  {ago(c.at, now)}
+                  {c.held ? <Text color="warning"> · still only on this machine</Text> : ''}
+                </Text>
               </Box>
-            )
-          })}
-          {ended > 0 && <Text dimColor>{ended} withdrawn item(s) stay in the history (see the graph).</Text>}
-        </Box>
-      )
-    } else if (current === 'contexts') {
-      const loose = a.your_contexts.filter(n => !a.attached.some(c => c.name === n))
-      const note = await read($, notice)
-      body = (
-        <Box flexDirection="column" gap={1}>
-          <Text dimColor>Attached to this conversation (reads search all of them; ✎ is where writes go unless the agent names another):</Text>
-          {a.attached.map(c => (
-            <Box key={`ctx-${c.name}`} flexDirection="row" gap={1} justifyContent="space-between">
-              <Text>
-                {c.name}
-                {c.writes_here ? ' ✎' : ''}
-                <Text dimColor> · {c.description ?? 'no description'}</Text>
-              </Text>
-              <Box flexDirection="row" gap={1}>
-                {!c.writes_here && <Button key={`write-${c.name}`} label="Write here" onPress={() => void act($, 'attach_context', { name: c.name, write_here: true }, `Writes now go to '${c.name}'.`)} />}
-                {a.attached.length > 1 && (
-                  <Button
-                    key={`detach-${c.name}`}
-                    label="Detach"
-                    onPress={() => void update($, viewing, () => null).then(() => act($, 'detach_context', { name: c.name }, `'${c.name}' is detached from this conversation (it stays on this machine).`))}
-                  />
-                )}
-              </Box>
+              {c.node && rel.byKey.has(c.node) && <Button key={`open-change-${c.id}`} label="Open" variant="secondary" dimColor onPress={() => void openItem($, c.node)} />}
             </Box>
           ))}
-          {loose.length > 0 && (
-            <Box flexDirection="row" gap={1} flexWrap="wrap">
-              <Text dimColor>Also on this machine:</Text>
-              {loose.map(n => (
-                <Button key={`attach-${n}`} label={`+ ${n}`} onPress={() => void act($, 'attach_context', { name: n }, `'${n}' is attached: reads search it too.`)} />
-              ))}
-            </Box>
+          {showMore(feed.length)}
+          {meta(
+            `${t.claims.length} claim${t.claims.length === 1 ? '' : 's'} · ${t.open.length} open and ${t.answered.length} answered question${t.answered.length === 1 ? '' : 's'} · ${rel.history.length} replaced or withdrawn · ${a.changes} changes in all${snap.truncated ? ' · showing the latest items only' : ''}`,
           )}
-          <Button key="save-folder" label="Use these contexts for every chat in this folder" onPress={() => void act($, 'save_folder_contexts', {}, 'Saved to .p2p-context in this folder.')} />
-          {note && <Text dimColor>{note}</Text>}
+        </Box>
+      )
+    } else if (current === 'questions') {
+      const scopes = {
+        open: t.open,
+        answered: t.answered,
+        mine: [...t.open, ...t.answered].filter(th => isMine(th.q)),
+      }
+      const scope = f.questions in scopes ? f.questions : 'open'
+      const list = scopes[scope].filter(th => matches(th.q, f.text) || th.replies.some(r => matches(r, f.text)) || th.answers.some(c => matches(c, f.text)))
+      const question = (th: Thread) => {
+        const q = th.q
+        const answered = th.answers.length > 0
+        const shown = th.replies.slice(-2)
+        return card(
+          `q-${q.key}`,
+          <Box flexDirection="column" gap="xs">
+            <Box flexDirection="row" gap={1} justifyContent="space-between" alignItems="flex-start">
+              <Box flexDirection="column" flexShrink={1}>
+                <Text wrap="wrap" weight="semibold" bold>
+                  {!graphical && <Text color="warning">? </Text>}
+                  {short(q.title, 300)}
+                </Text>
+                <Text size="footnote" dimColor>
+                  asked by {byline(q)}
+                  {th.replies.length ? ` · ${th.replies.length} repl${th.replies.length === 1 ? 'y' : 'ies'}` : ''}
+                  {held(q)}
+                </Text>
+              </Box>
+              <Box flexDirection="row" gap="xs">
+                {undo(q)}
+                {answered || !canWrite ? (
+                  <Button key={`open-${q.key}`} label="Open" variant="secondary" dimColor onPress={() => void openItem($, q.key)} />
+                ) : (
+                  <Button key={`answer-${q.key}`} label="Answer" variant="primary" onPress={() => void openItem($, q.key)} />
+                )}
+              </Box>
+            </Box>
+            {th.replies.length > shown.length && (
+              <Box paddingLeft={2}>
+                <Text size="footnote" dimColor>
+                  ↳ {th.replies.length - shown.length} earlier repl{th.replies.length - shown.length === 1 ? 'y' : 'ies'}
+                </Text>
+              </Box>
+            )}
+            {shown.map(r => (
+              <Box key={`r-${r.key}`} flexDirection="column" paddingLeft={2}>
+                <Text wrap="wrap">
+                  <Text dimColor>↳ </Text>
+                  {short(r.title, 240)}
+                </Text>
+                <Text size="footnote" dimColor>
+                  {byline(r)}
+                  {held(r)}
+                </Text>
+              </Box>
+            ))}
+            {th.answers.map(c => (
+              <Box key={`a-${c.key}`} flexDirection="column" paddingLeft={2}>
+                <Text wrap="wrap">
+                  <Text color="success">✓ </Text>
+                  {short(c.title, 300)}
+                </Text>
+                <Text size="footnote" dimColor>
+                  answered by {byline(c)}
+                </Text>
+              </Box>
+            ))}
+          </Box>,
+          heldByNode.has(q.key) ? 'warning' : answered ? 'success' : undefined,
+        )
+      }
+      body = (
+        <Box flexDirection="column" gap="sm">
+          <Box flexDirection="row" gap="xs" flexWrap="wrap">
+            {chip('scope-open', `Open ${t.open.length}`, scope === 'open', () => setFilter({ questions: 'open' }))}
+            {chip('scope-answered', `Answered ${t.answered.length}`, scope === 'answered', () => setFilter({ questions: 'answered' }))}
+            {chip('scope-mine', `Mine ${scopes.mine.length}`, scope === 'mine', () => setFilter({ questions: 'mine' }))}
+          </Box>
+          {filterBox('questions')}
+          {!list.length &&
+            card(
+              'empty',
+              <Text dimColor wrap="wrap">
+                {f.text
+                  ? 'No questions match.'
+                  : scope === 'open'
+                    ? t.answered.length
+                      ? '✓ Every question has an answer.'
+                      : 'No questions yet. When your agent records something the group needs to find out, it shows up here with its thread.'
+                    : scope === 'answered'
+                      ? 'No question has been answered yet.'
+                      : 'You haven’t asked anything here yet.'}
+              </Text>,
+            )}
+          {paged(list).map(question)}
+          {showMore(list.length)}
+          {meta('Agents ask and reply. Answer gives your agent your answer, and it records it as a claim.')}
+        </Box>
+      )
+    } else if (current === 'claims') {
+      const scopes = {
+        current: t.claims,
+        mine: t.claims.filter(isMine),
+        conflicts: t.claims.filter(n => rel.inConflict.has(n.id)),
+        history: rel.history,
+      }
+      const scope = f.claims in scopes ? f.claims : 'current'
+      const list = scopes[scope].filter(n => matches(n, f.text))
+      const pairs = scope === 'history' ? [] : rel.conflicts.filter(([x, y]) => matches(x, f.text) || matches(y, f.text))
+      const side = (keep: GraphNode, drop: GraphNode) => (
+        <Box key={`side-${keep.key}`} flexDirection="row" gap={1} justifyContent="space-between" alignItems="flex-start">
+          <Box flexDirection="column" flexShrink={1}>
+            <Text wrap="wrap">{short(keep.title, 300)}</Text>
+            <Text size="footnote" dimColor>
+              {byline(keep)} · {keep.key}
+            </Text>
+          </Box>
+          <Box flexDirection="row" gap="xs">
+            {canWrite && <Button key={`keep-${keep.key}-over-${drop.key}`} label="Keep this one" variant="secondary" onPress={() => void ask($, prompts.settle(keep, drop, named))} />}
+            <Button key={`open-${keep.key}-vs-${drop.key}`} label="Open" variant="secondary" dimColor onPress={() => void openItem($, keep.key)} />
+          </Box>
+        </Box>
+      )
+      const badges = (n: GraphNode) => {
+        const evidence = rel.linked(n.id, 'SUPPORTS', 'in').filter(rel.current).length
+        return [
+          rel.linked(n.id, 'ANSWERS', 'out').length ? 'answers a question' : '',
+          evidence ? `${evidence} in support` : '',
+          rel.linked(n.id, 'REPLACES', 'out').length ? 'updated' : '',
+          prop(n, 'source') ? short(prop(n, 'source'), 50) : '',
+        ]
+          .filter(Boolean)
+          .map(x => ` · ${x}`)
+          .join('')
+      }
+      body = (
+        <Box flexDirection="column" gap="sm">
+          <Box flexDirection="row" gap="xs" flexWrap="wrap">
+            {chip('scope-current', `Current ${t.claims.length}`, scope === 'current', () => setFilter({ claims: 'current' }))}
+            {chip('scope-mine', `Mine ${scopes.mine.length}`, scope === 'mine', () => setFilter({ claims: 'mine' }))}
+            {(rel.conflicts.length > 0 || scope === 'conflicts') && chip('scope-conflicts', `⚡ Conflicts ${rel.conflicts.length}`, scope === 'conflicts', () => setFilter({ claims: 'conflicts' }))}
+            {chip('scope-history', `History ${rel.history.length}`, scope === 'history', () => setFilter({ claims: 'history' }))}
+          </Box>
+          {filterBox('claims')}
+          {pairs.map(([x, y]) =>
+            card(
+              `conflict-${x.key}-${y.key}`,
+              <Box flexDirection="column" gap="xs">
+                <Text color="warning" weight="semibold" bold>
+                  ⚡ These can’t both be true
+                </Text>
+                {side(x, y)}
+                <Text size="footnote" dimColor>
+                  — or —
+                </Text>
+                {side(y, x)}
+              </Box>,
+              'warning',
+            ),
+          )}
+          {scope === 'conflicts' && !pairs.length && card('empty', <Text color="success">✓ No claims contradict each other.</Text>, 'success')}
+          {scope !== 'conflicts' &&
+            !list.length &&
+            card(
+              'empty',
+              <Text dimColor wrap="wrap">
+                {f.text
+                  ? 'No claims match.'
+                  : scope === 'current'
+                    ? 'No claims yet. What your agent records as true shows up here. Try “Save what this chat learned” on the Overview.'
+                    : scope === 'mine'
+                      ? 'None of the current claims are yours.'
+                      : 'Nothing has been replaced or withdrawn.'}
+              </Text>,
+            )}
+          {scope !== 'conflicts' &&
+            paged(list).map(n => {
+              const newer = rel.replacedBy.get(n.id)
+              return card(
+                `c-${n.key}`,
+                <Box flexDirection="row" gap={1} justifyContent="space-between" alignItems="flex-start">
+                  <Box flexDirection="column" flexShrink={1}>
+                    <Text wrap="wrap" strikethrough={scope === 'history'} dimColor={scope === 'history'}>
+                      {!graphical && <Text color="suggestion">• </Text>}
+                      {rel.inConflict.has(n.id) && <Text color="warning">⚡ </Text>}
+                      {short(n.title, 300)}
+                    </Text>
+                    <Text size="footnote" dimColor wrap="wrap">
+                      {byline(n)}
+                      {scope === 'history'
+                        ? n.ended
+                          ? ` · withdrawn${prop(n, 'withdrawn_by') ? ` by ${prop(n, 'withdrawn_by')}` : ''}${prop(n, 'withdraw_reason') ? `: ${short(prop(n, 'withdraw_reason'), 80)}` : ''}`
+                          : newer
+                            ? ` · replaced by ${newer.key}: ${short(newer.title, 80)}`
+                            : ''
+                        : badges(n)}
+                      {held(n)}
+                    </Text>
+                  </Box>
+                  <Box flexDirection="row" gap="xs">
+                    {undo(n)}
+                    <Button key={`open-${n.key}`} label="Open" variant="secondary" dimColor onPress={() => void openItem($, n.key)} />
+                  </Box>
+                </Box>,
+                heldByNode.has(n.key) ? 'warning' : rel.inConflict.has(n.id) ? 'warning' : undefined,
+              )
+            })}
+          {scope !== 'conflicts' && showMore(list.length)}
+          {scope === 'history' && meta('Nothing is deleted: replaced and withdrawn claims stay, so anyone can see what the group believed before.')}
         </Box>
       )
     } else {
-      const pending = await read($, confirmRemove)
-      const line = await read($, code)
-      body = (
-        <Box flexDirection="column" gap={1}>
-          {a.people.map((p: Person) => (
-            <Box key={`person-${p.fingerprint}`} flexDirection="row" gap={1} justifyContent="space-between">
+      const online = a.people.filter((p: Person) => p.online).length
+      const gone = a.people.filter((p: Person) => !p.role)
+      const wrote = (p: Person) => {
+        const mine = snap.nodes.filter(n => !n.ended && prop(n, 'recorded_by') === p.name)
+        const n = (label: string) => mine.filter(x => x.label === label).length
+        const parts = [
+          [n('Claim'), 'claim'],
+          [n('Question'), 'question'],
+          [n('Reply'), 'repl'],
+        ]
+          .filter(([count]) => count)
+          .map(([count, word]) => `${count} ${word}${word === 'repl' ? (count === 1 ? 'y' : 'ies') : count === 1 ? '' : 's'}`)
+        const last = a.recent.find((c: Change) => c.by === p.name)
+        return `${p.joined_at ? `joined ${ago(p.joined_at, now)}` : ''}${parts.length ? ` · ${parts.join(', ')}` : ' · nothing recorded yet'}${last ? ` · active ${ago(last.at, now)}` : ''}`.replace(/^ · /, '')
+      }
+      const person = (p: Person) =>
+        card(
+          `person-${p.fingerprint}`,
+          <Box flexDirection="row" gap={1} justifyContent="space-between" alignItems="center">
+            <Box flexDirection="column" flexShrink={1}>
               <Text>
-                <Text color={p.online ? 'green' : undefined} dimColor={!p.online}>
+                <Text color={p.online ? 'success' : undefined} dimColor={!p.online}>
                   ●
                 </Text>{' '}
-                {p.name}
+                <Text weight="semibold" bold dimColor={!p.role}>
+                  {p.name}
+                </Text>
                 <Text dimColor>
-                  {' '}
-                  · {p.role ?? 'removed'} · {p.fingerprint}
-                  {p.creator ? ' · made this graph' : ''}
-                  {p.you ? ' · you' : ''}
-                  {p.agent ? ` · ${p.agent}` : ''}
-                  {p.platform ? ` · ${p.platform}` : ''}
+                  {p.you ? ' (you)' : ''} · {p.role ?? 'removed'}
+                  {p.creator ? ' · made this context' : ''}
+                  {p.role ? (p.online ? ' · online' : ' · offline') : ''}
                 </Text>
               </Text>
+              {meta(wrote(p))}
+              <Text size="footnote" dimColor mono>
+                {p.fingerprint}
+                {p.agent ? ` · ${p.agent}` : ''}
+                {p.platform ? ` · ${p.platform}` : ''}
+              </Text>
+            </Box>
+            <Box flexDirection="row" gap="xs" alignItems="center">
+              {p.you && <Button key="rename" label="✎ Rename" variant="secondary" dimColor onPress={() => void update($, renaming, () => true)} />}
+              {admin && !p.creator && !p.you && p.role && Select && (
+                <Select
+                  key={`role-${p.fingerprint}`}
+                  value={p.role}
+                  options={['reader', 'contributor', 'admin'].map(r => ({ key: r, value: r, label: r }))}
+                  onSelect={(r: string) => r !== p.role && void act($, 'set_peer_role', { name: p.name, role: r, ...ctx }, `${p.name} is now ${r}.`)}
+                />
+              )}
               {admin && !p.creator && !p.you && p.role && (
-                <Box flexDirection="row" gap={1}>
-                  {Select && (
-                    <Select
-                      key={`role-${p.fingerprint}`}
-                      value={p.role}
-                      options={['reader', 'contributor', 'admin'].map(r => ({ key: r, value: r, label: r }))}
-                      onSelect={(r: string) => r !== p.role && void act($, 'set_peer_role', { name: p.name, role: r, ...ctx }, `${p.name} is now ${r}.`)}
-                    />
-                  )}
-                  {pending === p.fingerprint ? (
-                    <Button
-                      key={`confirm-${p.fingerprint}`}
-                      label="Really remove"
-                      onPress={() => {
-                        void update($, confirmRemove, () => null)
-                        void act($, 'remove_peer', { name: p.name, ...ctx }, `${p.name} was removed. They keep the copy they already had.`)
-                      }}
-                    />
-                  ) : (
-                    <Button key={`remove-${p.fingerprint}`} label="Remove" onPress={() => void update($, confirmRemove, () => p.fingerprint)} />
-                  )}
-                </Box>
+                <Button key={`remove-${p.fingerprint}`} label="Remove" variant="secondary" dimColor onPress={() => void update($, confirmRemove, () => p.fingerprint)} />
               )}
             </Box>
-          ))}
-          {admin && (
-            <Box flexDirection="column">
-              <Input key="invite" placeholder="Invite someone: who is it for? (Enter makes a join code)" submitLabel="make code" onSubmit={(v: string) => void act($, 'share_context', v.trim() ? { label: v.trim(), ...ctx } : ctx, 'Send this line privately, to that one person:')} />
-              {line && (Code ? <Code source={line} /> : <Text>{line}</Text>)}
-            </Box>
+          </Box>,
+          p.you ? 'suggestion' : undefined,
+        )
+      body = (
+        <Box flexDirection="column" gap="sm">
+          {heading('Members', members.length)}
+          {members.map(person)}
+          {admin &&
+            card(
+              'invite-card',
+              <Box flexDirection="column" gap="sm">
+                <Box flexDirection="row" justifyContent="space-between" alignItems="center">
+                  <Text weight="semibold" bold>
+                    Join codes
+                    <Text dimColor weight="regular"> {invites.length ? `${invites.length} waiting` : 'none waiting'}</Text>
+                  </Text>
+                  <Button
+                    key="invite"
+                    label="+ Invite someone"
+                    variant="primary"
+                    onPress={() => {
+                      inviteNote = ''
+                      void update($, inviting, () => 'contributor' as Invite['role'])
+                    }}
+                  />
+                </Box>
+                {invites.length === 0
+                  ? meta('Each code lets one person in: whoever uses it first. Codes stay here until they’re used, cancelled or expire.')
+                  : invites.map((i: Invite) => {
+                      const send = `Join my context graph: /p2p-context-graph:join ${i.code}`
+                      const left = Math.max(0, Date.parse(i.expires_at) - now)
+                      const hours = Math.round(left / 3600_000)
+                      return (
+                        <Box key={`inv-${i.id}`} flexDirection="column" gap="xs">
+                          <Box flexDirection="row" justifyContent="space-between" alignItems="center">
+                            <Text>
+                              <Text weight="semibold" bold>
+                                {i.label ? `For ${i.label.replace(/^for\s+/i, '')}` : 'No note'}
+                              </Text>
+                              <Text dimColor>
+                                {' '}
+                                · {i.role} · {hours >= 1 ? `expires in ${hours}h` : 'expires soon'}
+                              </Text>
+                              {i.id === made && <Text color="success"> · new: send it now</Text>}
+                            </Text>
+                            <Box flexDirection="row" gap="xs">
+                              <Button
+                                key={`copy-${i.id}`}
+                                label="Copy"
+                                variant="secondary"
+                                onPress={(press: UiPressArgument) => void $.ui.copy({ text: send, surface: press.surface }).then(r => r.isCopied && $.ui.toast('Copied: send it privately, to that one person.'))}
+                              />
+                              <Button key={`cancel-${i.id}`} label="Cancel" variant="secondary" dimColor onPress={() => void act($, 'revoke_invite', { id: i.id, ...ctx }, 'Cancelled: that code no longer works.')} />
+                            </Box>
+                          </Box>
+                          {Code ? <Code source={send} /> : <Text>{send}</Text>}
+                        </Box>
+                      )
+                    })}
+                {!a.sharing && invites.length > 0 && <Text color="warning">You’re offline, so these codes won’t work until you go online.</Text>}
+              </Box>,
+              'suggestion',
+            )}
+          {card(
+            'sync-card',
+            <Box flexDirection="row" gap={1} justifyContent="space-between" alignItems="center">
+              <Box flexDirection="column" flexShrink={1}>
+                <Text>
+                  <Text weight="semibold" bold>
+                    {a.sharing ? 'Syncing' : 'Offline'}
+                  </Text>
+                  <Text dimColor>{a.sharing ? ` · ${online} online · ${a.relays_up} signalling relay${a.relays_up === 1 ? '' : 's'} reachable` : ' · not syncing with the other members'}</Text>
+                </Text>
+                {meta(
+                  a.sharing
+                    ? a.relays_up === 0
+                      ? 'No relay is reachable, so the others can’t find this machine right now.'
+                      : 'Every member keeps a full copy. Changes travel directly between your machines whenever you’re both online.'
+                    : 'Your copy keeps working. What you write is sent when you’re back online.',
+                )}
+              </Box>
+              {a.sharing ? (
+                <Button key="go-offline" label="Go offline" variant="secondary" dimColor onPress={() => void act($, 'stop_sharing', { ...ctx }, 'Offline: not syncing until you go online again.')} />
+              ) : (
+                goOnline
+              )}
+            </Box>,
+            a.sharing ? undefined : 'warning',
           )}
-          <Text dimColor>
-            {a.sharing ? `Syncing: ${a.relays_up} signalling relay(s) reachable.` : 'Offline: not syncing with the other members.'}
-          </Text>
+          {gone.length > 0 && heading('Removed', gone.length)}
+          {gone.map(person)}
         </Box>
       )
     }
 
     return (
-      <Box flexDirection="column">
+      <Box flexDirection="column" gap="md" paddingX={graphical ? 1 : 0}>
         {header}
         {body}
       </Box>

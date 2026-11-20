@@ -212,7 +212,7 @@ The mesh needs the same protections as the star, and a few more:
 - **Done:** relays are pinged and replaced when they go silent, and
   reconnection never gives up (`src/p2p/nostr.ts`).
 - **Done:** sharing is on by default and survives a restart; only
-  `stop_sharing` turns it off.
+  `stop_sharing` turns it off (`start_sharing` turns it back on).
 - **To do:** WebRTC links pinged the same way; a dead link is dropped and
   set up again through the room.
 - **To do:** each machine's p2pcg starts at login (a login item / launch
@@ -283,22 +283,29 @@ None at the moment. The four earlier ones are decided in section 2.
 
 - **Contexts.** What people and agents see calls each graph a *context*
   (context graph); the code still says graph. Tools: `context_info`,
-  `use_context`, `attach_context`, `detach_context`, `join_context`,
-  `share_context`, `explore_context`, `context_activity`, `describe_context`,
-  `save_folder_contexts`.
-- **Several per conversation.** The session keeps a set of attached contexts.
-  Reads run on all of them and label each row with its context; a write goes
-  to the context the call names, else the write context. The write tools'
-  descriptions list the attached contexts with their descriptions, so the
-  agent can route each claim.
+  `use_context`, `join_context`, `link_folder`, `share_context`,
+  `explore_context`, `context_activity`, `describe_context`.
+- **A chat's contexts** (2026-11-20; before, a conversation had a set of
+  attached contexts from a `.p2p-context` file per folder). A chat usually
+  has one context and may add more (`add_context`, `remove_context`). The set
+  and the write context are remembered in the data folder's `links.json`
+  under the chat's id (`P2PCG_CHAT`, else `CLAUDE_CODE_SESSION_ID`), so a
+  reopened chat gets them back. A new chat starts with its folder's linked
+  contexts (the same file), else the one the CLI names, else none: there's no
+  default. Contexts are found by id, then name. With one context the tools
+  have no `context` argument; with several, reads run on all of them, labelling
+  each row, and writes go to the context named or else the write context, the
+  tools' descriptions listing what each is for. See `src/mcp/links.ts`.
 - **Descriptions** are a membership-style change, `describe`, made by an
   admin; the latest one counts, and the create change may carry the first.
-- **`.p2p-context`** in a folder (or a parent) lists contexts by name and id,
-  and the write context; a session started there attaches them. See
-  `src/mcp/folder.ts`.
+- **Replies** (`reply`, a `Reply` node with `REPLIES_TO` to its question) are
+  a data change of their own, applied like a question; a reply waiting for its
+  question is pending like a link. Replies never answer: a claim with
+  `ANSWERS` does. `thread` reads a question with its replies and answers, and
+  the digest tells a question's author about replies.
 - **The sync digest** (`src/host/digest.ts`): after changes from other members
   are applied, the host works out what they mean for its person (claims of
-  theirs replaced, questions answered, new conflicts, two current claims
+  theirs replaced, questions answered or replied to, new conflicts, two current claims
   replacing one, possible overlaps with no link between them) and sends the
   lines to its sessions as `News:` and to the mod's feed. A possible overlap
   is a search hit by another author sharing at least 3 content words and 40%

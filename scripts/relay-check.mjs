@@ -43,7 +43,7 @@ async function agent(who, c) {
     if (r.isError) throw new Error(typeof v === "string" ? v : JSON.stringify(v));
     return v;
   };
-  const texts = async (ctx) => (await call("beliefs", ctx ? { context: ctx } : {})).map((r) => r.text);
+  const texts = async () => (await call("beliefs")).map((r) => r.text);
   return { who, raw, call, texts, close: () => client.close() };
 }
 
@@ -78,7 +78,7 @@ try {
   started.push(["bob", j.here_as]);
   check(
     "bob joins over real relays: a full copy, the description and a briefing",
-    (await bob.texts(j.here_as)).includes("Alice wrote this before anyone joined") && j.description?.startsWith("A relay check") && j.briefing?.holds?.Claim === 1,
+    (await bob.texts()).includes("Alice wrote this before anyone joined") && j.description?.startsWith("A relay check") && j.briefing?.holds?.Claim === 1,
     `${((Date.now() - t0) / 1000).toFixed(1)}s`,
   );
 
@@ -87,8 +87,8 @@ try {
   check("alice's agent is told bob joined", news.includes("News: bob joined") && news.includes(j.your_fingerprint), news.split("\n")[0]);
 
   const old = await alice.call("add_claim", { text: "The outage lasts 4 minutes" });
-  await until(async () => (await bob.texts(j.here_as)).includes("The outage lasts 4 minutes"));
-  await bob.call("add_claim", { text: "The outage lasts 6 minutes", replaces: [old.id], context: j.here_as });
+  await until(async () => (await bob.texts()).includes("The outage lasts 4 minutes"));
+  await bob.call("add_claim", { text: "The outage lasts 6 minutes", replaces: [old.id] });
   let digest = "";
   check(
     "alice is told bob replaced her claim (the sync digest)",
@@ -97,9 +97,9 @@ try {
   );
 
   await alice.call("add_claim", { text: "Alice's reply travels to bob" });
-  check("alice's write reaches bob", await until(async () => (await bob.texts(j.here_as)).includes("Alice's reply travels to bob")));
+  check("alice's write reaches bob", await until(async () => (await bob.texts()).includes("Alice's reply travels to bob")));
 
-  const secret = await bob.call("add_claim", { text: "Bob's home address is 1 Secret Street", context: j.here_as });
+  const secret = await bob.call("add_claim", { text: "Bob's home address is 1 Secret Street" });
   await bob.call("take_back", { id: secret.change });
   await sleep(8000);
   check("a taken-back write never reaches alice", !(await alice.texts()).includes("Bob's home address is 1 Secret Street"));
@@ -109,14 +109,14 @@ try {
   started.push(["carol", "own"]);
   const j2 = await carol.call("join_context", { code: inv2.code });
   started.push(["carol", j2.here_as]);
-  check("carol joins", (await carol.texts(j2.here_as)).includes("Alice's reply travels to bob"));
+  check("carol joins", (await carol.texts()).includes("Alice's reply travels to bob"));
 
   // The creator goes away: bob and carol keep syncing with each other.
   await alice.close();
   stopHost("alice", context);
   await sleep(2000);
-  await bob.call("add_claim", { text: "Bob wrote this while alice was away", context: j.here_as });
-  check("with alice offline, carol gets bob's write from bob", await until(async () => (await carol.texts(j2.here_as)).includes("Bob wrote this while alice was away")));
+  await bob.call("add_claim", { text: "Bob wrote this while alice was away" });
+  check("with alice offline, carol gets bob's write from bob", await until(async () => (await carol.texts()).includes("Bob wrote this while alice was away")));
 
   // Alice comes back and catches up.
   const alice2 = await agent("alice", context);

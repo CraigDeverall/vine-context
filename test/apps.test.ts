@@ -158,12 +158,9 @@ describe("MCP App views", () => {
     const snap = (await bob.raw("explore_context")).structuredContent;
     expect(snap).toMatchObject({ graph: "team", where: expect.stringContaining("alice's context") });
     expect(snap.nodes.map((n: any) => n.title)).toEqual(["Alice's finding about the build"]);
-    // Joining attaches the context alongside bob's own; as a reader there, his writes to it are refused.
-    expect((await bob.call("context_info")).attached.map((c: any) => [c.context, c.role, c.writes_here])).toEqual([
-      ["own", "admin", false],
-      ["team", "reader", true],
-    ]);
-    expect((await bob.raw("add_claim", { text: "A reader tries to write", context: "team" })).isError).toBe(true);
+    // Joining makes it this chat's context; as a reader there, bob gets no write tools.
+    expect(await bob.call("context_info")).toMatchObject({ context: "team", role: "reader" });
+    expect((await bob.raw("add_claim", { text: "A reader tries to write" })).isError).toBe(true);
     // Back to bob's own graph, then to the joined one again without the code.
     await bob.call("use_context", { name: "own" });
     expect((await bob.call("context_info")).your_contexts).toEqual(["own", "team"]);
@@ -250,7 +247,7 @@ describe("names, auto-share and which graph", () => {
     try {
       const r = await me.call("use_context", { name: "planning" });
       expect(r).toMatchObject({ created: "your context 'planning'", code: expect.stringMatching(/^p2pcg1_/), send: expect.stringContaining(r.code), shared_as: { name: "alice" } });
-      expect(await me.call("context_info", { context: "planning" })).toMatchObject({ sharing: { sharing: true } });
+      expect(await me.call("context_info")).toMatchObject({ sharing: { sharing: true } });
       // Switching back to an existing graph doesn't share it.
       const back = await me.call("use_context", { name: "main" });
       expect(back).not.toHaveProperty("code");

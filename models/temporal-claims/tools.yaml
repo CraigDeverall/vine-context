@@ -101,6 +101,28 @@ tools:
             THEN 'These ids are unknown or withdrawn: ' + reduce(s = '', x IN missing | s + CASE WHEN s = '' THEN '' ELSE ', ' END + x)
           END AS _error
 
+  - name: reply
+    title: Reply to a question
+    kind: write
+    apply: reply
+    view: receipt
+    undo: { tool: withdraw }
+    description: >-
+      Add a message to an open question's thread: what you or the person think,
+      a partial finding, a follow-up, or a question back. Other members' agents
+      see the thread (thread). A reply doesn't answer the question: when the
+      thread settles it, record a claim with answers (in your own words, standing
+      alone) so the question closes.
+    input:
+      question: { type: id, required: true, description: The question this replies to }
+      text: { type: string, required: true, max_length: 2000, description: The message }
+    derive:
+      id: { new_id: r }
+    steps:
+      - cypher: |
+          OPTIONAL MATCH (q:Question {id: $question}) WHERE q.withdrawn_at IS NULL
+          RETURN CASE WHEN q IS NULL THEN 'No current question ' + $question + '.' END AS _error
+
   - name: link
     title: Link two items
     kind: write
@@ -128,21 +150,21 @@ tools:
           END AS _error
 
   - name: withdraw
-    title: Withdraw a claim or question
+    title: Withdraw a claim, question or reply
     kind: write
     apply: withdraw
     description: >-
-      Take back a claim or question you recorded, for example one made by
+      Take back a claim, question or reply you recorded, for example one made by
       mistake. It stays in the graph's history. To correct a claim, prefer
       add_claim with replaces. Only its author or an admin can withdraw it.
     input:
-      id: { type: id, required: true, description: The claim or question to withdraw }
+      id: { type: id, required: true, description: The claim, question or reply to withdraw }
       reason: { type: string, max_length: 500, description: Why it is withdrawn }
     steps:
       - cypher: |
-          OPTIONAL MATCH (n:Claim|Question {id: $id})
+          OPTIONAL MATCH (n:Claim|Question|Reply {id: $id})
           RETURN CASE
-            WHEN n IS NULL THEN 'No claim or question ' + $id + '.'
+            WHEN n IS NULL THEN 'No claim, question or reply ' + $id + '.'
             WHEN n.withdrawn_at IS NOT NULL THEN $id + ' is already withdrawn.'
             WHEN NOT (n.author = $key OR (n.author IS NULL AND n.recorded_by = $by)) AND $role <> 'admin'
               THEN 'Only its author (' + n.recorded_by + ') or an admin can withdraw it. Record a claim that replaces or contradicts it instead.'
@@ -216,7 +238,8 @@ tools:
     kind: read
     description: >-
       List the questions that were open at a moment (default now): asked, not
-      withdrawn, and not answered by a current claim. Newest first.
+      withdrawn, and not answered by a current claim. Newest first, with how many
+      replies each thread has (thread reads one).
     input:
       at: { type: datetime, description: The moment to look at (ISO 8601). Default now. }
       limit: { type: integer, min: 1, max: 200, default: 50, description: How many questions }
@@ -225,9 +248,35 @@ tools:
           WITH datetime(coalesce($at, $now)) AS T
           MATCH (q:Question) WHERE {{open_question q}}
           RETURN q.id AS id, q.text AS text, q.recorded_at AS recorded_at, q.recorded_by AS recorded_by,
-                 [(q)-[r:ABOUT]->(x) WHERE r.recorded_at <= T | x.id] AS about
+                 [(q)-[r:ABOUT]->(x) WHERE r.recorded_at <= T | x.id] AS about,
+                 size([(m:Reply)-[r:REPLIES_TO]->(q) WHERE r.recorded_at <= T AND (m.withdrawn_at IS NULL OR m.withdrawn_at > T) | m.id]) AS replies
           ORDER BY recorded_at DESC
           LIMIT $limit
+
+  - name: thread
+    title: A question's thread
+    kind: read
+    description: >-
+      Read one question with its thread: the replies, oldest first, and the
+      current claims that answer it. Read it before replying or answering, so you
+      build on what others said.
+    input:
+      question: { type: id, required: true, description: The question }
+      at: { type: datetime, description: Read it as it stood at this time (ISO 8601). Default now. }
+    steps:
+      - cypher: |
+          OPTIONAL MATCH (q:Question {id: $question})
+          RETURN CASE WHEN q IS NULL THEN 'No question ' + $question + '.' END AS _error
+      - cypher: |
+          WITH datetime(coalesce($at, $now)) AS T
+          MATCH (q:Question {id: $question})
+          RETURN q {.id, .text, .recorded_at, .recorded_by, .withdrawn_at} AS question,
+                 NOT ({{open_question q}}) AND {{live_question q}} AS answered,
+                 [(m:Reply)-[r:REPLIES_TO]->(q) WHERE r.recorded_at <= T AND (m.withdrawn_at IS NULL OR m.withdrawn_at > T)
+                   | m {.id, .text, .recorded_at, .recorded_by}] AS replies,
+                 [(c:Claim)-[r:ANSWERS]->(q) WHERE r.recorded_at <= T AND {{current_claim c}}
+                   | c {.id, .text, .recorded_at, .recorded_by}] AS answers
+        single: true
 
   - name: conflicts
     title: Conflicts

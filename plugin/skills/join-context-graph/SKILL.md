@@ -7,15 +7,15 @@ description: Join someone else's shared context (p2p-context-graph) with the joi
 
 **First: is it already on this machine?** If the person names a context and
 gives no code, call `context_info`: if that name is in `your_contexts`, call
-`attach_context` (to add it to this conversation) or `use_context` (to use just
-it). That covers their own contexts and ones they joined before: no code is
+`use_context` with it (it becomes this chat's context), or `add_context` to use
+it alongside the chat's others. That covers their own contexts and ones they joined before: no code is
 needed again.
 
 1. Call `join_context` on the p2p-context-graph MCP server with the code
    exactly as given (it may be inside other text).
 2. They are let in at once and get their own full copy, kept in step with the
-   other members whenever they're online (it works offline too). It is
-   attached to this conversation and becomes where writes go.
+   other members whenever they're online (it works offline too). It's added to
+   this chat (writes go to it), and the chat keeps it when reopened.
 3. Tell them whose context it is, what it's for (its description), their
    role, and that everyone in it has been told they joined (their name, key
    fingerprint and agent). Then give them the **briefing** from the result in a

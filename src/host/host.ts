@@ -422,7 +422,7 @@ export class Host {
         throw new ToolError(`No write ${changeId} from this machine.`);
       }
       this.log.unhold(held.change.id);
-      if (held.change.kind === "claim" || held.change.kind === "question") await this.graph.discard(held.change.id);
+      if (held.change.kind === "claim" || held.change.kind === "question" || held.change.kind === "reply") await this.graph.discard(held.change.id);
       else {
         await this.rebuild();
         return { taken_back: held.change.id };
@@ -805,6 +805,8 @@ export class Host {
           return `claimed: ${String(b.text ?? "").slice(0, 160)}`;
         case "question":
           return `asked: ${String(b.text ?? "").slice(0, 160)}`;
+        case "reply":
+          return `replied to ${b.question}: ${String(b.text ?? "").slice(0, 160)}`;
         case "link":
           return `linked ${b.from} ${String(b.relation ?? "").toLowerCase()} ${b.to}`;
         case "withdraw":
