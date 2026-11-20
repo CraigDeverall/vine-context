@@ -3,7 +3,7 @@
 // (for admins) the join codes this machine answers.
 
 import { useCallback, useEffect, useState } from "react";
-import { usePoll, when, type Bridge } from "../bridge";
+import { asks, usePoll, when, type Bridge } from "../bridge";
 
 type Role = "reader" | "contributor" | "admin";
 interface Invite {
@@ -80,6 +80,8 @@ export function Console({ b }: { b: Bridge }) {
   }, [b.data]);
 
   const refresh = useCallback(async () => {
+    // Where the host doesn't pass tool calls on, this view can't refresh: it shows what it was opened with.
+    if (!b.canCall) return;
     try {
       setState(await b.call<State>("open_console"));
     } catch (e) {
@@ -92,8 +94,7 @@ export function Console({ b }: { b: Bridge }) {
     setBusy(label);
     setError(undefined);
     try {
-      await b.call(tool, args);
-      await refresh();
+      if ((await b.run(tool, args, asks(tool, args))) === "called") await refresh();
     } catch (e) {
       setError((e as Error).message);
     } finally {

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
-import { useBridge, type Bridge } from "./bridge";
+import { NoToolCalls, useBridge, type Bridge } from "./bridge";
 import type { Panel } from "./panel";
 import "./styles.css";
 import { Conflicts } from "./views/Conflicts";
@@ -45,7 +45,8 @@ function Root() {
       setPanel({ view, data: await b.call(PANEL_TOOL[view]) });
       await setMode(["fullscreen", "pip"]);
     } catch (e) {
-      setError((e as Error).message);
+      if (!(e instanceof NoToolCalls)) return setError((e as Error).message);
+      await b.say(`Please run the p2p-context-graph tool ${PANEL_TOOL[view]} (from the view, which can't run tools in this app).`);
     }
   };
   const back = async () => {

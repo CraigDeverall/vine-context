@@ -3,7 +3,7 @@
 // other members, and the button becomes Withdraw (it stays in the history).
 
 import { useEffect, useState } from "react";
-import type { Bridge } from "../bridge";
+import { asks, type Bridge } from "../bridge";
 import type { Panel } from "../panel";
 
 interface ReceiptData {
@@ -44,8 +44,8 @@ export function Receipt({ b, open }: { b: Bridge; open?: (p: Panel) => void }) {
     setBusy(true);
     setError(undefined);
     try {
-      await b.call(tool, args);
-      setUndone(done);
+      const how = await b.run(tool, args, asks(tool, args));
+      setUndone(how === "called" ? done : `Asked the agent to run ${tool}: this app can't run it from here. Check its reply.`);
     } catch (e) {
       setError((e as Error).message);
     } finally {
