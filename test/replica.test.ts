@@ -256,6 +256,34 @@ describe("replicated graphs", () => {
     await expect(joinWithCode(parseCode(code), loadIdentity(bobDir, "bob"), { signal, ice })).resolves.toMatchObject({ graph: { name: alice.graph } });
   });
 
+  it("lets in only one of two machines that use a code at the same moment", async () => {
+    for (let round = 0; round < 5; round++) {
+      const alice = await member("alice", `team${++n}`);
+      const { code } = await alice.local.request<{ code: string }>("share", {});
+      const tries = await Promise.allSettled(["bob", "mallory"].map((who) => joinWithCode(parseCode(code), loadIdentity(tempDir(), who), { signal, ice })));
+      expect(tries.filter((t) => t.status === "fulfilled")).toHaveLength(1);
+      expect((tries.find((t) => t.status === "rejected") as PromiseRejectedResult).reason.message).toMatch(/already been used on another machine/);
+      expect((await alice.local.request<Row>("status")).people).toHaveLength(2);
+      alice.stop();
+    }
+  });
+
+  it("doesn't let a member use up a code meant for someone else", async () => {
+    const alice = await member("alice", `team${++n}`);
+    const first = await alice.local.request<{ code: string }>("share", { label: "for bob" });
+    const bobDir = tempDir();
+    await joinWithCode(parseCode(first.code), loadIdentity(bobDir, "bob"), { signal, ice });
+    const second = await alice.local.request<{ code: string }>("share", { label: "for carol", role: "admin" });
+    await expect(joinWithCode(parseCode(second.code), loadIdentity(bobDir, "bob"), { signal, ice })).rejects.toThrow(/already in this graph/);
+    const status = await alice.local.request<Row>("status");
+    expect(status.invites.find((i: Row) => i.label === "for carol")).toMatchObject({ state: "open", for: null });
+    expect(status.people.find((p: Row) => p.name === "bob").role).toBe("contributor");
+    // The code still works for the person it was made for.
+    await expect(joinWithCode(parseCode(second.code), loadIdentity(tempDir(), "carol"), { signal, ice })).resolves.toMatchObject({ role: "admin" });
+    // And bob's own code still lets his machine back in.
+    await expect(joinWithCode(parseCode(first.code), loadIdentity(bobDir, "bob"), { signal, ice })).resolves.toMatchObject({ graph: { name: alice.graph } });
+  });
+
   it("keeps a write that was still held when the host stopped, and sends it on the next start", async () => {
     const alice = await member("alice", `team${++n}`);
     const bob = await join(alice, "bob");

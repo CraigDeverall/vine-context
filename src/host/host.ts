@@ -29,7 +29,7 @@ import { groupLink, Mesh } from "../p2p/mesh.js";
 import { lineReader, type Event, type Message, type Request } from "../p2p/protocol.js";
 import { iceServers, nostrSignaller, type SignalFactory } from "../p2p/signal.js";
 import { briefing, digest } from "./digest.js";
-import { InviteStore, PeerStore, hostDir, inviteLink, socketPath } from "./state.js";
+import { InviteStore, PeerStore, hostDir, inviteLink, isLive, socketPath } from "./state.js";
 
 /** How long a write stays on this machine, where Undo removes it without trace, before it is sent. */
 export const HOLD_MS = Number(process.env.P2PCG_HOLD_MS ?? 10_000);
@@ -139,6 +139,8 @@ export class Host {
   private refused = new Map<string, string>();
   private maxDataAt = 0;
   private busy: Promise<unknown> = Promise.resolve();
+  /** Admissions wait their turn, so two machines can't both take one code. (Not `busy`: admitting makes a membership change, which queues there.) */
+  private admitting: Promise<unknown> = Promise.resolve();
   /** The latest sync digests (what others' changes meant for this machine's person), newest last. */
   private digests: { at: string; lines: string[] }[] = [];
 
@@ -565,13 +567,25 @@ export class Host {
 
   /** Someone proved a live join code: decide, and send them the graph. */
   private admit(n: Newcomer): Promise<Admission> {
+    // One at a time: the code is read and tied to a machine with a membership write in between.
+    const run = this.admitting.then(() => this.admitOne(n));
+    this.admitting = run.catch(() => undefined);
+    return run;
+  }
+
+  private admitOne(n: Newcomer): Promise<Admission> {
     return (async () => {
       if (this.members.roleAt(this.me, new Date().toISOString()) !== "admin") return { deny: "The person who made this code can no longer invite people to this graph." };
-      const inv = n.invite;
+      // The invite as it stands now: someone ahead in the queue may have used it or it may have been cancelled.
+      const inv = this.invites.get(n.invite.id);
+      if (!inv || !isLive(inv)) return { deny: "This join code no longer works. Ask for a new one." };
       if (inv.bound && inv.bound.key !== n.key)
         return { deny: "This code has already been used on another machine. If that wasn't you, tell the person who sent it: the code may have leaked. Ask for a new code of your own." };
       const existing = this.members.get(n.key);
       if (existing?.removed_at && inv.bound) return { deny: "You were removed from this graph. Ask for a new code." };
+      // A code that nobody has used is for someone new: a member using it would take it from them.
+      if (existing && !existing.removed_at && !inv.bound)
+        return { deny: "You are already in this graph, and this code is for someone else. It hasn't been used up: they can still join with it." };
       if (!existing || existing.removed_at) {
         const taken = this.members.current().some((m) => m.name === n.name);
         if (taken) return { deny: `The name '${n.name}' is taken in this graph. Set another name (set_my_name) and use the code again.` };
