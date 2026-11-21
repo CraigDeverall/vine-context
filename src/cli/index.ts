@@ -1,43 +1,242 @@
-import { userInfo } from "node:os";
 import { parseArgs } from "node:util";
 import { packageInfo } from "../core/package-root.js";
 
 const pkg = packageInfo();
 const [command, ...rest] = process.argv.slice(2);
 
-const USAGE = `p2pcg ${pkg.version}: share a Relate context graph with other people's AI agents
+const USAGE = `p2pcg ${pkg.version}: a shared context graph of claims and questions, replicated peer to peer between people's AI agents
 
 Usage: p2pcg <command> [options]
 
 Commands:
-  mcp [--graph NAME] [--model PACK]   Run the MCP server on stdio
+  mcp [--context NAME]                Run the MCP server on stdio (a chat keeps the context it chose; a new chat starts with its folder's linked context, else NAME, else none until one is chosen)
+  host [--context NAME] [--share] [--idle SECONDS]
+                                      Run a context's host in the foreground (--share prints a new join code)
+  host stop [--context NAME]          Stop a context's host
+  up                                  Start the host of every context on this machine that is sharing (in the background)
+  autostart on|off                    Run \`p2pcg up\` at login (macOS), so your contexts sync after a reboot
+  demo [--port N] [--no-open]         Open the views on an example context (a copy; nothing of yours changes)
+  ui [--context NAME] [--port N] [--open]
+                                      Show the console and explorer in a browser
+  status [--context NAME]             Show a context's host: sharing, members, links, relays, invites
+  whoami                              Show your name and key fingerprint
   doctor                              Check that this machine can run p2pcg
-  model list                          List the built-in model packs
-  model validate <dir>                Check a model pack, and try it on a scratch graph
   --version                           Print the version
 
 Environment:
-  P2PCG_USER        Your name in the graph (default: your login name)
-  P2PCG_GRAPH       The graph to open (default: default)
-  P2PCG_MODEL       The model pack for a new graph (default: temporal-claims)
-  P2PCG_DATA_DIR    Where graphs are stored (default: ~/.local/share/p2p-context-graph)`;
+  P2PCG_USER        Your name in contexts (default: the name you set with set_my_name, else git's user.name, else your login name)
+  P2PCG_CONTEXT     The context a new chat starts with when its folder has none linked (default: none; the agent asks)
+  P2PCG_CHAT        The chat's id, to remember its context (default: Claude Code's session id)
+  P2PCG_DATA_DIR    Where contexts live (default: ~/.local/share/p2p-context-graph)
+  P2PCG_AUTO_SHARE  off: new contexts don't sync until you share them
+  P2PCG_HOLD_MS     How long a write stays on this machine (Undo) before it is sent (default 10000)
+  P2PCG_RELAYS      Nostr relays for signalling, comma-separated
+  P2PCG_ICE         STUN/TURN servers, comma-separated (turn:user:pass@host:port)`;
 
-function me(): string {
-  return process.env.P2PCG_USER ?? userInfo().username;
+const graphOpts = { graph: { type: "string" }, context: { type: "string" } } as const;
+const graphName = (v?: string): string => {
+  const name = v ?? process.env.P2PCG_CONTEXT ?? process.env.P2PCG_GRAPH;
+  if (name) return name;
+  console.error("Name a context with --context NAME (there's no default context).");
+  process.exit(2);
+};
+
+async function sessionFactory(values: { graph?: string; context?: string }) {
+  const [{ Session }, { chatIdFromEnv }, { ensureHost }, { defaultDataDir }, { loadIdentity, defaultName }, signal] = await Promise.all([
+    import("../mcp/server.js"),
+    import("../mcp/links.js"),
+    import("../host/client.js"),
+    import("../core/graph.js"),
+    import("../core/identity.js"),
+    import("../p2p/signal.js"),
+  ]);
+  const dataDir = defaultDataDir();
+  // A chat keeps the context it chose (by its id); a new one starts with its folder's linked context, or one named here; there's no default.
+  const graph = values.context ?? values.graph ?? process.env.P2PCG_CONTEXT ?? process.env.P2PCG_GRAPH;
+  const log = (m: string) => console.error(`p2pcg: ${m}`);
+  let ui: Promise<{ url: string }> | undefined;
+  const make = (withBrowserView: boolean): InstanceType<typeof Session> =>
+    new Session({
+      local: graph ? () => ensureHost({ dataDir, graph }) : undefined,
+      cwd: process.cwd(),
+      chat: chatIdFromEnv(),
+      openLocal: (g) => ensureHost({ dataDir, graph: g }),
+      dataDir,
+      identity: () => loadIdentity(dataDir, defaultName(dataDir)),
+      signal: signal.nostrSignaller,
+      ice: signal.iceServers(),
+      log,
+      browserView: withBrowserView
+        ? async () => {
+            ui ??= import("../ui/server.js").then(({ startUi }) => startUi({ session: () => make(false), log }));
+            return (await ui).url;
+          }
+        : undefined,
+    });
+  return { make, graph, log };
 }
 
 async function mcp(args: string[]) {
-  const { values } = parseArgs({ args, options: { graph: { type: "string" }, model: { type: "string" } } });
-  const [{ Graph }, { createMcpServer }, { StdioServerTransport }] = await Promise.all([
-    import("../core/graph.js"),
-    import("../mcp/server.js"),
-    import("@modelcontextprotocol/sdk/server/stdio.js"),
+  const { values } = parseArgs({ args, options: graphOpts });
+  const { StdioServerTransport } = await import("@modelcontextprotocol/sdk/server/stdio.js");
+  const { make, graph, log } = await sessionFactory(values);
+  const session = make(true);
+  await session.start();
+  await session.server.connect(new StdioServerTransport());
+  log(`session ready on stdio${graph ? ` (context '${graph}')` : ""}`);
+}
+
+async function demo(args: string[]): Promise<number> {
+  const { values } = parseArgs({ args, options: { port: { type: "string" }, "no-open": { type: "boolean" } } });
+  const [{ cpSync, existsSync, mkdtempSync }, { tmpdir }, { join }, { packageRoot }] = await Promise.all([
+    import("node:fs"),
+    import("node:os"),
+    import("node:path"),
+    import("../core/package-root.js"),
   ]);
-  const graph = await Graph.open({ name: values.graph, model: values.model });
-  // Single player: the person running the server owns the graph.
-  const server = createMcpServer(graph, { id: me(), role: "admin" });
-  await server.connect(new StdioServerTransport());
-  console.error(`p2pcg: graph '${graph.name}' (${graph.model.name}) ready on stdio as ${me()}`);
+  const examples = join(packageRoot(), "examples", "data");
+  if (!existsSync(join(examples, "graphs"))) {
+    console.error(`The example graphs aren't in this install (${examples}).`);
+    return 1;
+  }
+  // A copy, so the demo never changes the examples that ship with the package.
+  const dataDir = mkdtempSync(join(tmpdir(), "p2pcg-demo-"));
+  cpSync(examples, dataDir, { recursive: true });
+  process.env.P2PCG_DATA_DIR = dataDir;
+  process.env.P2PCG_USER ??= "alice";
+  process.env.P2PCG_AUTO_SHARE ??= "off"; // the example stays on this machine
+  const { make, log } = await sessionFactory({ graph: "incident" });
+  const { startUi } = await import("../ui/server.js");
+  const server = await startUi({ session: () => make(false), port: values.port ? Number(values.port) : undefined, log });
+  console.log(`p2p-context-graph demo: an example graph, copied to ${dataDir}
+  incident   three people investigating a checkout slowdown
+
+Open this on this machine (it acts as you; don't share it):
+${server.url}
+
+In the browser: Explore the graph (drag the time slider) and Conflicts.
+To point an agent at the same data:
+  P2PCG_DATA_DIR=${dataDir} p2pcg mcp --graph incident
+
+Ctrl-C stops the demo.`);
+  if (!values["no-open"]) {
+    const { spawn } = await import("node:child_process");
+    const cmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "explorer" : "xdg-open";
+    spawn(cmd, [server.url], { stdio: "ignore", detached: true }).on("error", () => undefined).unref();
+  }
+  const stop = async () => {
+    await server.close();
+    for (const g of ["incident"]) {
+      try {
+        const { LocalHost } = await import("../host/client.js");
+        const { socketPath } = await import("../host/state.js");
+        const c = await LocalHost.connect(socketPath(dataDir, g));
+        await c.request("shutdown");
+        c.close();
+      } catch {
+        // not running
+      }
+    }
+    process.exit(0);
+  };
+  process.on("SIGINT", () => void stop());
+  process.on("SIGTERM", () => void stop());
+  return -1;
+}
+
+async function ui(args: string[]): Promise<number> {
+  const { values } = parseArgs({ args, options: { ...graphOpts, port: { type: "string" }, open: { type: "boolean" } } });
+  const { make, log } = await sessionFactory(values);
+  const { startUi } = await import("../ui/server.js");
+  const server = await startUi({ session: () => make(false), port: values.port ? Number(values.port) : undefined, log });
+  console.log(`Open this on this machine (it acts as you; don't share it):\n${server.url}`);
+  if (values.open) {
+    const { spawn } = await import("node:child_process");
+    const cmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "explorer" : "xdg-open";
+    spawn(cmd, [server.url], { stdio: "ignore", detached: true }).unref();
+  }
+  const stop = () => void server.close().then(() => process.exit(0));
+  process.on("SIGINT", stop);
+  process.on("SIGTERM", stop);
+  return -1;
+}
+
+async function host(args: string[]): Promise<number> {
+  if (args[0] === "stop") {
+    const { values } = parseArgs({ args: args.slice(1), options: graphOpts });
+    const [{ LocalHost }, { socketPath }, { defaultDataDir }] = await Promise.all([
+      import("../host/client.js"),
+      import("../host/state.js"),
+      import("../core/graph.js"),
+    ]);
+    try {
+      const c = await LocalHost.connect(socketPath(defaultDataDir(), graphName(values.context ?? values.graph)));
+      await c.request("shutdown");
+      c.close();
+      console.log("Host stopped.");
+      return 0;
+    } catch {
+      console.log("No host is running for that context.");
+      return 1;
+    }
+  }
+  const { values } = parseArgs({ args, options: { ...graphOpts, share: { type: "boolean" }, idle: { type: "string" } } });
+  const [{ Host, HostRunningError }, { defaultDataDir }, { defaultName }] = await Promise.all([
+    import("../host/host.js"),
+    import("../core/graph.js"),
+    import("../core/identity.js"),
+  ]);
+  const log = (m: string) => console.error(`[${new Date().toISOString()}] ${m}`);
+  try {
+    const h = await Host.start({
+      dataDir: defaultDataDir(),
+      graph: graphName(values.context ?? values.graph),
+      user: defaultName(defaultDataDir()),
+      idleSeconds: values.idle ? Number(values.idle) : 0,
+      log,
+      onStop: () => process.exit(0),
+    });
+    log(`host for graph '${h.graph.name}' on ${h.socket}`);
+    if (values.share) console.log(h.share().code);
+    const stop = () => h.stop();
+    process.on("SIGINT", stop);
+    process.on("SIGTERM", stop);
+    return -1; // keep running
+  } catch (e) {
+    if (e instanceof HostRunningError) {
+      console.error(e.message);
+      return 3;
+    }
+    throw e;
+  }
+}
+
+async function status(args: string[]): Promise<number> {
+  const { values } = parseArgs({ args, options: graphOpts });
+  const [{ LocalHost }, { socketPath }, { defaultDataDir }] = await Promise.all([
+    import("../host/client.js"),
+    import("../host/state.js"),
+    import("../core/graph.js"),
+  ]);
+  try {
+    const c = await LocalHost.connect(socketPath(defaultDataDir(), graphName(values.context ?? values.graph)));
+    console.log(JSON.stringify(await c.request("status"), null, 2));
+    c.close();
+    return 0;
+  } catch {
+    console.log("No host is running for that context.");
+    return 1;
+  }
+}
+
+async function whoami(): Promise<number> {
+  const [{ loadIdentity, defaultName, fingerprint }, { defaultDataDir }] = await Promise.all([
+    import("../core/identity.js"),
+    import("../core/graph.js"),
+  ]);
+  const id = loadIdentity(defaultDataDir(), defaultName(defaultDataDir()));
+  console.log(`${id.name}  ${fingerprint(id.publicKey)}`);
+  return 0;
 }
 
 async function doctor(): Promise<number> {
@@ -79,12 +278,10 @@ async function doctor(): Promise<number> {
     pc.close();
     return "WebRTC data channels available";
   });
-  await check("model packs", async () => {
-    const { listBuiltinPacks, resolvePack } = await import("../core/pack.js");
-    const names = listBuiltinPacks();
-    if (!names.length) throw new Error("no built-in packs found");
-    for (const n of names) resolvePack(n);
-    return names.join(", ");
+  await check("model", async () => {
+    const { claimsPack } = await import("../core/pack.js");
+    const p = claimsPack();
+    return `${p.model.title}: ${p.tools.length} tools`;
   });
   await check("data directory", async () => {
     const { defaultDataDir } = await import("../core/graph.js");
@@ -98,40 +295,77 @@ async function doctor(): Promise<number> {
   return failed ? 1 : 0;
 }
 
-async function model(args: string[]): Promise<number> {
-  const [sub, dir] = args;
-  const { listBuiltinPacks, loadPack, resolvePack, PackError } = await import("../core/pack.js");
-  if (sub === "list") {
-    for (const name of listBuiltinPacks()) {
-      const p = resolvePack(name);
-      console.log(`${name}  ${p.model.title}: ${p.tools.length} tools`);
+/** Starts the host of every graph here that is sharing, so they sync without an agent open. */
+async function up(): Promise<number> {
+  const [{ existsSync, readdirSync, readFileSync }, { join }, { ensureHost }, { defaultDataDir }] = await Promise.all([
+    import("node:fs"),
+    import("node:path"),
+    import("../host/client.js"),
+    import("../core/graph.js"),
+  ]);
+  const { autoShare } = await import("../core/paths.js");
+  const dataDir = defaultDataDir();
+  const dir = join(dataDir, "graphs");
+  const graphs = existsSync(dir) ? readdirSync(dir).filter((n) => /^[a-z0-9][a-z0-9-]{0,62}$/.test(n)) : [];
+  let started = 0;
+  for (const g of graphs) {
+    let on = autoShare();
+    try {
+      on = JSON.parse(readFileSync(join(dataDir, "hosts", g, "sharing.json"), "utf8")).on === true;
+    } catch {
+      // no setting: the default
     }
+    if (!on) continue;
+    try {
+      // idle 0: a sharing host stays up anyway; this keeps it up for the members.
+      const c = await ensureHost({ dataDir, graph: g, idleSeconds: 0 });
+      c.close();
+      started++;
+      console.log(`up: ${g}`);
+    } catch (e) {
+      console.error(`${g}: ${(e as Error).message}`);
+    }
+  }
+  console.log(`${started} graph host(s) running.`);
+  return 0;
+}
+
+/** A macOS launch agent that runs `p2pcg up` at login. */
+async function autostart(args: string[]): Promise<number> {
+  const [sub] = args;
+  const [{ existsSync, mkdirSync, unlinkSync, writeFileSync }, { homedir }, { join }] = await Promise.all([import("node:fs"), import("node:os"), import("node:path")]);
+  const label = "dev.p2pcg.up";
+  if (process.platform !== "darwin") {
+    console.log("autostart is for macOS. Elsewhere, run `p2pcg up` from your login scripts (for example a systemd user service).");
+    return sub === "on" || sub === "off" ? 1 : 2;
+  }
+  const plist = join(homedir(), "Library", "LaunchAgents", `${label}.plist`);
+  if (sub === "off") {
+    if (existsSync(plist)) unlinkSync(plist);
+    console.log(`Removed ${plist}. Your graphs sync only while an agent (or \`p2pcg up\`) runs them.`);
     return 0;
   }
-  if (sub === "validate" && dir) {
-    try {
-      const pack = loadPack(dir);
-      const { mkdtempSync, rmSync } = await import("node:fs");
-      const { tmpdir } = await import("node:os");
-      const { join } = await import("node:path");
-      const { Graph } = await import("../core/graph.js");
-      const scratch = mkdtempSync(join(tmpdir(), "p2pcg-validate-"));
-      try {
-        // Opening a scratch graph applies the model's constraints, indexes and migrations.
-        const g = await Graph.open({ name: "validate", dataDir: scratch, model: pack.dir });
-        console.log(`ok  ${pack.model.name} v${pack.model.version}: ${Object.keys(pack.model.nodes).length} node types, ${pack.tools.length} tools, schema applied`);
-        console.log(`    tools: ${g.tools.map((t) => `${t.name} (${t.kind})`).join(", ")}`);
-      } finally {
-        rmSync(scratch, { recursive: true, force: true });
-      }
-      return 0;
-    } catch (e) {
-      console.error(e instanceof PackError ? e.message : `error: ${(e as Error).message}`);
-      return 1;
-    }
+  if (sub !== "on") {
+    console.error("Usage: p2pcg autostart on|off");
+    return 2;
   }
-  console.error("Usage: p2pcg model list | p2pcg model validate <dir>");
-  return 2;
+  const esc = (v: string) => v.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+  const args2 = [process.execPath, ...process.execArgv, process.argv[1]!, "up"];
+  mkdirSync(join(homedir(), "Library", "LaunchAgents"), { recursive: true });
+  writeFileSync(
+    plist,
+    `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>${label}</string>
+  <key>ProgramArguments</key><array>${args2.map((a) => `<string>${esc(a)}</string>`).join("")}</array>
+  <key>RunAtLoad</key><true/>
+  <key>EnvironmentVariables</key><dict>${process.env.P2PCG_DATA_DIR ? `<key>P2PCG_DATA_DIR</key><string>${esc(process.env.P2PCG_DATA_DIR)}</string>` : ""}</dict>
+</dict></plist>
+`,
+  );
+  console.log(`Wrote ${plist}: \`p2pcg up\` runs at each login. \`p2pcg autostart off\` removes it.`);
+  return 0;
 }
 
 switch (command) {
@@ -142,11 +376,35 @@ switch (command) {
   case "mcp":
     await mcp(rest);
     break;
+  case "host": {
+    const code = await host(rest);
+    if (code >= 0) process.exitCode = code;
+    break;
+  }
+  case "demo": {
+    const code = await demo(rest);
+    if (code >= 0) process.exitCode = code;
+    break;
+  }
+  case "ui": {
+    const code = await ui(rest);
+    if (code >= 0) process.exitCode = code;
+    break;
+  }
+  case "status":
+    process.exitCode = await status(rest);
+    break;
+  case "whoami":
+    process.exitCode = await whoami();
+    break;
   case "doctor":
     process.exitCode = await doctor();
     break;
-  case "model":
-    process.exitCode = await model(rest);
+  case "up":
+    process.exitCode = await up();
+    break;
+  case "autostart":
+    process.exitCode = await autostart(rest);
     break;
   default:
     console.log(USAGE);

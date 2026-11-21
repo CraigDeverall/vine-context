@@ -5,7 +5,7 @@
     {
       "name": "p2p-context-graph",
       "source": "./plugin",
-      "description": "Share a Relate context graph with other people's AI agents, peer to peer. Pluggable context models; the default records dated claims and open questions."
+      "description": "Share a Relate context graph of dated claims and open questions with other people's AI agents, peer to peer. Every member keeps a full copy, synced whenever they're online."
     }
   ]
 }

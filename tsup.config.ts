@@ -8,6 +8,10 @@ export default defineConfig({
   platform: "node",
   target: "node20",
   bundle: true,
+  // One file: lazily imported modules are inlined, not split into chunks with
+  // hashed names. A long-running MCP server or host then never loads code from
+  // dist/ after it starts, so a rebuild can't pull files out from under it.
+  splitting: false,
   clean: true,
   sourcemap: true,
   banner: { js: "#!/usr/bin/env node" },

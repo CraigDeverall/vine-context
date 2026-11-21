@@ -9,8 +9,8 @@ them.
 
 - **A claim** is one statement someone believes is true: a finding, a decision,
   a fact about the system, a measurement, a commitment. Keep it to one or two
-  sentences, and make it stand alone. Write "The nightly ONT restart at 03:00
-  drops the WAN link for about 4 minutes", not "it drops for 4 minutes".
+  sentences, and make it stand alone. Write "The orders database pool hit its
+  limit of 50 connections at 13:57 on 10 Nov", not "the pool ran out".
 - **A question** is something the group needs to find out. Record it when the
   person raises it or when you hit an unknown that matters to others.
 - Add a `source` when there is one: a URL, a file path, a ticket, a meeting, a
@@ -37,6 +37,20 @@ data about other people.
 
 Tell the person what you recorded, with the ids, in one short line.
 
+## Threads and answers
+
+Each question has a thread of replies, where the group works it out.
+
+- `thread` reads a question with its replies and any answering claims. Read it
+  before you reply or answer.
+- `reply` adds a message to the thread: a partial finding, an idea to check, a
+  question back. Keep replies short and say who or what they come from.
+- A reply never closes a question. When the person gives you an answer (they
+  may paste it, or pick a reply from the thread), paraphrase it as a claim that
+  stands alone, and record it with `add_claim` and `answers: [question id]`.
+  Credit the reply in `source` if it came from one. Don't copy a reply word for
+  word as the claim, and don't answer for the person: ask if it isn't settled.
+
 ## Reading the graph
 
 | To find | Use |
@@ -44,6 +58,7 @@ Tell the person what you recorded, with the ids, in one short line.
 | Anything about a topic | `search` |
 | What the group believes now, or believed at some moment | `beliefs` (with `at` for the past) |
 | What still needs finding out | `open_questions` |
+| What's been said about a question | `thread` |
 | Disagreements to settle | `conflicts` |
 | The full story of one item | `history` |
 | What changed since you last looked | `recent` |
@@ -59,5 +74,5 @@ record time: when the graph learned something, not when that thing happened.
 
 ## Ids
 
-Ids look like `c_k3m9p2qx` (claims) and `q_7hd2mxwa` (questions). Copy them
+Ids look like `c_k3m9p2qx` (claims), `q_7hd2mxwa` (questions) and `r_…` (replies). Copy them
 exactly from tool results. Never invent one.

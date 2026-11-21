@@ -1,5 +1,12 @@
 # p2p-context-graph: root plan
 
+> **Superseded in part (2026-11-17):** the star is replaced by replicated
+> graphs (every member keeps a full copy, synced over a mesh), Claims and
+> Questions is the only model (`decision-log`, model packs and the model
+> studio are gone), and joined graphs are local graphs. See
+> [REPLICATION.md](REPLICATION.md) and the decision at the end of section 9.
+> The rest of this plan is kept as the record of how the project got here.
+
 Status: draft, 2026-11-15. This is the grounding plan for an open-source proof of
 concept entered in the [Relate by Neo4j Hackathon](https://relate.devpost.com/).
 Each milestone gets its own detailed plan; this file holds the decisions they
@@ -13,8 +20,8 @@ peer, with a few other people and their AI agents.
 
 - The **host** (the person who starts it) runs a Relate graph and is the centre
   of a star network.
-- The host shares a link (`p2pcg://join/<room>#<secret>`). Users B, C and D paste
-  it into their agent, or click it, and their agent joins the star.
+- The host sends each person a join code (`p2pcg1_<room>.<secret>`). Users B, C and D paste
+  it into their agent, or runs `/p2p-context-graph:join <code>`, and their agent joins the star.
 - Everyone's agent can then read and write the shared graph. They do it through
   tools that the graph's **context model** defines, not through raw Cypher.
 - The context model can be chosen and authored. The project ships a default,
@@ -29,28 +36,33 @@ public STUN and a signalling relay that sees encrypted handshakes only.
 
 ## 2. How we will be judged
 
-The five criteria are weighted equally (Rules §5). Every milestone should move at
-least one of them, and the demo should show all five.
+The published rubric (devpost "Judging Criteria", 100 points). Every milestone
+should move at least one criterion, and the demo should show all five. Judges
+must be able to clone, run and see the graph without asking us anything.
 
-| Criterion | What judges look for | How we answer it | Proof in the submission |
-|---|---|---|---|
-| **Creativity** | An original idea and approach | Agents on different machines share one graph peer to peer, with no server. The graph's *model* is a pluggable pack that the skill can help write. | The demo opens with two laptops and no cloud. |
-| **Usefulness** | It solves a real problem | Teams' AI sessions are silos: what one person's agent learns, nobody else's sees. The shared graph keeps claims, questions and contradictions across people and over time. | A realistic scenario: three people investigating one problem. |
-| **Completeness** | It works end to end from the setup instructions | One install command, one command to host, one to join. CI runs a two-peer test on every push. | A judge follows the README on a clean machine in under 5 minutes. |
-| **Clarity** | The write-up, demo and visuals | A short README with a diagram, a 2-minute video, and MCP App screenshots. | Video ≤ 2 min, README "Quickstart" ≤ 10 lines. |
-| **Effective use of connected context** | Use of Relate's graph, retrieval and agent features | Relate's graph model, hybrid search (vector + full-text with `COMBINE`), temporal queries ("what did we believe on 1 Dec?"), and Relate's MCP surface for the host's own agent. | Each Relate feature used is listed in the README with the query that uses it. |
+| Criterion | Points | What judges look for | How we answer it | Proof in the submission |
+|---|---|---|---|---|
+| **Relate and connected context** | 30 | Relate's relationships carry the main use case; judges can follow the instructions, run it, and explore with Relate working as described | Relationships *are* the answers: SUPPORTS/CONTRADICTS/REPLACES give `beliefs` and `conflicts`; RESTS_ON/DEPENDS_ON/SUPERSEDES give `needs_review`. Hybrid search (`COMBINE` vector + full-text), record-time queries ("what did we believe on 1 Dec?"), the explorer's time slider, and a persistent directory store judges can open with Relate's own CLI | README "How it uses Relate" lists each feature with the query that uses it; a sample store in the repo |
+| **Functionality and completeness** | 25 | How much of the core use case works | Host, share, join codes, join notices, roles, two model packs, five views, the localhost page; CI on every push | A judge reaches a first result from the README in under 5 minutes |
+| **Usefulness** | 20 | A real problem for a clear user, and the project shows it | Teams' AI sessions are silos: what one person's agent learns, nobody else's sees. The shared graph keeps claims, questions, decisions and contradictions across people and over time | A realistic scenario in the video: people investigating one incident |
+| **Documentation and reproducibility** | 15 | The README explains the project and how to try it | The devpost README template, followed section by section; one install command; `doctor`; no account, API key or model download | README Quickstart ≤ 10 lines |
+| **Creativity** | 10 | A fresh idea or an inventive use of Relate | Agents on different machines share one embedded graph peer to peer, with no server; the graph's model is a pluggable pack the skill helps write | The demo opens with two machines and no cloud |
 
-### Submission checklist (Rules §3–4)
+### Submission checklist (devpost rules and "Requirements")
 
-- [ ] Public GitHub repo, topic **`relate`** (required) and `relate-neo4j-hackathon`.
+- [ ] Public GitHub repo, topic **`relate`** (required: it's how entries are found) and `relate-neo4j-hackathon`.
 - [x] Open-source licence: Apache-2.0, the same as Relate.
-- [ ] Title and description: what it does and why it is useful.
-- [ ] Setup instructions a judge can run.
-- [ ] A demo video of up to 2 minutes, made by us and viewable without a login, plus screenshots.
+- [ ] Project description on devpost: the use case, and what connects to what.
+- [ ] README following the template: one-line pitch; Use case (which relationships matter); How it uses Relate (**mode: directory**, why, what the graph models); Setup and run; Where the data lives (path to the store in the repo).
+- [ ] **A persistent Relate store in the repo** (a directory judges can inspect, e.g. `examples/incident-graph/`), made by a script from the demo scenario, plus how to open it with the `relate` CLI.
+- [ ] Working code with Relate actually running (not prompts only).
+- [ ] A demo video of 1–2 minutes, made by us and viewable without a login, plus screenshots.
 - [ ] A statement of the Relate capabilities, third-party tools and **AI tools** used.
 - [ ] Disclosure of reused earlier code (see §3).
 - [ ] Use Relate's name and logo only to identify the product; no implied endorsement.
 - [ ] Submit before **Fri 11 Dec 2026, 6:00 PM PST** (Sat 12 Dec, 3:00 PM NZDT). Keep the repo public and tagged until winners are announced on 17 Dec.
+
+Links: [relatedb.ai](https://relatedb.ai/), [install](https://relatedb.ai/docs/get-started/install/), [github.com/relatedb/relate](https://github.com/relatedb/relate), [relate-ideas](https://github.com/jexp/relate-ideas).
 
 ## 3. Provenance and reused code
 
@@ -165,9 +177,11 @@ models/temporal-claims/
 - Host-star topology over **node-datachannel** (libdatachannel, prebuilt N-API
   binaries).
 - Default public STUN, with flags or config for custom STUN/TURN.
-- Link `p2pcg://join/<roomId>#<secret>`. The fragment never leaves the joining
-  machine. The room hash is used for signalling, and an HMAC challenge proves
-  the secret over the data channel before any other frame is accepted.
+- Join code `p2pcg1_<room>.<secret>`, one per invite (this replaced the
+  single reusable `p2pcg://join/<room>#<secret>` link on 16 Nov). The secret
+  never leaves the two machines. The room hash is used for signalling, and an
+  HMAC challenge proves the secret over the data channel before any other
+  frame is accepted.
 - Typed frames on the channel: `control` (hello, auth, heartbeat, join/leave,
   roles, session-closed), `rpc` (tool call and result), and `event` (graph
   changed, so views update live).
@@ -176,21 +190,27 @@ models/temporal-claims/
 **Change:**
 
 - **The graph is durable, the session is not.** Unlike the Gemini plan, the
-  graph lives on the host's disk across sessions. Only the links, the peer list
-  and the connections are temporary. A new session issues a new link.
+  graph lives on the host's disk across sessions, and so do the invites and
+  the people who joined. Only the connections are temporary.
 - **No CRDT.** The host is the single writer and the authority, so there's no
   need for one. This removes a whole area of risk.
-- **Identity:** each install has an Ed25519 key. The host sees "Bob (key
-  ab12…) wants to join" in the console app and approves him as reader,
-  contributor or admin. Approved keys can rejoin later sessions without asking
-  again.
+- **Identity:** each install has an Ed25519 key. The first key to use a
+  join code is let in at once with the invite's role, and the code is bound to
+  it: the same machine rejoins with it later, and any other key using it is
+  turned away. Everyone in the graph is told who joined (name, fingerprint,
+  invite, agent, operating system). An unused code expires (24 h by default).
+  We dropped the approval step and the fingerprint check on 16 Nov: people
+  would compare fingerprints over the same channel the code went through,
+  which adds friction and little safety once codes are single-use.
 
 **Drop for the hackathon (could be added later):**
 
 - The `proxy` channel (HTTP port tunnelling).
-- Registering the `p2pcg://` scheme with the OS. Instead, the link works when
-  pasted into an agent chat, because the skill recognises it. We could also
-  offer an `https://` landing page that shows the link and the install command.
+- Registering a URL scheme, or an `https://` landing page. A code gets pasted
+  into an agent anyway, so a clickable link saves no steps. The code works
+  pasted into any agent chat, and with `/p2p-context-graph:join <code>`.
+- Short code words (`p2pcg2_`), which need a password-authenticated key
+  exchange.
 - Copy-paste-only signalling, which needs a manual round trip and is slow in a
   demo. We keep it as a fallback flag only if it costs little.
 
@@ -207,7 +227,7 @@ TURN may be needed.
 
 | App | Who sees it | Purpose |
 |---|---|---|
-| **Host console** | Host | Start and stop a session, show the link and a QR code, approve joins, set roles, show peers online |
+| **Host console** | Host | Start and stop a session, show join codes, show who joined, set roles, show peers online |
 | **Graph explorer** | Everyone | An interactive graph of the current model, filtered by time ("as of"), and search |
 | **Model studio** | Host | Pick, install or switch a model pack, view the schema, run validation, see the authoring wizard's output |
 | **Receipt** | Everyone | What my agent just wrote, with undo (withdraw) |
@@ -274,17 +294,22 @@ Cut order if we're late: model studio UI (keep the CLI and skill authoring) →
 conflicts view → Windows → QR code. Never cut: the two-machine demo, the second
 model pack, setup instructions.
 
-**Known M1 limit:** a graph can be open in one process at a time, because
-Relate holds a writer lease and `@relate/relate` 1.0.1 can't close a store.
-Two Claude Code sessions on the same graph therefore conflict. M2's host
-daemon fixes this: the store lives in one long-running host process, and
-every session's MCP server is a client of it.
+**M1's one-process limit is fixed in M2.** Each graph has one host process
+that owns the store, and every session's MCP server is a client of it over a
+local socket. Relate's writer lease and the missing `close()` in
+`@relate/relate` 1.0.1 no longer matter.
+
+**M2 status (2026-11-15):** the star works between processes on one machine
+over the public relays. That covers the host, join codes, join notices, roles,
+forwarded tools and events. It is covered by in-process tests on real
+loopback data channels. **Still to do for M2's "done when":** a second
+machine on a different network, and a case that needs TURN.
 
 ## 7. Demo (≤ 2 minutes)
 
 1. 0:00. The problem: three people, three AI sessions, nothing shared.
 2. 0:15. Alice: "share our context graph". The console app shows the link.
-3. 0:30. Bob pastes the link on another laptop, Alice approves him, and he's in.
+3. 0:30. Bob pastes the code on another laptop and is in at once; Alice's agent tells her who joined.
 4. 0:45. Bob's agent records a claim. It appears live in Alice's explorer.
 5. 1:00. Carol's agent records a contradicting claim, and the conflicts view
    flags it.
@@ -319,8 +344,31 @@ Decided:
 
 Open:
 
-1. **A semantic embedder.** M1 ships a hashing embedder (offline, no download,
-   word and fragment matches only) behind an `Embedder` interface. A local
-   MiniLM through transformers.js would make search match meaning, but it adds
-   about 100 MB of native dependencies. Decide in M3.
-2. The second model pack: `decision-log` or `research-notes`.
+- None blocking. Revisit after the hackathon: an optional semantic embedder.
+
+Decided in M3 (16 Nov):
+
+- **Embedder:** keep the offline `hash-256` embedder as the default. A local
+  MiniLM (transformers.js) would make search match meaning, but it adds about
+  100 MB of native dependencies and a model download on first run, which works
+  against "clone, run, see it without asking" (reproducibility, 15 points).
+  Hybrid search still uses both Relate indexes through `COMBINE`. The
+  `Embedder` interface stays, so a semantic embedder can be added later as an
+  opt-in without changing packs.
+- **Second pack:** `decision-log` (decisions, options, assumptions; `needs_review`
+  follows RESTS_ON and DEPENDS_ON to find decisions on stale foundations).
+- **MCP Apps:** ext-apps 1.7.5 (the line that targets MCP SDK 1.x). One React
+  bundle served as `ui://p2pcg/<view>`, run on Preact to keep it near 300 KB.
+  `p2pcg ui` / `browser_view` serve the same views on 127.0.0.1 for agents
+  without MCP Apps.
+
+Decided 17 Nov:
+
+- **Replicated graphs, one model.** Every member keeps a full copy built from
+  a log of signed changes; online members keep each other in step over a
+  WebRTC mesh, so the graph works offline and while its creator is away.
+  Claims and Questions is the only model: with one fixed schema, changes are
+  four fixed kinds (claim, question, link, withdraw) and need no merge rules.
+  Model packs, `decision-log`, `validate_model`, `install_model` and the
+  model studio are removed. Design and as-built notes:
+  [REPLICATION.md](REPLICATION.md).

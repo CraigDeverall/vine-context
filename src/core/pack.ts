@@ -1,12 +1,18 @@
-// Context model packs: a folder that defines a graph's shape, its tools and
-// the instructions agents follow. See docs/model-packs.md.
+// The context model: a folder that defines a graph's shape, its tools and the
+// instructions agents follow. p2p-context-graph ships one, Claims and
+// Questions (models/temporal-claims), and every graph uses it.
+//
+// Read tools are Cypher in tools.yaml. Write tools in tools.yaml only check
+// the input against the graph (their steps return `_error`); the write itself
+// becomes a signed change (`apply` names its kind), applied by src/core/graph.ts
+// the same way on every member's machine.
 //
 //   model.yaml        nodes, relationships, the searchable set
 //   tools.yaml        named operations: input schema, derived params, Cypher steps
 //   instructions.md   what to record and how to query, for the agent
 //   migrations/*.cypher  optional, applied once each, in name order
 
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
@@ -24,6 +30,8 @@ const PropertySpec = z.object({
 const NodeSpec = z.object({
   description: z.string(),
   key: identifier.optional(),
+  /** The property shown as the node's label in views. Default: the search text, else the key. */
+  title: identifier.optional(),
   properties: z.record(identifier, PropertySpec).default({}),
 });
 
@@ -47,6 +55,12 @@ export const ModelSchema = z
         text: identifier,
       })
       .optional(),
+    /**
+     * Which properties hold time, so views can show the graph as it stood at
+     * any moment. `recorded` is on nodes and relationships; `ended`, if set, is
+     * when a node stopped being current.
+     */
+    time: z.object({ recorded: identifier, ended: identifier.optional() }).optional(),
   })
   .superRefine((m, ctx) => {
     const labels = new Set(Object.keys(m.nodes));
@@ -55,6 +69,9 @@ export const ModelSchema = z
         if (!labels.has(l)) ctx.addIssue({ code: "custom", path: ["relationships", type], message: `unknown node label ${l}` });
     for (const l of m.search?.labels ?? [])
       if (!labels.has(l)) ctx.addIssue({ code: "custom", path: ["search", "labels"], message: `unknown node label ${l}` });
+    for (const [label, node] of Object.entries(m.nodes))
+      for (const p of [node.key, node.title])
+        if (p && !(p in node.properties)) ctx.addIssue({ code: "custom", path: ["nodes", label], message: `${p} is not one of its properties` });
   });
 
 type InputType = z.infer<typeof InputBase>["type"];
@@ -97,13 +114,41 @@ export const ToolSchema = z.object({
   input: z.record(identifier, InputSpec).default({}),
   derive: z.record(identifier, Derive).default({}),
   steps: z.array(Step).min(1),
+  /** A built-in view that shows this tool's result: receipt (for writes) or conflicts (pairs of items). */
+  view: z.enum(["receipt", "conflicts"]).optional(),
+  /** For write tools: the kind of change it makes. Its steps only check the input. */
+  apply: z.enum(["claim", "question", "reply", "link", "withdraw"]).optional(),
+  /** How to undo a write from its receipt: call `tool` with { [arg]: result[field] }. */
+  undo: z.object({ tool: toolName, arg: identifier.default("id"), field: identifier.default("id") }).optional(),
 });
 
 /** Parameter names the server sets on every call. */
-export const SERVER_PARAMS = ["now", "by", "role"] as const;
+export const SERVER_PARAMS = ["now", "by", "key", "role"] as const;
 
 /** Tool names the server provides itself. */
-export const RESERVED_TOOL_NAMES = ["graph_info", "model_guide"] as const;
+export const RESERVED_TOOL_NAMES = [
+  "context_info",
+  "context_activity",
+  "model_guide",
+  "describe_context",
+  "set_my_name",
+  "share_context",
+  "stop_sharing",
+  "start_sharing",
+  "sharing_status",
+  "revoke_invite",
+  "set_peer_role",
+  "remove_peer",
+  "join_context",
+  "use_context",
+  "add_context",
+  "remove_context",
+  "link_folder",
+  "take_back",
+  "open_console",
+  "explore_context",
+  "browser_view",
+] as const;
 
 export const ToolsFileSchema = z.object({
   fragments: z.record(identifier, z.string()).default({}),
@@ -180,6 +225,11 @@ export function loadPack(dir: string): Pack {
     }
     return { ...t, steps, role: t.role ?? (t.kind === "read" ? "reader" : "contributor") };
   });
+  for (const t of expanded) {
+    if (t.kind === "write" && !t.apply) problems.push(`${t.name}: write tools name the change they make (apply)`);
+    if (t.undo && !seen.has(t.undo.tool)) problems.push(`${t.name}: undo tool ${t.undo.tool} is not defined`);
+    if (t.undo && t.kind !== "write") problems.push(`${t.name}: only write tools can be undone`);
+  }
   if (problems.length) throw new PackError("tools.yaml:\n" + problems.map((p) => `  - ${p}`).join("\n"));
 
   const instructionsFile = join(abs, "instructions.md");
@@ -199,19 +249,10 @@ export function builtinPacksDir(): string {
   return join(packageRoot(), "models");
 }
 
-export function listBuiltinPacks(): string[] {
-  const dir = builtinPacksDir();
-  return existsSync(dir)
-    ? readdirSync(dir).filter((d) => statSync(join(dir, d)).isDirectory() && existsSync(join(dir, d, "model.yaml")))
-    : [];
-}
-
-/** A built-in pack's name, or a path to a pack folder. */
-export function resolvePack(ref: string): Pack {
-  const builtin = join(builtinPacksDir(), ref);
-  if (/^[a-z][a-z0-9-]*$/.test(ref) && existsSync(join(builtin, "model.yaml"))) return loadPack(builtin);
-  if (existsSync(join(ref, "model.yaml"))) return loadPack(ref);
-  throw new PackError(`No model pack '${ref}'. Built-in packs: ${listBuiltinPacks().join(", ") || "none"}.`);
+let claims: Pack | undefined;
+/** The one model every graph uses: Claims and Questions. */
+export function claimsPack(): Pack {
+  return (claims ??= loadPack(join(builtinPacksDir(), "temporal-claims")));
 }
 
 export type { InputType };
