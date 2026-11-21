@@ -1,0 +1,329 @@
+# Tools for the temporal-claims model. See docs/model-packs.md for the format.
+#
+# Server parameters, set on every call and never by the caller:
+#   $now   the call's time, ISO 8601 (use datetime($now))
+#   $by    the caller's identity
+#   $role  the caller's role: reader, contributor or admin
+#
+# Read tools take an optional `at` and answer as the graph stood at that
+# moment (record time): T below is datetime(coalesce($at, $now)).
+
+fragments:
+  # The claim %1 was current at T: recorded by then, not withdrawn by then, and
+  # not replaced by a claim that was itself current at T.
+  current_claim: >-
+    %1.recorded_at <= T
+    AND (%1.withdrawn_at IS NULL OR %1.withdrawn_at > T)
+    AND NOT EXISTS {
+      MATCH (newer:Claim)-[rr:REPLACES]->(%1)
+      WHERE rr.recorded_at <= T AND (newer.withdrawn_at IS NULL OR newer.withdrawn_at > T)
+    }
+  # The question %1 existed at T and was not withdrawn by then.
+  live_question: >-
+    %1.recorded_at <= T AND (%1.withdrawn_at IS NULL OR %1.withdrawn_at > T)
+  # The question %1 was open at T: live, and no current claim answered it.
+  open_question: >-
+    {{live_question %1}}
+    AND NOT EXISTS {
+      MATCH (ans:Claim)-[ra:ANSWERS]->(%1)
+      WHERE ra.recorded_at <= T AND {{current_claim ans}}
+    }
+
+tools:
+  - name: add_claim
+    title: Add a claim
+    kind: write
+    description: >-
+      Record one statement you or the person believe is true, in one or two
+      sentences. Link it to existing claims it supports, contradicts or replaces,
+      and to questions it answers. Use replaces to correct or update an earlier
+      claim rather than withdrawing it. Returns the new claim's id.
+    input:
+      text: { type: string, required: true, max_length: 2000, description: The statement, in one or two sentences }
+      source: { type: string, max_length: 500, description: Where it came from (URL, file, meeting, person) }
+      about_from: { type: date, description: First day the statement is about (YYYY-MM-DD), if it is about a period }
+      about_to: { type: date, description: Last day the statement is about (YYYY-MM-DD) }
+      supports: { type: array, items: id, description: Ids of claims this is evidence for }
+      contradicts: { type: array, items: id, description: Ids of claims this cannot be true alongside }
+      replaces: { type: array, items: id, description: Ids of claims this is the newer version of }
+      answers: { type: array, items: id, description: Ids of questions this answers }
+    derive:
+      id: { new_id: c }
+      embedding: { embed: text }
+    steps:
+      - cypher: |
+          WITH coalesce($supports, []) + coalesce($contradicts, []) + coalesce($replaces, []) AS claim_refs,
+               coalesce($answers, []) AS question_refs
+          OPTIONAL MATCH (c:Claim) WHERE c.id IN claim_refs AND c.withdrawn_at IS NULL
+          WITH claim_refs, question_refs, collect(DISTINCT c.id) AS found_c
+          OPTIONAL MATCH (q:Question) WHERE q.id IN question_refs AND q.withdrawn_at IS NULL
+          WITH claim_refs, question_refs, found_c, collect(DISTINCT q.id) AS found_q
+          WITH [x IN claim_refs WHERE NOT x IN found_c] + [x IN question_refs WHERE NOT x IN found_q] AS missing
+          RETURN CASE
+            WHEN size(missing) > 0
+              THEN 'These ids are unknown or withdrawn: ' + reduce(s = '', x IN missing | s + CASE WHEN s = '' THEN '' ELSE ', ' END + x)
+            WHEN $about_from IS NOT NULL AND $about_to IS NOT NULL AND date($about_from) > date($about_to)
+              THEN 'about_from is after about_to.'
+          END AS _error
+      - cypher: |
+          CREATE (c:Claim {id: $id, text: $text, embedding: $embedding, recorded_at: datetime($now), recorded_by: $by})
+          SET c.source = $source,
+              c.about_from = CASE WHEN $about_from IS NULL THEN null ELSE date($about_from) END,
+              c.about_to = CASE WHEN $about_to IS NULL THEN null ELSE date($about_to) END
+          WITH c
+          CALL (c) {
+            UNWIND coalesce($supports, []) AS x MATCH (t:Claim {id: x})
+            MERGE (c)-[r:SUPPORTS]->(t) SET r.recorded_at = c.recorded_at, r.recorded_by = $by
+            RETURN count(*) AS supports
+          }
+          CALL (c) {
+            UNWIND coalesce($contradicts, []) AS x MATCH (t:Claim {id: x})
+            MERGE (c)-[r:CONTRADICTS]->(t) SET r.recorded_at = c.recorded_at, r.recorded_by = $by
+            RETURN count(*) AS contradicts
+          }
+          CALL (c) {
+            UNWIND coalesce($replaces, []) AS x MATCH (t:Claim {id: x})
+            MERGE (c)-[r:REPLACES]->(t) SET r.recorded_at = c.recorded_at, r.recorded_by = $by
+            RETURN count(*) AS replaces
+          }
+          CALL (c) {
+            UNWIND coalesce($answers, []) AS x MATCH (t:Question {id: x})
+            MERGE (c)-[r:ANSWERS]->(t) SET r.recorded_at = c.recorded_at, r.recorded_by = $by
+            RETURN count(*) AS answers
+          }
+          RETURN c.id AS id, c.recorded_at AS recorded_at, supports, contradicts, replaces, answers
+        single: true
+
+  - name: ask_question
+    title: Ask a question
+    kind: write
+    description: >-
+      Record something the group needs to find out. Link it to the claims or
+      questions it is about. It stays open until a current claim answers it
+      (add_claim with answers, or link with ANSWERS). Search first: the question
+      may already be asked or answered.
+    input:
+      text: { type: string, required: true, max_length: 1000, description: The question }
+      about: { type: array, items: id, description: Ids of claims or questions it asks about }
+    derive:
+      id: { new_id: q }
+      embedding: { embed: text }
+    steps:
+      - cypher: |
+          WITH coalesce($about, []) AS refs
+          OPTIONAL MATCH (n:Claim|Question) WHERE n.id IN refs AND n.withdrawn_at IS NULL
+          WITH refs, collect(DISTINCT n.id) AS found
+          WITH [x IN refs WHERE NOT x IN found] AS missing
+          RETURN CASE WHEN size(missing) > 0
+            THEN 'These ids are unknown or withdrawn: ' + reduce(s = '', x IN missing | s + CASE WHEN s = '' THEN '' ELSE ', ' END + x)
+          END AS _error
+      - cypher: |
+          CREATE (q:Question {id: $id, text: $text, embedding: $embedding, recorded_at: datetime($now), recorded_by: $by})
+          WITH q
+          CALL (q) {
+            UNWIND coalesce($about, []) AS x MATCH (t:Claim|Question {id: x})
+            MERGE (q)-[r:ABOUT]->(t) SET r.recorded_at = q.recorded_at, r.recorded_by = $by
+            RETURN count(*) AS about
+          }
+          RETURN q.id AS id, q.recorded_at AS recorded_at, about
+        single: true
+
+  - name: link
+    title: Link two items
+    kind: write
+    description: >-
+      Link an existing claim to another claim (SUPPORTS, CONTRADICTS, REPLACES)
+      or to a question it answers (ANSWERS). Use it when you notice a relation
+      between things already in the graph.
+    input:
+      from: { type: id, required: true, description: The claim the link starts from }
+      relation: { type: enum, values: [SUPPORTS, CONTRADICTS, REPLACES, ANSWERS], required: true, description: How the first relates to the second }
+      to: { type: id, required: true, description: The claim, or for ANSWERS the question, the link points to }
+    steps:
+      - cypher: |
+          OPTIONAL MATCH (a:Claim {id: $from}) WHERE a.withdrawn_at IS NULL
+          OPTIONAL MATCH (b:Claim|Question {id: $to}) WHERE b.withdrawn_at IS NULL
+          RETURN CASE
+            WHEN a IS NULL THEN 'No current claim ' + $from + '.'
+            WHEN b IS NULL THEN 'No current claim or question ' + $to + '.'
+            WHEN $from = $to THEN 'A claim cannot link to itself.'
+            WHEN $relation = 'ANSWERS' AND NOT b:Question THEN 'ANSWERS links a claim to a question.'
+            WHEN $relation <> 'ANSWERS' AND NOT b:Claim THEN $relation + ' links two claims.'
+            WHEN EXISTS { MATCH (a)-[r]->(b) WHERE type(r) = $relation } THEN 'That link already exists.'
+          END AS _error
+      - cypher: |
+          MATCH (a:Claim {id: $from}), (b:Claim|Question {id: $to})
+          FOREACH (_ IN CASE WHEN $relation = 'SUPPORTS' THEN [1] ELSE [] END |
+            CREATE (a)-[:SUPPORTS {recorded_at: datetime($now), recorded_by: $by}]->(b))
+          FOREACH (_ IN CASE WHEN $relation = 'CONTRADICTS' THEN [1] ELSE [] END |
+            CREATE (a)-[:CONTRADICTS {recorded_at: datetime($now), recorded_by: $by}]->(b))
+          FOREACH (_ IN CASE WHEN $relation = 'REPLACES' THEN [1] ELSE [] END |
+            CREATE (a)-[:REPLACES {recorded_at: datetime($now), recorded_by: $by}]->(b))
+          FOREACH (_ IN CASE WHEN $relation = 'ANSWERS' THEN [1] ELSE [] END |
+            CREATE (a)-[:ANSWERS {recorded_at: datetime($now), recorded_by: $by}]->(b))
+          RETURN $from AS from, $relation AS relation, $to AS to
+        single: true
+
+  - name: withdraw
+    title: Withdraw a claim or question
+    kind: write
+    description: >-
+      Take back a claim or question you recorded, for example one made by
+      mistake. It stays in the graph's history. To correct a claim, prefer
+      add_claim with replaces. Only its author or an admin can withdraw it.
+    input:
+      id: { type: id, required: true, description: The claim or question to withdraw }
+      reason: { type: string, max_length: 500, description: Why it is withdrawn }
+    steps:
+      - cypher: |
+          OPTIONAL MATCH (n:Claim|Question {id: $id})
+          RETURN CASE
+            WHEN n IS NULL THEN 'No claim or question ' + $id + '.'
+            WHEN n.withdrawn_at IS NOT NULL THEN $id + ' is already withdrawn.'
+            WHEN n.recorded_by <> $by AND $role <> 'admin'
+              THEN 'Only its author (' + n.recorded_by + ') or an admin can withdraw it. Record a claim that replaces or contradicts it instead.'
+          END AS _error
+      - cypher: |
+          MATCH (n:Claim|Question {id: $id})
+          SET n.withdrawn_at = datetime($now), n.withdrawn_by = $by, n.withdraw_reason = $reason
+          RETURN n.id AS id, n.withdrawn_at AS withdrawn_at
+        single: true
+
+  - name: search
+    title: Search
+    kind: read
+    description: >-
+      Find claims and questions related to a text, ranked by hybrid search (meaning
+      plus keywords). Returns only claims that are current and questions that are
+      not withdrawn; questions show whether they are answered. Search before
+      adding, to avoid duplicates and to find what to link to.
+    input:
+      query: { type: string, required: true, max_length: 1000, description: What to look for }
+      kind: { type: enum, values: [any, claim, question], default: any, description: Only claims, only questions, or both }
+      at: { type: datetime, description: Search the graph as it stood at this time (ISO 8601). Default now. }
+      limit: { type: integer, min: 1, max: 50, default: 10, description: How many results }
+    derive:
+      query_vector: { embed: query }
+      query_terms: { terms: query }
+    steps:
+      - cypher: |
+          MATCH (n:Claim|Question) SEARCH n IN (COMBINE (
+            VECTOR INDEX search_embedding FOR $query_vector LIMIT 100 WEIGHT 1,
+            FULLTEXT INDEX search_text FOR $query_terms LIMIT 100 WEIGHT 1
+          ) USING WRRF WITH CONSTANT 60 LIMIT 100) SCORE AS score
+          WITH n, score, datetime(coalesce($at, $now)) AS T
+          WITH n, score, T
+          WHERE ($kind = 'any' OR ($kind = 'claim' AND n:Claim) OR ($kind = 'question' AND n:Question))
+            AND ((n:Claim AND {{current_claim n}}) OR (n:Question AND {{live_question n}}))
+          RETURN n.id AS id,
+                 CASE WHEN n:Claim THEN 'claim' ELSE 'question' END AS kind,
+                 n.text AS text, n.source AS source, n.about_from AS about_from, n.about_to AS about_to,
+                 n.recorded_at AS recorded_at, n.recorded_by AS recorded_by,
+                 CASE WHEN n:Question THEN NOT ({{open_question n}}) END AS answered,
+                 round(score, 4) AS score
+          ORDER BY score DESC
+          LIMIT $limit
+
+  - name: beliefs
+    title: What the group believes
+    kind: read
+    description: >-
+      List the claims that were current at a moment (default now), newest first,
+      with what each supports, contradicts, replaces and answers. Give at to see
+      what the group believed back then. Give about_from/about_to to keep only
+      claims about that period.
+    input:
+      at: { type: datetime, description: The moment to look at (ISO 8601). Default now. }
+      about_from: { type: date, description: Keep claims about days on or after this (YYYY-MM-DD) }
+      about_to: { type: date, description: Keep claims about days on or before this (YYYY-MM-DD) }
+      limit: { type: integer, min: 1, max: 200, default: 50, description: How many claims }
+    steps:
+      - cypher: |
+          WITH datetime(coalesce($at, $now)) AS T
+          MATCH (c:Claim)
+          WHERE {{current_claim c}}
+            AND ($about_from IS NULL OR c.about_to IS NULL OR c.about_to >= date($about_from))
+            AND ($about_to IS NULL OR c.about_from IS NULL OR c.about_from <= date($about_to))
+          WITH c, T ORDER BY c.recorded_at DESC LIMIT $limit
+          RETURN c.id AS id, c.text AS text, c.source AS source, c.about_from AS about_from, c.about_to AS about_to,
+                 c.recorded_at AS recorded_at, c.recorded_by AS recorded_by,
+                 [(c)-[r:SUPPORTS]->(x) WHERE r.recorded_at <= T | x.id] AS supports,
+                 [(c)-[r:CONTRADICTS]->(x) WHERE r.recorded_at <= T | x.id] AS contradicts,
+                 [(c)-[r:REPLACES]->(x) WHERE r.recorded_at <= T | x.id] AS replaces,
+                 [(c)-[r:ANSWERS]->(x) WHERE r.recorded_at <= T | x.id] AS answers
+
+  - name: open_questions
+    title: Open questions
+    kind: read
+    description: >-
+      List the questions that were open at a moment (default now): asked, not
+      withdrawn, and not answered by a current claim. Newest first.
+    input:
+      at: { type: datetime, description: The moment to look at (ISO 8601). Default now. }
+      limit: { type: integer, min: 1, max: 200, default: 50, description: How many questions }
+    steps:
+      - cypher: |
+          WITH datetime(coalesce($at, $now)) AS T
+          MATCH (q:Question) WHERE {{open_question q}}
+          RETURN q.id AS id, q.text AS text, q.recorded_at AS recorded_at, q.recorded_by AS recorded_by,
+                 [(q)-[r:ABOUT]->(x) WHERE r.recorded_at <= T | x.id] AS about
+          ORDER BY recorded_at DESC
+          LIMIT $limit
+
+  - name: conflicts
+    title: Conflicts
+    kind: read
+    description: >-
+      List pairs of current claims where one contradicts the other: what a person
+      needs to settle, by recording a claim that replaces one or both.
+    input:
+      at: { type: datetime, description: The moment to look at (ISO 8601). Default now. }
+    steps:
+      - cypher: |
+          WITH datetime(coalesce($at, $now)) AS T
+          MATCH (a:Claim)-[r:CONTRADICTS]->(b:Claim)
+          WHERE r.recorded_at <= T AND {{current_claim a}} AND {{current_claim b}}
+          RETURN a {.id, .text, .recorded_by, .recorded_at} AS claim,
+                 b {.id, .text, .recorded_by, .recorded_at} AS contradicts,
+                 r.recorded_at AS since, r.recorded_by AS flagged_by
+          ORDER BY since DESC
+
+  - name: history
+    title: History of an item
+    kind: read
+    description: >-
+      Show one claim or question with every link into and out of it, including
+      replaced and withdrawn ones, with who recorded each and when.
+    input:
+      id: { type: id, required: true, description: The claim or question }
+    steps:
+      - cypher: |
+          OPTIONAL MATCH (n:Claim|Question {id: $id})
+          RETURN CASE WHEN n IS NULL THEN 'No claim or question ' + $id + '.' END AS _error
+      - cypher: |
+          MATCH (n:Claim|Question {id: $id})
+          RETURN CASE WHEN n:Claim THEN 'claim' ELSE 'question' END AS kind,
+                 n {.id, .text, .source, .about_from, .about_to, .recorded_at, .recorded_by,
+                    .withdrawn_at, .withdrawn_by, .withdraw_reason} AS item,
+                 [(n)-[r]->(x) | {direction: 'out', type: type(r), id: x.id, text: x.text, recorded_at: r.recorded_at, recorded_by: r.recorded_by}]
+                 + [(x)-[r]->(n) | {direction: 'in', type: type(r), id: x.id, text: x.text, recorded_at: r.recorded_at, recorded_by: r.recorded_by}] AS links
+        single: true
+
+  - name: recent
+    title: Recent changes
+    kind: read
+    description: >-
+      What was added or withdrawn since a moment, newest first. Use it to catch up
+      at the start of a session.
+    input:
+      since: { type: datetime, required: true, description: Changes after this time (ISO 8601) }
+      limit: { type: integer, min: 1, max: 200, default: 50, description: How many changes }
+    steps:
+      - cypher: |
+          MATCH (n:Claim|Question)
+          WHERE n.recorded_at > datetime($since) OR n.withdrawn_at > datetime($since)
+          RETURN n.id AS id, CASE WHEN n:Claim THEN 'claim' ELSE 'question' END AS kind, n.text AS text,
+                 n.recorded_at AS recorded_at, n.recorded_by AS recorded_by,
+                 n.withdrawn_at AS withdrawn_at, n.withdrawn_by AS withdrawn_by
+          ORDER BY coalesce(n.withdrawn_at, n.recorded_at) DESC
+          LIMIT $limit

@@ -1,0 +1,7 @@
+{
+  "name": "p2p-context-graph",
+  "version": "0.0.0",
+  "description": "Share a Relate context graph with other people's AI agents, peer to peer. Pluggable context models; the default records dated claims and open questions.",
+  "license": "Apache-2.0",
+  "keywords": ["relate", "neo4j", "context-graph", "mcp", "p2p"]
+}
