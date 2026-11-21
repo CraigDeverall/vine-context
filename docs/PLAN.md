@@ -6,6 +6,10 @@
 > studio are gone), and joined graphs are local graphs. See
 > [REPLICATION.md](REPLICATION.md) and the decision at the end of section 9.
 > The rest of this plan is kept as the record of how the project got here.
+>
+> **The outcome wanted (2026-11-21):** easy setup and use on any device with
+> any assistant. See [section 10](#10-target-any-device-any-assistant); it
+> replaces the platform list in section 4.6.
 
 Status: draft, 2026-11-15. This is the grounding plan for an open-source proof of
 concept entered in the [Relate by Neo4j Hackathon](https://relate.devpost.com/).
@@ -372,3 +376,71 @@ Decided 17 Nov:
   Model packs, `decision-log`, `validate_model`, `install_model` and the
   model studio are removed. Design and as-built notes:
   [REPLICATION.md](REPLICATION.md).
+
+## 10. Target: any device, any assistant
+
+Added 2026-11-21. This is the outcome the project is measured against. New
+work should move a cell of the matrix below, or at least not make one harder.
+
+**The outcome wanted:** easy setup and use on
+
+- a MacBook,
+- a Windows PC,
+- an Android phone or tablet,
+- an iPhone or iPad,
+
+each with Claude, Codex, ChatGPT, Grok or any other assistant that speaks MCP.
+
+"Easy" means one install step with no clone, no build and no environment
+variables, and a join that works by pasting the code.
+
+### 10.1 Where it stands (audit of 21 Nov)
+
+| | Claude Code | Codex | Claude desktop chat | ChatGPT, Grok | Other MCP agents (Cursor, Gemini CLI, VS Code) |
+|---|---|---|---|---|---|
+| **macOS** | Works: plugin, views, mod | Plugin exists; not re-run in this audit | Manual config, undocumented | Not possible | Manual config, undocumented |
+| **Windows** | Untested | Untested | Untested | Not possible | Untested |
+| **Android** | Not possible | Not possible | Not possible | Not possible | Not possible |
+| **iOS, iPadOS** | Not possible | Not possible | Not possible | Not possible | Not possible |
+
+What was checked: CI is green on Linux x64 and macOS, and `vine doctor`
+passes on macOS arm64. Not checked: the npm registry, and the current
+connector rules of ChatGPT and Grok.
+
+Why the gaps exist:
+
+- **Setup isn't easy yet, even on macOS.** It needs Node 20, a clone,
+  `npm install`, a build and `npm link`. The package is version 0.0.0 and the
+  `npx` route was dropped in the rename.
+- **Windows has code paths but no proof.** Named pipes and Relate's win32-x64
+  binary are there. CI never runs Windows, `autostart` is macOS only, and the
+  plugin starts a bare `vine` command, which is expected to fail on Windows
+  because npm installs it as a `.cmd` shim.
+- **Phones, ChatGPT and Grok only reach remote MCP servers over HTTPS.** Vine
+  is a local process on stdio, and its HTTP endpoint is bound to 127.0.0.1
+  behind a one-time token. This is a gap in the architecture, not in the
+  packaging.
+
+### 10.2 Path to full maturity
+
+| # | Step | Done when | Timing |
+|---|---|---|---|
+| 1 | **One-command install on desktop.** Publish to npm; the plugin starts the server with no clone; Windows joins the CI matrix; the Windows launch command is fixed | A clean macOS and a clean Windows machine reach a first result from one command | Before 11 Dec |
+| 2 | **Desktop assistants beyond Claude Code and Codex.** A Claude desktop extension bundle; tested config snippets for Cursor, Gemini CLI and VS Code | Each is listed in the README with a setup that was run, not assumed | Before 11 Dec |
+| 3 | **Connections that just work.** A stored TURN setting, link status in `status` and the console, and a default relay | Two members on strict networks connect with no environment variables | Before 11 Dec |
+| 4 | **A remote gateway.** An always-on member (the person's own machine, or a small hosted one) serves the same tools over public HTTPS with sign-in | A phone, ChatGPT and Grok each join a context and read and write it | After the hackathon |
+| 5 | **Autostart everywhere.** Windows and Linux equivalents of the macOS launch agent | Graphs keep syncing after a reboot on all three | After the hackathon |
+
+Step 4 is the large one. It changes the "no server" claim to "no server
+needed, an optional gateway you own", and it adds sign-in, so its design is
+agreed before any code.
+
+### 10.3 Rules this sets for other work
+
+- **Native code is the main cost.** Each native dependency must ship a
+  prebuilt binary for macOS arm64 and x64, Windows x64, and Linux x64 and
+  arm64. A new one needs a reason, and a fallback that works without it.
+- **The semantic embedder stays optional.** The offline `hash-256` embedder
+  remains the default on every platform.
+- **Nothing is called supported until it has been run there.** The README
+  lists a platform or assistant only after a real setup on it.
