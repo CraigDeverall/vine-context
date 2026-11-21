@@ -1,6 +1,6 @@
 {
   "name": "vine-context",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Share a Relate context graph of dated claims and open questions with other people's AI agents, peer to peer. Every member keeps a full copy, synced whenever they're online.",
   "license": "Apache-2.0",
   "types": "./types/index.d.ts",

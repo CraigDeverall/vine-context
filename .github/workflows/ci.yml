@@ -31,3 +31,5 @@ jobs:
       # The installed command, as the plugin starts it (a .cmd shim on Windows).
       - run: npm link
       - run: vine --version
+      # The package as npm would publish it, installed into an empty folder.
+      - run: node scripts/pack-check.mjs

@@ -411,8 +411,9 @@ connector rules of ChatGPT and Grok.
 Why the gaps exist:
 
 - **Setup isn't easy yet, even on macOS.** It needs Node 20, a clone,
-  `npm install`, a build and `npm link`. The package is version 0.0.0 and the
-  `npx` route was dropped in the rename.
+  `npm install`, a build and `npm link`. The package isn't on npm yet (the
+  name is free, and `scripts/pack-check.mjs` proves the tarball installs and
+  runs), and the `npx` route was dropped in the rename.
 - **Windows runs the core, but no assistant has been tried on it.** The
   tests, the native binaries and the `vine` command pass in CI. Still open:
   whether each assistant can start the plugin's bare `vine` command (npm
