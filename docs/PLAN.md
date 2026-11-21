@@ -399,11 +399,12 @@ variables, and a join that works by pasting the code.
 | | Claude Code | Codex | Claude desktop chat | ChatGPT, Grok | Other MCP agents (Cursor, Gemini CLI, VS Code) |
 |---|---|---|---|---|---|
 | **macOS** | Works: plugin, views, mod | Plugin exists; not re-run in this audit | Manual config, undocumented | Not possible | Manual config, undocumented |
-| **Windows** | Untested | Untested | Untested | Not possible | Untested |
+| **Windows** | Core passes in CI; plugin not yet run | Core passes in CI; plugin not yet run | Untested | Not possible | Untested |
 | **Android** | Not possible | Not possible | Not possible | Not possible | Not possible |
 | **iOS, iPadOS** | Not possible | Not possible | Not possible | Not possible | Not possible |
 
-What was checked: CI is green on Linux x64 and macOS, and `vine doctor`
+What was checked: CI is green on Linux x64, macOS and Windows x64 (all 66
+tests, `vine doctor`, and the installed `vine` command), and `vine doctor`
 passes on macOS arm64. Not checked: the npm registry, and the current
 connector rules of ChatGPT and Grok.
 
@@ -412,10 +413,12 @@ Why the gaps exist:
 - **Setup isn't easy yet, even on macOS.** It needs Node 20, a clone,
   `npm install`, a build and `npm link`. The package is version 0.0.0 and the
   `npx` route was dropped in the rename.
-- **Windows has code paths but no proof.** Named pipes and Relate's win32-x64
-  binary are there. CI never runs Windows, `autostart` is macOS only, and the
-  plugin starts a bare `vine` command, which is expected to fail on Windows
-  because npm installs it as a `.cmd` shim.
+- **Windows runs the core, but no assistant has been tried on it.** The
+  tests, the native binaries and the `vine` command pass in CI. Still open:
+  whether each assistant can start the plugin's bare `vine` command (npm
+  installs it as a `.cmd` shim, which Node can't start without a shell, and
+  Claude Code's docs don't say how it starts one), and `autostart`, which is
+  macOS only.
 - **Phones, ChatGPT and Grok only reach remote MCP servers over HTTPS.** Vine
   is a local process on stdio, and its HTTP endpoint is bound to 127.0.0.1
   behind a one-time token. This is a gap in the architecture, not in the
@@ -425,7 +428,7 @@ Why the gaps exist:
 
 | # | Step | Done when | Timing |
 |---|---|---|---|
-| 1 | **One-command install on desktop.** Publish to npm; the plugin starts the server with no clone; Windows joins the CI matrix; the Windows launch command is fixed | A clean macOS and a clean Windows machine reach a first result from one command | Before 11 Dec |
+| 1 | **One-command install on desktop.** Publish to npm; the plugin starts the server with no clone; Windows is in the CI matrix (done 21 Nov); the plugin's launch command is proven on Windows | A clean macOS and a clean Windows machine reach a first result from one command | Before 11 Dec |
 | 2 | **Desktop assistants beyond Claude Code and Codex.** A Claude desktop extension bundle; tested config snippets for Cursor, Gemini CLI and VS Code | Each is listed in the README with a setup that was run, not assumed | Before 11 Dec |
 | 3 | **Connections that just work.** A stored TURN setting, link status in `status` and the console, and a default relay | Two members on strict networks connect with no environment variables | Before 11 Dec |
 | 4 | **A remote gateway.** An always-on member (the person's own machine, or a small hosted one) serves the same tools over public HTTPS with sign-in | A phone, ChatGPT and Grok each join a context and read and write it | After the hackathon |
