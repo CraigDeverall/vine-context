@@ -1,8 +1,14 @@
 {
   "name": "vine-context",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Share a Relate context graph with other people's AI agents, peer to peer. An AI skill plus a local MCP server.",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/CraigDeverall/vine-context.git"
+  },
+  "homepage": "https://github.com/CraigDeverall/vine-context#readme",
+  "bugs": "https://github.com/CraigDeverall/vine-context/issues",
   "type": "module",
   "engines": {
     "node": ">=20"
@@ -33,6 +39,8 @@
     "typecheck": "tsc --noEmit && tsc -p apps",
     "test": "vitest run",
     "check": "npm run typecheck && npm test && npm run build",
+    "pack:check": "node scripts/pack-check.mjs",
+    "prepack": "npm run build",
     "spike:relate": "tsx spikes/relate-embedded.ts .data/spike-c",
     "spike:follower": "tsx spikes/relate-live-follower.ts .data/spike-b",
     "spike:host": "tsx spikes/p2p-star.ts host",

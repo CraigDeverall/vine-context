@@ -13,7 +13,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -28,3 +28,8 @@ jobs:
       - run: node dist/cli.js --version
       # Loads the native Relate and node-datachannel builds for this OS.
       - run: node dist/cli.js doctor
+      # The installed command, as the plugin starts it (a .cmd shim on Windows).
+      - run: npm link
+      - run: vine --version
+      # The package as npm would publish it, installed into an empty folder.
+      - run: node scripts/pack-check.mjs
