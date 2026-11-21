@@ -1,6 +1,6 @@
-// The localhost host page for `p2pcg ui`: for agents that can't show MCP
+// The localhost host page for `vine ui`: for agents that can't show MCP
 // Apps, the same views in a browser tab. It is a minimal MCP Apps host: an MCP
-// client (over Streamable HTTP, to this machine's p2pcg) and an AppBridge per
+// client (over Streamable HTTP, to this machine's vine) and an AppBridge per
 // view, in a sandboxed iframe.
 
 import { AppBridge, PostMessageTransport } from "@modelcontextprotocol/ext-apps/app-bridge";
@@ -20,7 +20,7 @@ interface AppTool {
 const token = new URLSearchParams(location.hash.slice(1)).get("token") ?? "";
 
 async function connect(): Promise<Client> {
-  const client = new Client({ name: "p2pcg-ui", version: "1" });
+  const client = new Client({ name: "vine-ui", version: "1" });
   await client.connect(
     new StreamableHTTPClientTransport(new URL("/mcp", location.origin), { requestInit: { headers: { Authorization: `Bearer ${token}` } } }),
   );
@@ -50,7 +50,7 @@ function View({ client, tool: { name, title, uri }, onMessage }: { client: Clien
       const theme = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
       bridge = new AppBridge(
         client,
-        { name: "p2pcg ui", version: "1" },
+        { name: "vine ui", version: "1" },
         { openLinks: {}, serverTools: {}, logging: {} },
         { hostContext: { theme, platform: "web", displayMode: "inline" } as never },
       );
@@ -102,7 +102,7 @@ function Shell() {
         setClient(c);
         setTools(await appTools(c));
       })
-      .catch((e: Error) => setError(`Can't reach p2pcg: ${e.message}. Is \`p2pcg ui\` still running?`));
+      .catch((e: Error) => setError(`Can't reach vine: ${e.message}. Is \`vine ui\` still running?`));
   }, []);
 
   const pick = async (name: string) => {
@@ -116,7 +116,7 @@ function Shell() {
   return (
     <div style={{ maxWidth: 1000, margin: "0 auto" }}>
       <div className="head">
-        <h1>p2p-context-graph</h1>
+        <h1>Vine Context</h1>
         <div className="tabs" role="tablist" style={{ margin: 0, border: 0 }}>
           {tools.map((t) => (
             <button key={t.name} role="tab" aria-selected={tool?.name === t.name} onClick={() => pick(t.name)}>

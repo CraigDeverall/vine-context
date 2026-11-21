@@ -217,7 +217,7 @@ function cleanName(v: unknown): string | undefined {
 export function cleanAbout(a: unknown): Record<string, string> | undefined {
   if (!a || typeof a !== "object") return undefined;
   const out: Record<string, string> = {};
-  for (const k of ["agent", "agent_version", "p2pcg", "platform"]) {
+  for (const k of ["agent", "agent_version", "vine", "platform"]) {
     const v = (a as Record<string, unknown>)[k];
     if (typeof v === "string" && v.trim()) out[k] = v.replace(/[^\x20-\x7e]/g, "").trim().slice(0, 60);
   }

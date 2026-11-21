@@ -1,9 +1,9 @@
 {
-  "name": "p2p-context-graph",
-  "interface": { "displayName": "p2p context graph" },
+  "name": "vine-context",
+  "interface": { "displayName": "Vine Context" },
   "plugins": [
     {
-      "name": "p2p-context-graph",
+      "name": "vine-context",
       "source": { "source": "local", "path": "./plugin" },
       "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
       "category": "Productivity"

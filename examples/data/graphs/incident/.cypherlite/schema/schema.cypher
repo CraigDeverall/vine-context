@@ -2,3 +2,4 @@ CREATE VECTOR INDEX `search_embedding` FOR (n:`Claim`|`Question`) ON (n.`embeddi
 CREATE FULLTEXT INDEX `search_text` FOR (n:`Claim`|`Question`) ON EACH [n.`text`] OPTIONS {indexConfig: {`fulltext.analyzer`: 'standard-no-stop-words',`fulltext.eventually_consistent`: false}};
 CREATE CONSTRAINT `claim_id_key` FOR (n:`Claim`) REQUIRE (n.`id`) IS UNIQUE;
 CREATE CONSTRAINT `question_id_key` FOR (n:`Question`) REQUIRE (n.`id`) IS UNIQUE;
+CREATE CONSTRAINT `reply_id_key` FOR (n:`Reply`) REQUIRE (n.`id`) IS UNIQUE;

@@ -1,5 +1,5 @@
 // The context model: a folder that defines a graph's shape, its tools and the
-// instructions agents follow. p2p-context-graph ships one, Claims and
+// instructions agents follow. vine-context ships one, Claims and
 // Questions (models/temporal-claims), and every graph uses it.
 //
 // Read tools are Cypher in tools.yaml. Write tools in tools.yaml only check
@@ -244,7 +244,7 @@ export function loadPack(dir: string): Pack {
   return { dir: abs, model: modelResult.data, tools: expanded, instructions, migrations };
 }
 
-/** The packs that ship with p2p-context-graph. */
+/** The packs that ship with vine-context. */
 export function builtinPacksDir(): string {
   return join(packageRoot(), "models");
 }

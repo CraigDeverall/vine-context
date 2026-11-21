@@ -211,7 +211,7 @@ export class Mesh {
       this.log(`ignoring ${them}: ${MAX_LINKS} links already`);
       return undefined;
     }
-    const pc = new nodeDataChannel.PeerConnection(`p2pcg-mesh-${this.me}-${them}`, { iceServers: this.o.ice });
+    const pc = new nodeDataChannel.PeerConnection(`vine-mesh-${this.me}-${them}`, { iceServers: this.o.ice });
     const l: PeerLink = {
       id: them,
       pc,
@@ -235,7 +235,7 @@ export class Mesh {
   private async offer(them: string, key: string) {
     const l = this.newLink(them, true, key);
     if (!l) return;
-    const dc = l.pc.createDataChannel("p2pcg-mesh");
+    const dc = l.pc.createDataChannel("vine-mesh");
     this.attach(l, new FramedChannel(dc));
     try {
       const offer = await gathered(l.pc);
@@ -293,7 +293,7 @@ export class Mesh {
         if (typeof m.key !== "string" || typeof m.nonce !== "string") return this.close(l, "bad hello");
         if (l.key && l.key !== m.key) return this.close(l, "key changed");
         l.key = m.key;
-        const msg = `p2pcg-mesh-v1:${this.o.graphId}:${m.nonce}:${this.myKey}`;
+        const msg = `vine-mesh-v1:${this.o.graphId}:${m.nonce}:${this.myKey}`;
         return this.send(l, {
           t: "prove",
           sig: this.o.identity.sign(msg),
@@ -304,7 +304,7 @@ export class Mesh {
       case "prove": {
         if (!l.key) return this.close(l, "prove before hello");
         const ok =
-          verifySignature(l.key, `p2pcg-mesh-v1:${this.o.graphId}:${l.nonce}:${l.key}`, m.sig) && checkProof(this.o.group.secret, l.nonce, l.key, m.proof);
+          verifySignature(l.key, `vine-mesh-v1:${this.o.graphId}:${l.nonce}:${l.key}`, m.sig) && checkProof(this.o.group.secret, l.nonce, l.key, m.proof);
         if (!ok) return this.close(l, "proof did not verify");
         if (!this.o.isMember(l.key) && m.joined) await this.o.receive([m.joined], l.key);
         if (!this.o.isMember(l.key)) return this.close(l, "not a member");

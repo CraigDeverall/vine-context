@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { uuidv7 } from "../src/core/changes.js";
 import { Graph, ToolError, type ApplyContext, type Caller } from "../src/core/graph.js";
 
-export const tempDir = (prefix = "p2pcg-test-") => mkdtempSync(join(tmpdir(), prefix));
+export const tempDir = (prefix = "vine-test-") => mkdtempSync(join(tmpdir(), prefix));
 
 /** A fake 43-character public key for a test caller. */
 const fakeKey = (name: string) => Buffer.from(name.padEnd(32, "_")).toString("base64url").slice(0, 43);

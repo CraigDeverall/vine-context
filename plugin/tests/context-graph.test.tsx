@@ -28,8 +28,8 @@ const ACTIVITY = {
   folder: { folder: '/work/checkout', linked: false },
   your_contexts: ['infra', 'own', 'team'],
   invites: [
-    { id: 'inv_1', label: 'for Sam', role: 'contributor', code: 'p2pcg1_room.secret', created_at: iso(60_000), expires_at: iso(-23 * 3600_000) },
-    { id: 'inv_2', label: null, role: 'reader', code: 'p2pcg1_room2.secret2', created_at: iso(120_000), expires_at: iso(-20 * 60_000) },
+    { id: 'inv_1', label: 'for Sam', role: 'contributor', code: 'vine1_room.secret', created_at: iso(60_000), expires_at: iso(-23 * 3600_000) },
+    { id: 'inv_2', label: null, role: 'reader', code: 'vine1_room2.secret2', created_at: iso(120_000), expires_at: iso(-20 * 60_000) },
   ],
   digest: [{ at: iso(1_000), lines: ['bob replaced your claim c_old "The outage lasts 4 minutes" with c_new "The outage lasts 6 minutes".'] }],
   snapshot: {
@@ -58,12 +58,12 @@ const ACTIVITY = {
 }
 
 const BAND = {
-  plugin: 'p2p-context-graph',
+  plugin: 'vine-context',
   component: 'AbovePrompt',
   props: { hasSurvey: false, isCollapsed: false, isWorking: false, maxRows: 4, bodyColumns: 100, scroll: { offset: 0, bodyRows: 4 }, view: {} },
 } as const
 const PANE = {
-  plugin: 'p2p-context-graph',
+  plugin: 'vine-context',
   component: 'Pane',
   requestId: 'context-graph',
   props: { title: 'Context', isFocused: true, bodyColumns: 90, placement: 'dock', scroll: { offset: 0, bodyRows: 40 }, view: {} },
@@ -93,7 +93,7 @@ function engine(on: any, calls: Calls, prompts: string[] = [], state: unknown = 
   on('mcp.call', (_: unknown, e: any) => {
     calls.push({ tool: e.tool, args: e.args })
     if (e.tool === 'context_activity') return { value: { content: [{ type: 'text', text: JSON.stringify(state) }], isError: false, structuredContent: state } }
-    if (e.tool === 'share_context') return { value: { content: [{ type: 'text', text: '{}' }], isError: false, structuredContent: { send: 'Join my context graph: /p2p-context-graph:join p2pcg1_x.y', invite: { id: 'inv_1' } } } }
+    if (e.tool === 'share_context') return { value: { content: [{ type: 'text', text: '{}' }], isError: false, structuredContent: { send: 'Join my context graph: /vine-context:join vine1_x.y', invite: { id: 'inv_1' } } } }
     return { value: { content: [{ type: 'text', text: '{}' }], isError: false } }
   })
 }
@@ -283,7 +283,7 @@ test('the people tab confirms a removal on its own, and invites to this context'
   expect(await desk.find({ type: 'Text', text: /No note · reader · expires soon/ })).toBeDefined()
   expect(await desk.find({ key: 'make-code' })).toBeUndefined()
   await desk.press({ key: 'copy-inv_1' })
-  expect(prompts).toContain('copied: Join my context graph: /p2p-context-graph:join p2pcg1_room.secret')
+  expect(prompts).toContain('copied: Join my context graph: /vine-context:join vine1_room.secret')
   await desk.press({ key: 'cancel-inv_2' })
   expect(calls).toContainEqual({ tool: 'revoke_invite', args: { id: 'inv_2' } })
   await desk.press({ key: 'invite' })
@@ -411,7 +411,7 @@ test('the band says what is wrong, instead of loading forever, when the server k
   await $.command.run(RUN)
   const band = await $.ui.mount({ ...BAND, surface: 'desktop' })
   expect(await band.find({ type: 'Text', text: /loading/ })).toBeUndefined()
-  expect(await band.find({ type: 'Text', text: /older p2p-context-graph server\. Start a new chat/ })).toBeDefined()
+  expect(await band.find({ type: 'Text', text: /older vine-context server\. Start a new chat/ })).toBeDefined()
   expect(await band.find({ key: 'retry' })).toBeDefined()
   await band.unmount()
 })

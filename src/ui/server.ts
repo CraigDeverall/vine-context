@@ -1,4 +1,4 @@
-// `p2pcg ui`: the MCP App views in a browser tab, for agents that can't show
+// `vine ui`: the MCP App views in a browser tab, for agents that can't show
 // MCP Apps themselves. It serves a small host page and an MCP endpoint
 // (Streamable HTTP) on 127.0.0.1 only. Each browser tab gets its own MCP
 // session, a client of this machine's graph host like any agent session.
@@ -41,7 +41,7 @@ function shellHtml(): string {
   try {
     return readFileSync(join(packageRoot(), "dist", "apps", "shell.html"), "utf8");
   } catch {
-    return "<!doctype html><meta charset=utf-8><p>The views aren't built. Run <code>npm run build</code> in p2p-context-graph.</p>";
+    return "<!doctype html><meta charset=utf-8><p>The views aren't built. Run <code>npm run build</code> in vine-context.</p>";
   }
 }
 
@@ -130,7 +130,7 @@ export async function startUi(o: { session: () => Session; port?: number; log?(m
       return existing.transport.handleRequest(req, res);
     } catch (e) {
       o.log?.(`ui: ${(e as Error).message}`);
-      if (!res.headersSent) send(res, 500, "Something went wrong; see the p2pcg log.");
+      if (!res.headersSent) send(res, 500, "Something went wrong; see the vine log.");
     }
   });
 

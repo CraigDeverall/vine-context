@@ -13,7 +13,7 @@ import { memorySignaller } from "../src/p2p/signal.js";
 import { tempDir } from "./helpers.js";
 
 // Graphs share by default; the test config turns that off for the other tests.
-process.env.P2PCG_AUTO_SHARE = "on";
+process.env.VINE_AUTO_SHARE = "on";
 const signal = memorySignaller(new EventEmitter());
 const ice: string[] = [];
 const running: Host[] = [];
@@ -37,7 +37,7 @@ interface Member {
 async function member(name: string, graph: string, dataDir = tempDir()): Promise<Member> {
   const m = { name, dataDir, graph, events: [] as { event: string; data: any }[] } as Member;
   const start = async () => {
-    m.host = await Host.start({ dataDir, graph, user: name, signal, ice, holdMs: HOLD, log: process.env.P2PCG_TEST_LOG ? (msg) => console.log(`${Date.now() % 100000} ${name}: ${msg}`) : undefined });
+    m.host = await Host.start({ dataDir, graph, user: name, signal, ice, holdMs: HOLD, log: process.env.VINE_TEST_LOG ? (msg) => console.log(`${Date.now() % 100000} ${name}: ${msg}`) : undefined });
     running.push(m.host);
     m.local = await LocalHost.connect(m.host.socket);
     m.local.on("event", (e) => m.events.push(e));

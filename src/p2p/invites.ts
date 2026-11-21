@@ -118,7 +118,7 @@ export class InviteDesk {
       return;
     }
     if (this.pending.size >= MAX_AT_ONCE) return;
-    const pc = new nodeDataChannel.PeerConnection(`p2pcg-desk-${m.from}`, { iceServers: this.o.ice });
+    const pc = new nodeDataChannel.PeerConnection(`vine-desk-${m.from}`, { iceServers: this.o.ice });
     const p: Pending = { id, from: m.from, invite, pc, done: false };
     this.pending.set(id, p);
     pc.onStateChange((s) => {
@@ -150,7 +150,7 @@ export class InviteDesk {
       const inv = this.o.invites.get(p.invite);
       if (!inv || !isLive(inv)) return this.drop(p, "This join code no longer works. Ask for a new one.");
       if (m?.t !== "auth" || !checkProof(inviteLink(inv).secret, nonce, p.from, m.proof)) return this.drop(p, "Wrong or missing join code secret.");
-      if (typeof m.key !== "string" || !verifySignature(m.key, `p2pcg-id-v1:${nonce}:${p.from}`, m.sig)) return this.drop(p, "Identity signature did not verify.");
+      if (typeof m.key !== "string" || !verifySignature(m.key, `vine-id-v1:${nonce}:${p.from}`, m.sig)) return this.drop(p, "Identity signature did not verify.");
       if (typeof m.name !== "string" || !NAME_RE.test(m.name)) return this.drop(p, "Names are 1–40 letters, digits, spaces, dots, dashes or underscores.");
       let out: Admission;
       try {

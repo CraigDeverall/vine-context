@@ -1,9 +1,9 @@
 {
   "mcpServers": {
-    "p2p-context-graph": {
+    "vine-context": {
       "command": "node",
-      "args": ["/absolute/path/to/p2p-context-graph/dist/cli.js", "mcp"],
-      "env": { "P2PCG_GRAPH": "dev" }
+      "args": ["/absolute/path/to/vine-context/dist/cli.js", "mcp"],
+      "env": { "VINE_GRAPH": "dev" }
     }
   }
 }

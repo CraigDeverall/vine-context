@@ -147,4 +147,4 @@ if (mode === "--store") {
 }
 await build();
 const { execFileSync } = await import("node:child_process");
-execFileSync(process.execPath, [...process.execArgv, process.argv[1]!, "--store"], { stdio: "inherit", env: { ...process.env, P2PCG_AUTO_SHARE: "off" } });
+execFileSync(process.execPath, [...process.execArgv, process.argv[1]!, "--store"], { stdio: "inherit", env: { ...process.env, VINE_AUTO_SHARE: "off" } });

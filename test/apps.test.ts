@@ -81,19 +81,19 @@ describe("MCP App views", () => {
   it("serves each view as an app resource, and tools point at their views", async () => {
     const alice = await agent("alice");
     const { resources } = await alice.client.listResources();
-    for (const view of Object.keys(VIEWS)) expect(resources).toContainEqual(expect.objectContaining({ uri: `ui://p2pcg/${view}`, mimeType: APP_MIME }));
-    const read = await alice.client.readResource({ uri: "ui://p2pcg/explorer" });
+    for (const view of Object.keys(VIEWS)) expect(resources).toContainEqual(expect.objectContaining({ uri: `ui://vine/${view}`, mimeType: APP_MIME }));
+    const read = await alice.client.readResource({ uri: "ui://vine/explorer" });
     const html = (read.contents[0] as { text: string }).text;
     expect(read.contents[0]!.mimeType).toBe(APP_MIME);
-    expect(html).toContain('window.__P2PCG_VIEW__="explorer"');
+    expect(html).toContain('window.__VINE_VIEW__="explorer"');
     expect(html).not.toMatch(/<(script|link|img)[^>]+(src|href)=/i); // self-contained: nothing loaded from elsewhere
 
     const { tools } = await alice.client.listTools();
     const by = (n: string) => tools.find((t) => t.name === n)!;
-    expect(uiOf(by("open_console"))).toBe("ui://p2pcg/console");
-    expect(uiOf(by("explore_context"))).toBe("ui://p2pcg/explorer");
-    expect(uiOf(by("add_claim"))).toBe("ui://p2pcg/receipt");
-    expect(uiOf(by("conflicts"))).toBe("ui://p2pcg/conflicts");
+    expect(uiOf(by("open_console"))).toBe("ui://vine/console");
+    expect(uiOf(by("explore_context"))).toBe("ui://vine/explorer");
+    expect(uiOf(by("add_claim"))).toBe("ui://vine/receipt");
+    expect(uiOf(by("conflicts"))).toBe("ui://vine/conflicts");
     expect(uiOf(by("search"))).toBeUndefined();
   });
 
@@ -142,7 +142,7 @@ describe("MCP App views", () => {
     const alice = await agent("alice");
     expect(await alice.call("open_console")).toMatchObject({ sharing: false, can_invite: true, people: [expect.objectContaining({ name: "alice", you: true, creator: true })], links: [] });
     await alice.call("share_context");
-    expect(await alice.call("open_console")).toMatchObject({ sharing: true, invites: [expect.objectContaining({ state: "open", code: expect.stringMatching(/^p2pcg1_/) })] });
+    expect(await alice.call("open_console")).toMatchObject({ sharing: true, invites: [expect.objectContaining({ state: "open", code: expect.stringMatching(/^vine1_/) })] });
     await alice.call("stop_sharing");
   });
 
@@ -224,8 +224,8 @@ describe("the localhost page", () => {
 
 describe("names, auto-share and which graph", () => {
   it("saves a chosen name with the key, and the host records under it from then on", async () => {
-    const before = process.env.P2PCG_USER;
-    delete process.env.P2PCG_USER;
+    const before = process.env.VINE_USER;
+    delete process.env.VINE_USER;
     try {
       const me = await agent("first", "main", { storedName: true });
       const r = await me.call("set_my_name", { name: "Craig Deverall" });
@@ -237,16 +237,16 @@ describe("names, auto-share and which graph", () => {
       expect(await me.call("open_console")).toMatchObject({ you: { name: "Craig Deverall", name_from: "set_my_name" } });
       expect((await me.raw("set_my_name", { name: "<script>" })).isError).toBe(true);
     } finally {
-      if (before !== undefined) process.env.P2PCG_USER = before;
+      if (before !== undefined) process.env.VINE_USER = before;
     }
   });
 
   it("shares a new graph straight away and returns a join code", async () => {
     const me = await agent("alice");
-    process.env.P2PCG_AUTO_SHARE = "on";
+    process.env.VINE_AUTO_SHARE = "on";
     try {
       const r = await me.call("use_context", { name: "planning" });
-      expect(r).toMatchObject({ created: "your context 'planning'", code: expect.stringMatching(/^p2pcg1_/), send: expect.stringContaining(r.code), shared_as: { name: "alice" } });
+      expect(r).toMatchObject({ created: "your context 'planning'", code: expect.stringMatching(/^vine1_/), send: expect.stringContaining(r.code), shared_as: { name: "alice" } });
       expect(await me.call("context_info")).toMatchObject({ sharing: { sharing: true } });
       // Switching back to an existing graph doesn't share it.
       const back = await me.call("use_context", { name: "main" });
@@ -254,7 +254,7 @@ describe("names, auto-share and which graph", () => {
       await me.call("use_context", { name: "planning" });
       await me.call("stop_sharing");
     } finally {
-      process.env.P2PCG_AUTO_SHARE = "off";
+      process.env.VINE_AUTO_SHARE = "off";
     }
   });
 

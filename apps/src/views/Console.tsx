@@ -28,7 +28,7 @@ interface Person {
   invite?: { id: string; label: string | null } | null;
   agent?: string | null;
   platform?: string | null;
-  p2pcg?: string | null;
+  vine?: string | null;
 }
 interface State {
   using: string;
@@ -41,7 +41,7 @@ interface State {
   relays: Record<string, string>;
   people: Person[];
   log: { changes: number; held: number; refused: number };
-  you: { name: string; role: Role | null; fingerprint: string; name_from: "P2PCG_USER" | "set_my_name" | "git" | "login" };
+  you: { name: string; role: Role | null; fingerprint: string; name_from: "VINE_USER" | "set_my_name" | "git" | "login" };
 }
 
 const ROLES: Role[] = ["reader", "contributor", "admin"];
@@ -104,7 +104,7 @@ export function Console({ b }: { b: Bridge }) {
 
   if (!state) return <p className="faint">Loading…</p>;
 
-  const sendLine = (code: string) => `Join my context graph: /p2p-context-graph:join ${code}`;
+  const sendLine = (code: string) => `Join my context graph: /vine-context:join ${code}`;
   const copy = async (inv: Invite) => {
     if (!inv.code) return;
     try {
@@ -112,7 +112,7 @@ export function Console({ b }: { b: Bridge }) {
       setCopied(inv.id);
       setTimeout(() => setCopied(undefined), 1500);
     } catch {
-      (document.getElementById(`p2pcg-code-${inv.id}`) as HTMLInputElement | null)?.select();
+      (document.getElementById(`vine-code-${inv.id}`) as HTMLInputElement | null)?.select();
     }
   };
   const invite = async () => {
@@ -157,22 +157,22 @@ export function Console({ b }: { b: Bridge }) {
           <p>
             People see you as <strong>{state.you.name}</strong> <span className="fp">{state.you.fingerprint}</span>
             {state.you.role ? <span className="faint"> ({state.you.role})</span> : <span className="faint"> (removed: read only)</span>}{" "}
-            {state.you.name_from !== "P2PCG_USER" && (
+            {state.you.name_from !== "VINE_USER" && (
               <button className="link" onClick={() => setNaming(state.you.name)}>
                 Change
               </button>
             )}
             <span className="faint">
               {" "}
-              {state.you.name_from === "git" ? "(from git's user.name)" : state.you.name_from === "login" ? "(your login name)" : state.you.name_from === "P2PCG_USER" ? "(set by P2PCG_USER)" : ""}
+              {state.you.name_from === "git" ? "(from git's user.name)" : state.you.name_from === "login" ? "(your login name)" : state.you.name_from === "VINE_USER" ? "(set by VINE_USER)" : ""}
             </span>
           </p>
         ) : (
           // Not a <form>: views run sandboxed without allow-forms, which blocks submits.
           <div className="row" role="group" aria-label="Change your name">
-            <label htmlFor="p2pcg-name">Your name</label>
+            <label htmlFor="vine-name">Your name</label>
             <input
-              id="p2pcg-name"
+              id="vine-name"
               value={naming}
               maxLength={40}
               onInput={(e) => setNaming(e.currentTarget.value)}
@@ -211,7 +211,7 @@ export function Console({ b }: { b: Bridge }) {
                   </button>
                 </div>
                 <div className="linkbox">
-                  <input id={`p2pcg-code-${i.id}`} readOnly value={sendLine(i.code!)} onFocus={(e) => e.currentTarget.select()} aria-label="Message to send" />
+                  <input id={`vine-code-${i.id}`} readOnly value={sendLine(i.code!)} onFocus={(e) => e.currentTarget.select()} aria-label="Message to send" />
                   <button onClick={() => void copy(i)}>{copied === i.id ? "Copied" : "Copy"}</button>
                 </div>
               </div>

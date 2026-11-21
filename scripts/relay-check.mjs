@@ -15,14 +15,14 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repo = join(dirname(fileURLToPath(import.meta.url)), "..");
-const work = process.argv[2] ?? mkdtempSync(join(tmpdir(), "p2pcg-relay-check-"));
+const work = process.argv[2] ?? mkdtempSync(join(tmpdir(), "vine-relay-check-"));
 const sdk = (p) => import(join(repo, "node_modules/@modelcontextprotocol/sdk/dist/esm", p));
 const { Client } = await sdk("client/index.js");
 const { StdioClientTransport } = await sdk("client/stdio.js");
 const cli = join(repo, "dist/cli.js");
 rmSync(work, { recursive: true, force: true });
 const context = `relay-check-${Date.now().toString(36)}`;
-const env = (who) => ({ ...process.env, P2PCG_DATA_DIR: join(work, who), P2PCG_USER: who, P2PCG_NO_OPEN: "1", P2PCG_AUTO_SHARE: "on", P2PCG_HOLD_MS: "1500", RELATE_TELEMETRY: "off" });
+const env = (who) => ({ ...process.env, VINE_DATA_DIR: join(work, who), VINE_USER: who, VINE_NO_OPEN: "1", VINE_AUTO_SHARE: "on", VINE_HOLD_MS: "1500", RELATE_TELEMETRY: "off" });
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -69,7 +69,7 @@ try {
   await alice.call("describe_context", { description: "A relay check: claims about an imaginary outage" });
   await alice.call("add_claim", { text: "Alice wrote this before anyone joined" });
   const inv = await alice.call("share_context", { label: "for bob" });
-  check("alice gets a code", /^p2pcg1_/.test(inv.code));
+  check("alice gets a code", /^vine1_/.test(inv.code));
 
   const bob = await agent("bob", "own");
   started.push(["bob", "own"]);

@@ -46,9 +46,9 @@ function asLink(x: Stored | undefined): Link | undefined {
   return typeof r.name === "string" ? { contexts: [{ name: r.name, ...(r.id ? { id: r.id } : {}) }], at: r.at } : undefined;
 }
 
-/** The chat's id, as its agent gives it: P2PCG_CHAT, else Claude Code's session id. */
+/** The chat's id, as its agent gives it: VINE_CHAT, else Claude Code's session id. */
 export function chatIdFromEnv(env = process.env): string | undefined {
-  return env.P2PCG_CHAT || env.CLAUDE_CODE_SESSION_ID || env.CODEX_SESSION_ID || undefined;
+  return env.VINE_CHAT || env.CLAUDE_CODE_SESSION_ID || env.CODEX_SESSION_ID || undefined;
 }
 
 /** The contexts on this machine, by local name, with their ids. */

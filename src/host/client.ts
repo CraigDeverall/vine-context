@@ -79,7 +79,7 @@ export async function ensureHost(o: EnsureOptions): Promise<LocalHost> {
   const child = spawn(cmd.file, args, {
     detached: true,
     stdio: ["ignore", out, out],
-    env: { ...process.env, P2PCG_DATA_DIR: o.dataDir },
+    env: { ...process.env, VINE_DATA_DIR: o.dataDir },
   });
   let exited: number | null = null;
   child.on("exit", (code) => (exited = code ?? 1));

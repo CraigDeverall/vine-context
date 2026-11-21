@@ -14,7 +14,7 @@ import { Session } from "../src/mcp/server.js";
 import { memorySignaller } from "../src/p2p/signal.js";
 import { tempDir } from "./helpers.js";
 
-process.env.P2PCG_AUTO_SHARE = "on";
+process.env.VINE_AUTO_SHARE = "on";
 const signal = memorySignaller(new EventEmitter());
 const ice: string[] = [];
 const hosts: Host[] = [];
@@ -84,7 +84,7 @@ describe("MCP sessions on replicated graphs", () => {
     await alice.call("add_claim", { text: "Alice's finding" });
 
     const shared = await alice.call("share_context", { label: "for Bob" });
-    expect(shared.send).toBe(`Join my context graph: /p2p-context-graph:join ${shared.code}`);
+    expect(shared.send).toBe(`Join my context graph: /vine-context:join ${shared.code}`);
     const before = bob.changes();
     const joined = await bob.call("join_context", { code: `Here you go: ${shared.code} thanks` });
     expect(joined).toMatchObject({ joined: "alice's context 'team'", here_as: "team", role: "contributor", told: expect.stringMatching(/Everyone/) });
@@ -116,10 +116,9 @@ describe("MCP sessions on replicated graphs", () => {
     expect((await bob.call("search", { query: "note" })).map((r: any) => r.text)).toEqual(["Bob's private note"]);
   });
 
-  it("rejects text that isn't a join code, and says what to do with an old link", async () => {
+  it("rejects text that isn't a join code", async () => {
     const bob = await agent("bob", "own");
-    await expect(bob.call("join_context", { code: "hello there" })).rejects.toThrow(/not a p2pcg join code/);
-    await expect(bob.call("join_context", { code: "p2pcg://join/abc#k=def" })).rejects.toThrow(/old p2pcg:\/\/ join link/);
-    await expect(bob.call("join_context", { code: "p2pcg1_abc.def" })).rejects.toThrow(/damaged or cut short/);
+    await expect(bob.call("join_context", { code: "hello there" })).rejects.toThrow(/not a Vine Context join code/);
+    await expect(bob.call("join_context", { code: "vine1_abc.def" })).rejects.toThrow(/damaged or cut short/);
   });
 });

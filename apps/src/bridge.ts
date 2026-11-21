@@ -51,14 +51,14 @@ const NO_RELAY = /IPC not available|-32601|method not found|not supported|server
 
 /** What the person would type to have the agent run a tool for them. */
 export const asks = (tool: string, args: Record<string, unknown>): string =>
-  `Please run the p2p-context-graph tool ${tool}${Object.keys(args).length ? ` with ${JSON.stringify(args)}` : ""} (from the view, which can't run tools in this app).`;
+  `Please run the vine-context tool ${tool}${Object.keys(args).length ? ` with ${JSON.stringify(args)}` : ""} (from the view, which can't run tools in this app).`;
 
 export function useBridge(): Bridge | { error: string } | undefined {
   const [state, setState] = useState<{ app: App; input?: Record<string, unknown>; data?: unknown; failed?: string } | { error: string }>();
   const [canCall, setCanCall] = useState(true);
 
   useEffect(() => {
-    const app = new App({ name: "p2p-context-graph", version: "1" }, { availableDisplayModes: ["inline", "fullscreen", "pip"] }, { autoResize: true });
+    const app = new App({ name: "vine-context", version: "1" }, { availableDisplayModes: ["inline", "fullscreen", "pip"] }, { autoResize: true });
     app.ontoolinput = (p) => setState((s) => (s && "app" in s ? { ...s, input: p.arguments } : s));
     app.ontoolresult = (r) =>
       setState((s) => {

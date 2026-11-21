@@ -1,9 +1,9 @@
-# p2p-context-graph
+# Vine Context
 
 Share one [Relate](https://relatedb.ai/) context graph between several people's AI agents, peer to peer, with no server. Every member keeps a full copy, and the members' machines keep each other in step.
 
 ```bash
-git clone https://github.com/CraigDeverall/p2p-context-graph && cd p2p-context-graph
+git clone https://github.com/CraigDeverall/vine-context && cd vine-context
 npm install && npm run build
 node dist/cli.js demo
 ```
@@ -20,7 +20,7 @@ agent learns things the others never see. Findings get repeated, contradictions
 go unnoticed, and a week later nobody can say what the team believed when it
 made a call.
 
-p2p-context-graph gives the group one shared graph of **claims** and
+Vine Context gives the group one shared graph of **claims** and
 **questions**. One person creates it and sends each person a join code; they
 paste it into their agent, get their own full copy, and everyone in the context
 is told who joined. From then on every agent reads and writes its own copy,
@@ -73,7 +73,7 @@ You need Node 20 or later. It's tested on macOS arm64 and, in CI, on Linux x64 a
 **2. Use it from your agent.** Add the MCP server to Claude Code:
 
 ```bash
-claude mcp add p2p-context-graph -- node "$PWD/dist/cli.js" mcp
+claude mcp add vine-context -- node "$PWD/dist/cli.js" mcp
 ```
 
 Then ask things like:
@@ -89,11 +89,11 @@ Where the views show:
 - **Codex app** (in the ChatGPT desktop app): in the chat, with a button to expand to full screen. There's no panel that stays open beside the chat.
 - **Codex CLI and other terminal agents:** no views. Ask for the *browser view*.
 
-**Or install the plugin** (skills, the `/p2p-context-graph:join` command and the MCP server, in one):
+**Or install the plugin** (skills, the `/vine-context:join` command and the MCP server, in one):
 
 ```bash
-claude plugin marketplace add CraigDeverall/p2p-context-graph
-claude plugin install p2p-context-graph@p2p-context-graph
+claude plugin marketplace add CraigDeverall/vine-context
+claude plugin install vine-context@vine-context
 ```
 
 **In Claude Code, the plugin also adds a mod** to Claude Code's own interface:
@@ -112,18 +112,18 @@ The mod reads through the `context_activity` tool, which never uses up the join 
 **In Codex**, the same `plugin/` folder is a Codex plugin (skills and the MCP server; Codex has no plugin slash commands or mods, so joining is the `join-context-graph` skill: paste the code, and the views show in the chat):
 
 ```bash
-codex plugin marketplace add CraigDeverall/p2p-context-graph
-codex plugin add p2p-context-graph@p2p-context-graph
+codex plugin marketplace add CraigDeverall/vine-context
+codex plugin add vine-context@vine-context
 ```
 
-The plugin runs `p2pcg mcp` if `p2pcg` is installed, otherwise `npx -y p2p-context-graph mcp`. From a clone, run `npm link` once to install `p2pcg`.
-Several context-graph servers can sit side by side (for example a second identity with its own `P2PCG_DATA_DIR` and `P2PCG_USER`, for testing joins); each is a separate person.
+The plugin starts the server with `vine mcp`, so the `vine` command must be installed first: from a clone, run `npm link` once.
+Several context-graph servers can sit side by side (for example a second identity with its own `VINE_DATA_DIR` and `VINE_USER`, for testing joins); each is a separate person.
 
-To use the example data instead of a new graph, add `P2PCG_DATA_DIR=<the folder demo printed>` and `--graph incident`.
+To use the example data instead of a new graph, add `VINE_DATA_DIR=<the folder demo printed>` and `--graph incident`.
 
 **3. Share it.**
 1. **You:** create a graph (*"start a context graph called incident-42"*) or say *"invite Sam to my context graph"*. Either gives you a join code straight away, as a line to send:
-   `Join my context graph: /p2p-context-graph:join p2pcg1_…`
+   `Join my context graph: /vine-context:join vine1_…`
    Send it privately, to that one person. Others see you by your git name until you change it (*"set my name to …"*, or *Change* in the console).
 2. **Them:** run that command, or paste the code into their agent, while your machine is online (it answers the code). They're in straight away, with a full copy, and their agent gives them a briefing: what it holds, the open questions, the conflicts, the latest.
 3. **Everyone in the context is told** who joined, on their agent's next action: name, role, which invite, who let them in, key fingerprint, agent and version, operating system. The console's *People* list shows the same. If it isn't who you expected, remove them (*"remove sam"*, or *Remove* in the console).
@@ -137,7 +137,7 @@ From then on everyone works on their own copy, limited by their role (contributo
 - `sharing_status` and the console list the invites; `revoke_invite` or *Cancel* stops one working.
 - A code isn't needed again: a joined context is on the member's machine, so *"use the incident-42 context"* (`use_context`) brings it back in any later chat.
 
-**A chat's contexts.** A chat usually uses one context, and keeps it when you reopen the chat: it's remembered on your machine under the chat's id (Claude Code's session id, or `P2PCG_CHAT`), with nothing written into your project.
+**A chat's contexts.** A chat usually uses one context, and keeps it when you reopen the chat: it's remembered on your machine under the chat's id (Claude Code's session id, or `VINE_CHAT`), with nothing written into your project.
 - *"Use the incident-42 context"* (`use_context`) sets or switches it; a new name starts a new context, and the agent asks what it's for (its description, which `describe_context` or ✎ in the panel changes).
 - *"Also use the infra context"* (`add_context`) adds another; `remove_context` takes one out (or all). With several, reads search them all, and the agent puts each write in the one whose description fits.
 - There's no default: a new chat has none until you choose, so the agent asks before its first write, and the band shows *No context · Choose*.
@@ -157,8 +157,8 @@ Nothing is linked automatically: the agent records SUPPORTS, CONTRADICTS or REPL
 
 **Staying in sync.**
 - Sharing is on by default and survives restarts. *"Stop sharing"* takes a context offline until you share again; your copy keeps working.
-- Each graph's host runs while an agent uses it. To keep your graphs syncing without an agent open, and after a reboot, run `node dist/cli.js autostart on` (macOS: `p2pcg up` at login).
-- `p2pcg status --graph <name>` shows the members, the live links to them, and whether the signalling relays are reachable.
+- Each graph's host runs while an agent uses it. To keep your graphs syncing without an agent open, and after a reboot, run `node dist/cli.js autostart on` (macOS: `vine up` at login).
+- `vine status --graph <name>` shows the members, the live links to them, and whether the signalling relays are reachable.
 
 **Removing someone** stops every member's machine syncing with them and refuses their later changes. It can't take back the copy they already have.
 
@@ -173,26 +173,25 @@ Nothing is linked automatically: the agent records SUPPORTS, CONTRADICTS or REPL
     ```bash
     relate -d examples/data/graphs/incident "MATCH (a:Claim)-[:CONTRADICTS]->(b:Claim) RETURN a.text, b.text"
     ```
-- **Your own graphs:** `~/.local/share/p2p-context-graph/` (set `P2PCG_DATA_DIR` to move it).
+- **Your own graphs:** `~/.local/share/vine-context/` (set `VINE_DATA_DIR` to move it).
   - `graphs/<name>`: the Relate store, built from the change log.
   - `hosts/<name>/changes.jsonl`: every change this machine has (signed, one per line); `group.json`: the graph's id and group secret (only members have it); `invites.json`, `sharing.json`, `host.log`.
   - `identity.json`: your key. Keep it private: it is you in every graph.
-  - Graphs made before change logs are converted the first time the new host starts them: their items keep their ids, authors and times, and the people the old host let in become members.
 
 ## How it works
 
 ```mermaid
 flowchart LR
   subgraph alice["Alice's machine"]
-    A1[Claude Code session] -- MCP --> S1[p2pcg mcp]
+    A1[Claude Code session] -- MCP --> S1[vine mcp]
     S1 -- local socket --> H1[(host: change log +<br/>Relate store)]
   end
   subgraph bob["Bob's machine"]
-    B1[his agent] -- MCP --> S2[p2pcg mcp]
+    B1[his agent] -- MCP --> S2[vine mcp]
     S2 -- local socket --> H2[(host: change log +<br/>Relate store)]
   end
   subgraph carol["Carol's machine"]
-    C1[her agent] -- MCP --> S3[p2pcg mcp]
+    C1[her agent] -- MCP --> S3[vine mcp]
     S3 -- local socket --> H3[(host: change log +<br/>Relate store)]
   end
   H1 <-- "WebRTC (DTLS): swap missing changes" --> H2
@@ -208,12 +207,12 @@ flowchart LR
 - **Same changes, same graph.** Applying is idempotent and order-independent: a link waits for both its ends, the earlier of two equal links or withdrawals is kept, and checks that depend on what one machine has seen run only when the change is made. Every machine checks each change's signature and its author's role at that time.
 - **Membership is in the same log:** the creator, joins, role changes, renames and removals, each signed by an admin (a rename by the member). A membership change that arrives late makes a machine rebuild its store from the log, so all copies agree.
 - **The mesh:** online members meet in a signalling room named and sealed with the group secret, and link to each other over WebRTC (up to 20 members). Links and relay connections are pinged and replaced when they go quiet, and reconnect forever. Changes are forwarded, so members who never meet still get each other's writes.
-- **Join codes:** `p2pcg1_<room>.<secret>`, one per invite, answered by the admin machine that made it. The newcomer proves the secret (HMAC) and its key (Ed25519), and receives the graph id, the group secret and the whole log.
+- **Join codes:** `vine1_<room>.<secret>`, one per invite, answered by the admin machine that made it. The newcomer proves the secret (HMAC) and its key (Ed25519), and receives the graph id, the group secret and the whole log.
 - **Agents only get the model's tools,** never raw Cypher. Write tools in [`models/temporal-claims/tools.yaml`](models/temporal-claims/tools.yaml) only check; the change itself is applied by fixed code in [`src/core/graph.ts`](src/core/graph.ts).
 - **MCP Apps:** four views (console, explorer, receipt with Undo, conflicts) in one bundle. They're served as `ui://` resources, and on 127.0.0.1 behind a one-time token for agents that can't show views.
 - The design and its reasoning: [`docs/REPLICATION.md`](docs/REPLICATION.md).
 
-If two machines can't reach each other directly (some networks block it), set a TURN server: `P2PCG_ICE=turn:user:pass@host:3478`.
+If two machines can't reach each other directly (some networks block it), set a TURN server: `VINE_ICE=turn:user:pass@host:3478`.
 
 ## Limits
 

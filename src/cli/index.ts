@@ -4,9 +4,9 @@ import { packageInfo } from "../core/package-root.js";
 const pkg = packageInfo();
 const [command, ...rest] = process.argv.slice(2);
 
-const USAGE = `p2pcg ${pkg.version}: a shared context graph of claims and questions, replicated peer to peer between people's AI agents
+const USAGE = `vine ${pkg.version}: a shared context graph of claims and questions, replicated peer to peer between people's AI agents
 
-Usage: p2pcg <command> [options]
+Usage: vine <command> [options]
 
 Commands:
   mcp [--context NAME]                Run the MCP server on stdio (a chat keeps the context it chose; a new chat starts with its folder's linked context, else NAME, else none until one is chosen)
@@ -14,28 +14,28 @@ Commands:
                                       Run a context's host in the foreground (--share prints a new join code)
   host stop [--context NAME]          Stop a context's host
   up                                  Start the host of every context on this machine that is sharing (in the background)
-  autostart on|off                    Run \`p2pcg up\` at login (macOS), so your contexts sync after a reboot
+  autostart on|off                    Run \`vine up\` at login (macOS), so your contexts sync after a reboot
   demo [--port N] [--no-open]         Open the views on an example context (a copy; nothing of yours changes)
   ui [--context NAME] [--port N] [--open]
                                       Show the console and explorer in a browser
   status [--context NAME]             Show a context's host: sharing, members, links, relays, invites
   whoami                              Show your name and key fingerprint
-  doctor                              Check that this machine can run p2pcg
+  doctor                              Check that this machine can run vine
   --version                           Print the version
 
 Environment:
-  P2PCG_USER        Your name in contexts (default: the name you set with set_my_name, else git's user.name, else your login name)
-  P2PCG_CONTEXT     The context a new chat starts with when its folder has none linked (default: none; the agent asks)
-  P2PCG_CHAT        The chat's id, to remember its context (default: Claude Code's session id)
-  P2PCG_DATA_DIR    Where contexts live (default: ~/.local/share/p2p-context-graph)
-  P2PCG_AUTO_SHARE  off: new contexts don't sync until you share them
-  P2PCG_HOLD_MS     How long a write stays on this machine (Undo) before it is sent (default 10000)
-  P2PCG_RELAYS      Nostr relays for signalling, comma-separated
-  P2PCG_ICE         STUN/TURN servers, comma-separated (turn:user:pass@host:port)`;
+  VINE_USER        Your name in contexts (default: the name you set with set_my_name, else git's user.name, else your login name)
+  VINE_CONTEXT     The context a new chat starts with when its folder has none linked (default: none; the agent asks)
+  VINE_CHAT        The chat's id, to remember its context (default: Claude Code's session id)
+  VINE_DATA_DIR    Where contexts live (default: ~/.local/share/vine-context)
+  VINE_AUTO_SHARE  off: new contexts don't sync until you share them
+  VINE_HOLD_MS     How long a write stays on this machine (Undo) before it is sent (default 10000)
+  VINE_RELAYS      Nostr relays for signalling, comma-separated
+  VINE_ICE         STUN/TURN servers, comma-separated (turn:user:pass@host:port)`;
 
 const graphOpts = { graph: { type: "string" }, context: { type: "string" } } as const;
 const graphName = (v?: string): string => {
-  const name = v ?? process.env.P2PCG_CONTEXT ?? process.env.P2PCG_GRAPH;
+  const name = v ?? process.env.VINE_CONTEXT ?? process.env.VINE_GRAPH;
   if (name) return name;
   console.error("Name a context with --context NAME (there's no default context).");
   process.exit(2);
@@ -52,8 +52,8 @@ async function sessionFactory(values: { graph?: string; context?: string }) {
   ]);
   const dataDir = defaultDataDir();
   // A chat keeps the context it chose (by its id); a new one starts with its folder's linked context, or one named here; there's no default.
-  const graph = values.context ?? values.graph ?? process.env.P2PCG_CONTEXT ?? process.env.P2PCG_GRAPH;
-  const log = (m: string) => console.error(`p2pcg: ${m}`);
+  const graph = values.context ?? values.graph ?? process.env.VINE_CONTEXT ?? process.env.VINE_GRAPH;
+  const log = (m: string) => console.error(`vine: ${m}`);
   let ui: Promise<{ url: string }> | undefined;
   const make = (withBrowserView: boolean): InstanceType<typeof Session> =>
     new Session({
@@ -100,15 +100,15 @@ async function demo(args: string[]): Promise<number> {
     return 1;
   }
   // A copy, so the demo never changes the examples that ship with the package.
-  const dataDir = mkdtempSync(join(tmpdir(), "p2pcg-demo-"));
+  const dataDir = mkdtempSync(join(tmpdir(), "vine-demo-"));
   cpSync(examples, dataDir, { recursive: true });
-  process.env.P2PCG_DATA_DIR = dataDir;
-  process.env.P2PCG_USER ??= "alice";
-  process.env.P2PCG_AUTO_SHARE ??= "off"; // the example stays on this machine
+  process.env.VINE_DATA_DIR = dataDir;
+  process.env.VINE_USER ??= "alice";
+  process.env.VINE_AUTO_SHARE ??= "off"; // the example stays on this machine
   const { make, log } = await sessionFactory({ graph: "incident" });
   const { startUi } = await import("../ui/server.js");
   const server = await startUi({ session: () => make(false), port: values.port ? Number(values.port) : undefined, log });
-  console.log(`p2p-context-graph demo: an example graph, copied to ${dataDir}
+  console.log(`vine-context demo: an example graph, copied to ${dataDir}
   incident   three people investigating a checkout slowdown
 
 Open this on this machine (it acts as you; don't share it):
@@ -116,7 +116,7 @@ ${server.url}
 
 In the browser: Explore the graph (drag the time slider) and Conflicts.
 To point an agent at the same data:
-  P2PCG_DATA_DIR=${dataDir} p2pcg mcp --graph incident
+  VINE_DATA_DIR=${dataDir} vine mcp --graph incident
 
 Ctrl-C stops the demo.`);
   if (!values["no-open"]) {
@@ -251,10 +251,10 @@ async function doctor(): Promise<number> {
   };
   await check("node", () => {
     const major = Number(process.versions.node.split(".")[0]);
-    if (major < 20) throw new Error(`Node ${process.versions.node}; p2pcg needs Node 20 or later`);
+    if (major < 20) throw new Error(`Node ${process.versions.node}; vine needs Node 20 or later`);
     return `${process.versions.node} on ${process.platform}-${process.arch}`;
   });
-  await check("p2p-context-graph", () => pkg.version);
+  await check("vine-context", () => pkg.version);
   await check("relate", async () => {
     const { loadRelate } = await import("../core/relate.js");
     const R = await loadRelate();
@@ -330,23 +330,23 @@ async function up(): Promise<number> {
   return 0;
 }
 
-/** A macOS launch agent that runs `p2pcg up` at login. */
+/** A macOS launch agent that runs `vine up` at login. */
 async function autostart(args: string[]): Promise<number> {
   const [sub] = args;
   const [{ existsSync, mkdirSync, unlinkSync, writeFileSync }, { homedir }, { join }] = await Promise.all([import("node:fs"), import("node:os"), import("node:path")]);
-  const label = "dev.p2pcg.up";
+  const label = "dev.vine.up";
   if (process.platform !== "darwin") {
-    console.log("autostart is for macOS. Elsewhere, run `p2pcg up` from your login scripts (for example a systemd user service).");
+    console.log("autostart is for macOS. Elsewhere, run `vine up` from your login scripts (for example a systemd user service).");
     return sub === "on" || sub === "off" ? 1 : 2;
   }
   const plist = join(homedir(), "Library", "LaunchAgents", `${label}.plist`);
   if (sub === "off") {
     if (existsSync(plist)) unlinkSync(plist);
-    console.log(`Removed ${plist}. Your graphs sync only while an agent (or \`p2pcg up\`) runs them.`);
+    console.log(`Removed ${plist}. Your graphs sync only while an agent (or \`vine up\`) runs them.`);
     return 0;
   }
   if (sub !== "on") {
-    console.error("Usage: p2pcg autostart on|off");
+    console.error("Usage: vine autostart on|off");
     return 2;
   }
   const esc = (v: string) => v.replace(/&/g, "&amp;").replace(/</g, "&lt;");
@@ -360,11 +360,11 @@ async function autostart(args: string[]): Promise<number> {
   <key>Label</key><string>${label}</string>
   <key>ProgramArguments</key><array>${args2.map((a) => `<string>${esc(a)}</string>`).join("")}</array>
   <key>RunAtLoad</key><true/>
-  <key>EnvironmentVariables</key><dict>${process.env.P2PCG_DATA_DIR ? `<key>P2PCG_DATA_DIR</key><string>${esc(process.env.P2PCG_DATA_DIR)}</string>` : ""}</dict>
+  <key>EnvironmentVariables</key><dict>${process.env.VINE_DATA_DIR ? `<key>VINE_DATA_DIR</key><string>${esc(process.env.VINE_DATA_DIR)}</string>` : ""}</dict>
 </dict></plist>
 `,
   );
-  console.log(`Wrote ${plist}: \`p2pcg up\` runs at each login. \`p2pcg autostart off\` removes it.`);
+  console.log(`Wrote ${plist}: \`vine up\` runs at each login. \`vine autostart off\` removes it.`);
   return 0;
 }
 

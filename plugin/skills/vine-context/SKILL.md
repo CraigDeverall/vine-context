@@ -1,9 +1,9 @@
 ---
-name: p2p-context-graph
-description: Use shared contexts (p2p-context-graph context graphs, the p2pcg tools) to record and look up what a group knows, as claims and questions; to choose the context a chat uses (usually one, sometimes several); to follow and add to a question's thread of replies; to share a context or join someone else's. Use when the p2p-context-graph MCP tools are available and the work produces or needs knowledge others would want, when the person pastes a p2pcg1_ join code or uses /p2p-context-graph:join, asks to share or describe a context, invite or remove someone, switch a chat's context, link a folder to a context, answer a question, mentions a context graph, shared context, claims, open questions or what the team believes.
+name: vine-context
+description: Use shared contexts (Vine Context, the vine tools) to record and look up what a group knows, as claims and questions; to choose the context a chat uses (usually one, sometimes several); to follow and add to a question's thread of replies; to share a context or join someone else's. Use when the vine-context MCP tools are available and the work produces or needs knowledge others would want, when the person pastes a vine1_ join code or uses /vine-context:join, asks to share or describe a context, invite or remove someone, switch a chat's context, link a folder to a context, answer a question, mentions a context graph, shared context, claims, open questions or what the team believes.
 ---
 
-# p2p-context-graph
+# Vine Context
 
 A **context** (a context graph) holds what a group knows about something, as
 dated **claims** and open **questions**. Every member keeps a full copy on
@@ -14,7 +14,7 @@ so it should make sense to someone who never saw this conversation.
 
 Each context has a **description**: what it is for, what goes in it.
 
-The tools are on the `p2p-context-graph` MCP server:
+The tools are on the `vine-context` MCP server:
 
 - `context_info`: this chat's context (what it's for, your role, how much it
   holds, everyone in it and who is online), the chat's `contexts` if it uses
@@ -129,13 +129,13 @@ link (tell them not to share it: it acts as them).
 
 ## Sharing and joining
 
-- **Join codes:** each invite is one code, `p2pcg1_<room>.<secret>`, for one
+- **Join codes:** each invite is one code, `vine1_<room>.<secret>`, for one
   person's machine. Whoever uses it first is let straight in with the code's
   role (contributor unless `share_context` set `role`) and gets a full copy.
   Anyone else using it is turned away. An unused code expires (24 hours unless
   set). **The machine that made the code answers it**, so it must be online
   when the person uses it.
-- **When the person pastes a join code** (or runs `/p2p-context-graph:join`),
+- **When the person pastes a join code** (or runs `/vine-context:join`),
   call `join_context` with it. It's added to this chat, and writes go to it. Tell them whose context it is, what it's for, their role,
   that they now have their own full copy, and that everyone was told they
   joined; then give them its **briefing** (what it holds, open questions,
@@ -179,14 +179,14 @@ unchanged.
 
 ## Troubleshooting
 
-- `npx p2p-context-graph doctor` checks Node, Relate, WebRTC support and the
+- `vine doctor` checks Node, Relate, WebRTC support and the
   data folder.
-- Each context has one host process on this machine (`p2pcg status --context
-  <name>` shows its members, links, relays and invites; `p2pcg host stop`
-  stops it). Sessions start it as needed. `p2pcg up` starts every sharing
-  context's host, and `p2pcg autostart on` (macOS) runs that at login.
+- Each context has one host process on this machine (`vine status --context
+  <name>` shows its members, links, relays and invites; `vine host stop`
+  stops it). Sessions start it as needed. `vine up` starts every sharing
+  context's host, and `vine autostart on` (macOS) runs that at login.
 - If members never connect, the networks may block direct WebRTC
-  connections. A TURN server (`P2PCG_ICE`) fixes that.
-- Data lives in `~/.local/share/p2p-context-graph` (`P2PCG_DATA_DIR`):
+  connections. A TURN server (`VINE_ICE`) fixes that.
+- Data lives in `~/.local/share/vine-context` (`VINE_DATA_DIR`):
   `graphs/<name>` (the store), `hosts/<name>/changes.jsonl` (the change log
   every copy is built from) and `hosts/<name>/host.log`.

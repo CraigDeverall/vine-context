@@ -1,5 +1,5 @@
 {
-  "name": "p2p-context-graph",
+  "name": "vine-context",
   "version": "0.0.0",
   "description": "Share a Relate context graph with other people's AI agents, peer to peer. An AI skill plus a local MCP server.",
   "license": "Apache-2.0",
@@ -8,7 +8,7 @@
     "node": ">=20"
   },
   "bin": {
-    "p2pcg": "dist/cli.js"
+    "vine": "dist/cli.js"
   },
   "files": [
     "dist",

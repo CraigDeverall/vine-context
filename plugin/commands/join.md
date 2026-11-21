@@ -1,11 +1,11 @@
 ---
 description: Join someone's shared context with the join code they sent you
-argument-hint: <p2pcg1_ join code>
+argument-hint: <vine1_ join code>
 ---
 
 Join the shared context with this join code: $ARGUMENTS
 
-1. Call the `join_context` tool of the p2p-context-graph MCP server with the
+1. Call the `join_context` tool of the vine-context MCP server with the
    code exactly as given above. If no code was given, call `context_info` and
    offer the contexts in `your_contexts` instead (`use_context` makes one this
    chat's context, no code needed).

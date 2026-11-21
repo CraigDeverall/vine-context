@@ -59,14 +59,14 @@ type Origin = "chat" | "folder" | "configured" | "chosen";
 function joinNotice(p: Record<string, any>, where: string): string {
   const via = p.invite?.label ? ` with the invite '${p.invite.label}'` : p.invite?.id ? ` with invite ${p.invite.id}` : "";
   const agent = p.agent ? `${p.agent}${p.agent_version ? ` ${p.agent_version}` : ""}` : "an unknown agent";
-  const extra = [p.platform ? `on ${p.platform}` : "", p.p2pcg ? `p2pcg ${p.p2pcg}` : ""].filter(Boolean).join(", ");
+  const extra = [p.platform ? `on ${p.platform}` : "", p.vine ? `vine ${p.vine}` : ""].filter(Boolean).join(", ");
   const by = p.added_by ? `, let in by ${p.added_by}` : "";
   return `News: ${p.name} joined ${where} as ${p.role}${via}${by}, at ${p.joined_at}. Key fingerprint ${p.fingerprint}; ${agent}${extra ? ` (${extra})` : ""}.`;
 }
 
 /** Opens a URL in the default browser; false where that isn't possible or is turned off. */
 function openInBrowser(url: string): boolean {
-  if (process.env.P2PCG_NO_OPEN) return false;
+  if (process.env.VINE_NO_OPEN) return false;
   const cmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "explorer" : "xdg-open";
   try {
     spawn(cmd, [url], { stdio: "ignore", detached: true }).on("error", () => undefined).unref();
@@ -77,7 +77,7 @@ function openInBrowser(url: string): boolean {
 }
 
 export interface SessionOptions {
-  /** A context named for this session (the CLI's --context or P2PCG_CONTEXT), used when the chat has none yet. */
+  /** A context named for this session (the CLI's --context or VINE_CONTEXT), used when the chat has none yet. */
   local?: () => Promise<LocalHost>;
   /** Connects to (and if needed starts) this machine's host for a context by name. */
   openLocal?: (graph: string) => Promise<LocalHost>;
@@ -113,14 +113,14 @@ export class Session {
 
   constructor(private o: SessionOptions) {
     this.server = new McpServer(
-      { name: "p2p-context-graph", version: packageInfo().version },
+      { name: "vine-context", version: packageInfo().version },
       {
         capabilities: { tools: { listChanged: true }, resources: {}, prompts: {} },
         instructions:
           "This server holds context graphs (contexts): what a group knows, as claims and questions, shared peer to peer. Every member keeps a full copy, so it works offline. " +
           "A chat usually uses one context (context_info says which); use_context switches it, add_context adds another, remove_context drops one, and the chat keeps them when reopened. " +
           "Call model_guide once before you first write, and follow it. " +
-          "To invite someone, use share_context: it makes a join code for one person. To join someone else's context, call join_context with the p2pcg1_ code they sent.",
+          "To invite someone, use share_context: it makes a join code for one person. To join someone else's context, call join_context with the vine1_ code they sent.",
       },
     );
     registerViews(this.server);
@@ -129,8 +129,8 @@ export class Session {
       "join",
       {
         title: "Join a shared context",
-        description: "Join someone's shared context with the join code (p2pcg1_…) they sent you",
-        argsSchema: { code: z.string().describe("The p2pcg1_… join code") },
+        description: "Join someone's shared context with the join code (vine1_…) they sent you",
+        argsSchema: { code: z.string().describe("The vine1_… join code") },
       },
       ({ code }) => ({
         messages: [
@@ -591,7 +591,7 @@ export class Session {
         annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       },
       wrap(async ({ name }: { name: string }) => {
-        if (process.env.P2PCG_USER) throw new Error(`Your name is set by P2PCG_USER ('${process.env.P2PCG_USER}') in this agent's configuration; change it there.`);
+        if (process.env.VINE_USER) throw new Error(`Your name is set by VINE_USER ('${process.env.VINE_USER}') in this agent's configuration; change it there.`);
         const n = setName(this.dataDir, name);
         for (const c of this.contexts.values()) await this.request("rename", { name: n }, c.name);
         return { name: n, fingerprint: fingerprint(this.o.identity().publicKey), note: "This chat's contexts have it now; your other contexts take it when their hosts next start." };
@@ -603,7 +603,7 @@ export class Session {
       {
         title: "Invite someone",
         description:
-          "Invite one person to a context (you must be an admin of it; default: the chat's context): makes a new join code (p2pcg1_…) for that person. " +
+          "Invite one person to a context (you must be an admin of it; default: the chat's context): makes a new join code (vine1_…) for that person. " +
           "Your machine answers the code, so it must be online when they use it. The first person to use it is let straight in with the code's role and gets a full copy; anyone else using it is turned away. " +
           "Everyone in the context is told when someone joins, with their name, key fingerprint and agent. remove_peer takes anyone out. " +
           "An unused code expires (default 24 hours). Call it once per person. sharing_status lists invites; revoke_invite cancels one.",
@@ -699,10 +699,10 @@ export class Session {
       {
         title: "Join a shared context",
         description:
-          "Join someone else's context with the join code they sent (p2pcg1_…; it can be inside other text). Use it when the person pastes such a code. " +
+          "Join someone else's context with the join code they sent (vine1_…; it can be inside other text). Use it when the person pastes such a code. " +
           "The machine that made the code must be online. You are let in at once and get your own full copy, kept in step with the others; everyone is told you joined (your name, key fingerprint and agent). " +
           "It's added to this chat and writes go to it; the result includes a briefing (open questions, conflicts, latest). Other chats don't need the code: use_context with its name.",
-        inputSchema: { code: z.string().describe("The p2pcg1_… join code, exactly as sent") },
+        inputSchema: { code: z.string().describe("The vine1_… join code, exactly as sent") },
         annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
       },
       wrap(async ({ code }: { code: string }) => this.join(code)),
@@ -949,7 +949,7 @@ export class Session {
     return {
       context,
       code: r.code,
-      send: `Join my context graph: /p2p-context-graph:join ${r.code}`,
+      send: `Join my context graph: /vine-context:join ${r.code}`,
       invite: { id: r.id, label: r.label, role: r.role, expires_at: r.expires_at },
       shared_as: { name: identity.name, fingerprint: fingerprint(identity.publicKey) },
       next:
@@ -967,7 +967,7 @@ export class Session {
     const about = {
       agent: client?.name,
       agent_version: client?.version,
-      p2pcg: packageInfo().version,
+      vine: packageInfo().version,
       platform: `${OS[process.platform] ?? process.platform} ${process.arch}`,
     };
     const welcome = await joinWithCode(link, identity, { signal: this.o.signal, ice: this.o.ice, about, timeoutMs: this.o.joinWaitMs ?? 30_000, log: this.o.log });

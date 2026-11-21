@@ -1,4 +1,4 @@
-# p2p-context-graph: root plan
+# vine-context: root plan
 
 > **Superseded in part (2026-11-17):** the star is replaced by replicated
 > graphs (every member keeps a full copy, synced over a mesh), Claims and
@@ -14,14 +14,14 @@ share.
 
 ## 1. What it is
 
-**p2p-context-graph** is an AI skill plus a small local MCP server. Together they
+**Vine Context** is an AI skill plus a small local MCP server. Together they
 let one person host a context graph on their own machine and share it, peer to
 peer, with a few other people and their AI agents.
 
 - The **host** (the person who starts it) runs a Relate graph and is the centre
   of a star network.
-- The host sends each person a join code (`p2pcg1_<room>.<secret>`). Users B, C and D paste
-  it into their agent, or runs `/p2p-context-graph:join <code>`, and their agent joins the star.
+- The host sends each person a join code (`vine1_<room>.<secret>`). Users B, C and D paste
+  it into their agent, or runs `/vine-context:join <code>`, and their agent joins the star.
 - Everyone's agent can then read and write the shared graph. They do it through
   tools that the graph's **context model** defines, not through raw Cypher.
 - The context model can be chosen and authored. The project ships a default,
@@ -89,7 +89,7 @@ rights to them, including the right to open-source.
 ```
                  ┌────────────────── Host (User A) ───────────────────┐
                  │  Claude Code / any MCP host                        │
-                 │   └─ p2pcg MCP server (stdio)                      │
+                 │   └─ vine MCP server (stdio)                      │
                  │        ├─ Model runtime  ── model pack (shapes,    │
                  │        │                    tools, instructions)   │
                  │        ├─ Relate store (embedded, @relate/relate)  │
@@ -99,7 +99,7 @@ rights to them, including the right to open-source.
                      WebRTC DC  │               │  WebRTC DC
                 ┌───────────────┴──┐      ┌─────┴──────────────┐
                 │ Peer B           │      │ Peer C             │
-                │  p2pcg MCP (stdio)│      │  p2pcg MCP (stdio) │
+                │  vine MCP (stdio)│      │  vine MCP (stdio) │
                 │  = proxy to host │      │  = proxy to host   │
                 └──────────────────┘      └────────────────────┘
         Signalling: a public relay, keyed by room hash, carrying only encrypted SDP/ICE.
@@ -107,7 +107,7 @@ rights to them, including the right to open-source.
 
 ### 4.1 One package, two roles
 
-The same `p2pcg` MCP server runs everywhere. As the **host** it owns the Relate
+The same `vine` MCP server runs everywhere. As the **host** it owns the Relate
 store and runs the model's tools. As a **peer** it advertises the same model
 tools, which it learns from the host when it joins, and forwards every call over
 the data channel. So a peer's agent sees exactly the tools the host's model
@@ -122,7 +122,7 @@ supports `--read-only`.
 
 Decision:
 
-- **The model's tools run on embedded Relate** inside the p2pcg server. That
+- **The model's tools run on embedded Relate** inside the vine server. That
   gives one process, prebuilt native packages from npm, and no extra binary to
   install. The POC proved it works.
 - **Peers never get raw Cypher.** Relate's MCP has no per-caller identity or
@@ -168,7 +168,7 @@ models/temporal-claims/
 - **Authoring workflow in the skill:** interview the user about their domain,
   then draft `model.yaml` and `tools.yaml`, validate them against a scratch
   Relate store (`get_schema` round trip plus a smoke test of each tool), and
-  install the pack. `p2pcg model validate <dir>` does the same from the CLI.
+  install the pack. `vine model validate <dir>` does the same from the CLI.
 
 ### 4.4 Peer to peer: the parts of the Gemini plan we adopt and drop
 
@@ -177,8 +177,8 @@ models/temporal-claims/
 - Host-star topology over **node-datachannel** (libdatachannel, prebuilt N-API
   binaries).
 - Default public STUN, with flags or config for custom STUN/TURN.
-- Join code `p2pcg1_<room>.<secret>`, one per invite (this replaced the
-  single reusable `p2pcg://join/<room>#<secret>` link on 16 Nov). The secret
+- Join code `vine1_<room>.<secret>`, one per invite (this replaced the
+  single reusable `vine://join/<room>#<secret>` link on 16 Nov). The secret
   never leaves the two machines. The room hash is used for signalling, and an
   HMAC challenge proves the secret over the data channel before any other
   frame is accepted.
@@ -208,8 +208,8 @@ models/temporal-claims/
 - The `proxy` channel (HTTP port tunnelling).
 - Registering a URL scheme, or an `https://` landing page. A code gets pasted
   into an agent anyway, so a clickable link saves no steps. The code works
-  pasted into any agent chat, and with `/p2p-context-graph:join <code>`.
-- Short code words (`p2pcg2_`), which need a password-authenticated key
+  pasted into any agent chat, and with `/vine-context:join <code>`.
+- Short code words (`vine2_`), which need a password-authenticated key
   exchange.
 - Copy-paste-only signalling, which needs a manual round trip and is slow in a
   demo. We keep it as a fallback flag only if it costs little.
@@ -239,15 +239,15 @@ Where a host doesn't support MCP Apps, the same views are served on
 
 ### 4.6 Distribution
 
-- One npm package, **`p2p-context-graph`** (free on npm and GitHub as of
-  2026-11-15). Its bin is `p2pcg`, with `p2pcg mcp`, `p2pcg host`,
-  `p2pcg join <link>` and `p2pcg model …`.
+- One npm package, **`vine-context`** (free on npm and GitHub as of
+  2026-11-15). Its bin is `vine`, with `vine mcp`, `vine host`,
+  `vine join <link>` and `vine model …`.
 - The TypeScript is built and bundled with tsup or esbuild, and the MCP App UI
   is pre-built. The two native dependencies (`@relate/relate` platform packages
   and `node-datachannel`) stay as normal dependencies, because native code
   can't be bundled.
 - The repo is also a Claude Code plugin marketplace: the skill, `.mcp.json`
-  running `npx -y p2p-context-graph mcp`, and slash commands. `SKILL.md`
+  running `npx -y vine-context mcp`, and slash commands. `SKILL.md`
   follows the Agent Skills standard so other agents (Cursor, Codex, Gemini CLI)
   can use it.
 - Supported platforms: macOS arm64, Linux x64, and Windows x64 if
@@ -256,14 +256,14 @@ Where a host doesn't support MCP Apps, the same views are served on
 ## 5. Repository layout
 
 ```
-p2p-context-graph/
+vine-context/
   .claude-plugin/marketplace.json
   plugin/                 skill (SKILL.md + references), commands, .mcp.json
   src/
     core/                 relate store, model runtime, roles, identity
     p2p/                  hub, peer, signalling, frames, link codec
     mcp/                  MCP server (host + peer modes), app resources
-    cli/                  p2pcg CLI
+    cli/                  vine CLI
   models/temporal-claims/ default model pack
   models/decision-log/    second sample pack
   apps/                   MCP App views (React, in-repo components), built to single HTML files
@@ -340,7 +340,7 @@ Decided:
   library.
 - **Signalling:** Nostr ephemeral events through our own minimal relay client
   (see [spikes.md](spikes.md)). nostr-tools is used only for signing.
-- **npm:** the unscoped `p2p-context-graph` package.
+- **npm:** the unscoped `vine-context` package.
 
 Open:
 
@@ -358,8 +358,8 @@ Decided in M3 (16 Nov):
 - **Second pack:** `decision-log` (decisions, options, assumptions; `needs_review`
   follows RESTS_ON and DEPENDS_ON to find decisions on stale foundations).
 - **MCP Apps:** ext-apps 1.7.5 (the line that targets MCP SDK 1.x). One React
-  bundle served as `ui://p2pcg/<view>`, run on Preact to keep it near 300 KB.
-  `p2pcg ui` / `browser_view` serve the same views on 127.0.0.1 for agents
+  bundle served as `ui://vine/<view>`, run on Preact to keep it near 300 KB.
+  `vine ui` / `browser_view` serve the same views on 127.0.0.1 for agents
   without MCP Apps.
 
 Decided 17 Nov:

@@ -42,16 +42,16 @@ function gitName(): string | undefined {
 }
 
 /**
- * Your display name in graphs: P2PCG_USER, else the name you set (set_my_name),
+ * Your display name in graphs: VINE_USER, else the name you set (set_my_name),
  * else git's user.name, else your login name.
  */
 export function defaultName(dataDir?: string): string {
-  return process.env.P2PCG_USER ?? (dataDir && storedName(dataDir)) ?? gitName() ?? userInfo().username;
+  return process.env.VINE_USER ?? (dataDir && storedName(dataDir)) ?? gitName() ?? userInfo().username;
 }
 
 /** Where the name comes from, for telling people how to change it. */
-export function nameSource(dataDir: string): "P2PCG_USER" | "set_my_name" | "git" | "login" {
-  if (process.env.P2PCG_USER) return "P2PCG_USER";
+export function nameSource(dataDir: string): "VINE_USER" | "set_my_name" | "git" | "login" {
+  if (process.env.VINE_USER) return "VINE_USER";
   if (storedName(dataDir)) return "set_my_name";
   return gitName() ? "git" : "login";
 }
