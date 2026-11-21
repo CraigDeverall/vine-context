@@ -58,7 +58,7 @@ export class HashEmbedder implements Embedder {
   }
 }
 
-export function makeEmbedder(name = process.env.P2PCG_EMBEDDER): Embedder {
+export function makeEmbedder(name = process.env.VINE_EMBEDDER): Embedder {
   if (!name || name === "hash" || name === "hash-256") return new HashEmbedder();
   throw new Error(`Unknown embedder '${name}'. Available: hash.`);
 }

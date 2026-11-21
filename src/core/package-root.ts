@@ -11,9 +11,9 @@ export function packageRoot(): string {
   let dir = dirname(fileURLToPath(import.meta.url));
   for (;;) {
     const file = join(dir, "package.json");
-    if (existsSync(file) && JSON.parse(readFileSync(file, "utf8")).name === "p2p-context-graph") return (root = dir);
+    if (existsSync(file) && JSON.parse(readFileSync(file, "utf8")).name === "vine-context") return (root = dir);
     const parent = dirname(dir);
-    if (parent === dir) throw new Error("p2p-context-graph's package.json not found");
+    if (parent === dir) throw new Error("vine-context's package.json not found");
     dir = parent;
   }
 }

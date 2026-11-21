@@ -19,7 +19,7 @@ export const VIEWS = {
 } as const;
 export type ViewName = keyof typeof VIEWS;
 
-export const viewUri = (v: ViewName) => `ui://p2pcg/${v}`;
+export const viewUri = (v: ViewName) => `ui://vine/${v}`;
 
 /** The built views file, or undefined if `npm run build` hasn't made it. */
 export function viewsFile(): string | undefined {
@@ -32,7 +32,7 @@ let cached: { mtime: number; html: string } | undefined;
 function viewsHtml(): string {
   const f = viewsFile();
   if (!f)
-    return `<!doctype html><meta charset="utf-8"><body style="font:14px system-ui;padding:16px">The views aren't built. Run <code>npm run build</code> in p2p-context-graph.</body>`;
+    return `<!doctype html><meta charset="utf-8"><body style="font:14px system-ui;padding:16px">The views aren't built. Run <code>npm run build</code> in vine-context.</body>`;
   const mtime = statSync(f).mtimeMs;
   if (cached?.mtime !== mtime) cached = { mtime, html: readFileSync(f, "utf8") };
   return cached.html;
@@ -41,7 +41,7 @@ function viewsHtml(): string {
 /** The HTML for one view. */
 export function viewHtml(view: ViewName): string {
   // The view name is one of a fixed set, so it can go into the page as is.
-  return viewsHtml().replace("<!--P2PCG_VIEW-->", `<script>window.__P2PCG_VIEW__=${JSON.stringify(view)}</script>`);
+  return viewsHtml().replace("<!--VINE_VIEW-->", `<script>window.__VINE_VIEW__=${JSON.stringify(view)}</script>`);
 }
 
 export function registerViews(server: McpServer): void {

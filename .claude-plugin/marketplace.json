@@ -1,9 +1,9 @@
 {
-  "name": "p2p-context-graph",
-  "owner": { "name": "p2p-context-graph" },
+  "name": "vine-context",
+  "owner": { "name": "vine-context" },
   "plugins": [
     {
-      "name": "p2p-context-graph",
+      "name": "vine-context",
       "source": "./plugin",
       "description": "Share a Relate context graph of dated claims and open questions with other people's AI agents, peer to peer. Every member keeps a full copy, synced whenever they're online."
     }

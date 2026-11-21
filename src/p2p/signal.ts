@@ -29,7 +29,7 @@ export const DEFAULT_RELAYS = [
 const KIND = 25050; // ephemeral: relays forward it but don't store it
 
 export function relayList(): string[] {
-  const env = process.env.P2PCG_RELAYS;
+  const env = process.env.VINE_RELAYS;
   return env ? env.split(",").map((s) => s.trim()).filter(Boolean) : DEFAULT_RELAYS;
 }
 
@@ -68,9 +68,9 @@ export function memorySignaller(bus = new EventEmitter()): SignalFactory {
   };
 }
 
-/** STUN/TURN servers. P2PCG_ICE takes a comma-separated list, e.g. turn:user:pass@host:3478. */
+/** STUN/TURN servers. VINE_ICE takes a comma-separated list, e.g. turn:user:pass@host:3478. */
 export function iceServers(): string[] {
-  const env = process.env.P2PCG_ICE;
+  const env = process.env.VINE_ICE;
   if (env !== undefined) return env.split(",").map((s) => s.trim()).filter(Boolean);
   return ["stun:stun.l.google.com:19302", "stun:stun.cloudflare.com:3478"];
 }

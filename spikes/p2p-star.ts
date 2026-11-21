@@ -1,7 +1,7 @@
 // Spike A: a host-star WebRTC network, with node-datachannel and public Nostr
 // relays used only for signalling.
 //
-//   host:  npx tsx spikes/p2p-star.ts host [--peers N]   → prints a p2pcg:// link
+//   host:  npx tsx spikes/p2p-star.ts host [--peers N]   → prints a vine:// link
 //   peer:  npx tsx spikes/p2p-star.ts join '<link>'
 //
 // Signalling: ephemeral Nostr events (kind 25050, not stored by relays), tagged
@@ -15,8 +15,8 @@ import { createCipheriv, createDecipheriv, createHash, createHmac, hkdfSync, ran
 import nodeDataChannel, { type DataChannel, type PeerConnection } from "node-datachannel";
 import { RelaySet } from "../src/p2p/nostr.ts";
 
-const RELAYS = (process.env.P2PCG_RELAYS ?? "wss://relay.primal.net,wss://offchain.pub,wss://relay.snort.social,wss://relay.nostr.net,wss://nos.lol").split(",");
-const ICE = (process.env.P2PCG_ICE ?? "stun:stun.l.google.com:19302,stun:stun.cloudflare.com:3478").split(",");
+const RELAYS = (process.env.VINE_RELAYS ?? "wss://relay.primal.net,wss://offchain.pub,wss://relay.snort.social,wss://relay.nostr.net,wss://nos.lol").split(",");
+const ICE = (process.env.VINE_ICE ?? "stun:stun.l.google.com:19302,stun:stun.cloudflare.com:3478").split(",");
 const KIND = 25050;
 const t0 = Date.now();
 const log = (...a: unknown[]) => console.error(`[${((Date.now() - t0) / 1000).toFixed(2)}s]`, ...a);
@@ -26,13 +26,13 @@ const unb64u = (s: string) => Buffer.from(s, "base64url");
 
 // ---- link and crypto ------------------------------------------------------
 function parseLink(link: string) {
-  const m = /^p2pcg:\/\/join\/([A-Za-z0-9_-]+)#([A-Za-z0-9_-]+)$/.exec(link);
-  if (!m) throw new Error("not a p2pcg join link");
+  const m = /^vine:\/\/join\/([A-Za-z0-9_-]+)#([A-Za-z0-9_-]+)$/.exec(link);
+  if (!m) throw new Error("not a vine join link");
   return { room: m[1]!, secret: unb64u(m[2]!) };
 }
 function roomKeys(room: string, secret: Buffer) {
-  const tag = createHash("sha256").update(`p2pcg-room:${room}`).digest("hex").slice(0, 32);
-  const key = Buffer.from(hkdfSync("sha256", secret, room, "p2pcg-signal-v1", 32));
+  const tag = createHash("sha256").update(`vine-room:${room}`).digest("hex").slice(0, 32);
+  const key = Buffer.from(hkdfSync("sha256", secret, room, "vine-signal-v1", 32));
   return { tag, key };
 }
 function seal(key: Buffer, obj: unknown): string {
@@ -83,7 +83,7 @@ const send = (dc: DataChannel, obj: unknown) => dc.sendMessage(JSON.stringify(ob
 async function host(expectPeers: number) {
   const room = b64u(randomBytes(16));
   const secret = randomBytes(32);
-  console.log(`p2pcg://join/${room}#${b64u(secret)}`);
+  console.log(`vine://join/${room}#${b64u(secret)}`);
   const peers = new Map<string, { pc: PeerConnection; authed: boolean }>();
   let finished = 0;
 
@@ -136,7 +136,7 @@ async function join(link: string) {
   const me = b64u(randomBytes(6));
   const pc = new nodeDataChannel.PeerConnection(`peer-${me}`, { iceServers: ICE });
   pc.onStateChange((s) => log(`state ${s}`));
-  const dc = pc.createDataChannel("p2pcg");
+  const dc = pc.createDataChannel("vine");
   const sig = signaller(room, secret, (m) => {
     if (m.type === "answer" && m.to === me) {
       log(`answer received (candidates: ${candTypes(m.sdp)})`);

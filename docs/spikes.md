@@ -20,7 +20,7 @@ results:
 
 Consequence: we bundle our code and keep the Relate native packages as normal
 dependencies. Still to check in M1: `npm pack`, then a clean install and
-`npx p2p-context-graph`. That will come with a `p2pcg doctor` command that
+`npx vine-context`. That will come with a `vine doctor` command that
 loads both native modules.
 
 ## B. Relate's MCP following the embedded writer: passed
@@ -39,7 +39,7 @@ JSON-RPC to it.
 | Calling `write_cypher` anyway | Refused (`isError`) |
 
 Consequence: the plan's §4.2 works as written. The host's own agent can
-attach Relate's MCP read-only, alongside p2pcg, with no writer contention. It
+attach Relate's MCP read-only, alongside vine, with no writer contention. It
 needs the `relate` CLI installed, so it stays optional.
 
 ## A. Host-star over node-datachannel with Nostr signalling: passed locally
@@ -47,7 +47,7 @@ needs the `relate` CLI installed, so it stays optional.
 `spikes/p2p-star.ts` and `spikes/nostr-lite.ts`. One host and two peers, as
 three processes on one Mac, signalling through public Nostr relays:
 
-- The link format is `p2pcg://join/<room>#<secret>`. Signalling events are
+- The link format is `vine://join/<room>#<secret>`. Signalling events are
   ephemeral kind 25050, tagged with a hash of the room id and encrypted with
   AES-256-GCM using a key derived (HKDF) from the secret. The secret is never
   sent.
@@ -69,7 +69,7 @@ Findings that change the plan:
 2. **Relay choice matters.** relay.damus.io refused the connection from here.
    offchain.pub, relay.snort.social, relay.primal.net, relay.nostr.net and
    nos.lol accepted ephemeral events (0.7–1.5 s to the first OK). Use 4–5
-   relays, configurable with `P2PCG_RELAYS`.
+   relays, configurable with `VINE_RELAYS`.
 3. Waiting for every relay to acknowledge added about 3 s per handshake.
    Resolving on the first acceptance fixed it.
 

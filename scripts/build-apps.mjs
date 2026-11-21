@@ -1,6 +1,6 @@
 // Builds the MCP App views into self-contained HTML files:
 // dist/apps/views.html (every view; the server fills in which one), and
-// dist/apps/shell.html (the localhost host page for `p2pcg ui`).
+// dist/apps/shell.html (the localhost host page for `vine ui`).
 import { build } from "esbuild";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -49,7 +49,7 @@ async function bundle(entry, file) {
   const js = r.outputFiles.find((f) => f.path.endsWith(".js")).text.replaceAll("</script", "<\\/script");
   const css = (r.outputFiles.find((f) => f.path.endsWith(".css"))?.text ?? "").replaceAll("</style", "<\\/style");
   // Function replacements: the bundle contains `$` sequences that string replacements would expand.
-  const html = template.replace("/*P2PCG_CSS*/", () => css).replace("/*P2PCG_JS*/", () => js);
+  const html = template.replace("/*VINE_CSS*/", () => css).replace("/*VINE_JS*/", () => js);
   writeFileSync(join(out, file), html);
   console.log(`apps: ${file} ${(html.length / 1024).toFixed(0)} KB`);
 }

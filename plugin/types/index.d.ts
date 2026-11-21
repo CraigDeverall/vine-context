@@ -1,4 +1,4 @@
-// What the p2p-context-graph mod keeps in $.state: the latest activity and
+// What the vine-context mod keeps in $.state: the latest activity and
 // snapshot of this chat's context from the MCP server, and the panel's choices.
 
 export type Person = {
@@ -90,7 +90,7 @@ export type Latest = { by: string; summary: string; at: string }
 
 declare module 'claude-code' {
   interface PluginState {
-    'p2p-context-graph': {
+    'vine-context': {
       activity: Shaped<Activity | null>
       latest: Latest | null
       tab: Shaped<Tab>

@@ -12,74 +12,18 @@ import { b64u, formatCode, unb64u, type Link } from "../p2p/link.js";
 export function socketPath(dataDir: string, graph: string): string {
   if (process.platform === "win32") {
     const h = createHash("sha256").update(`${dataDir}\0${graph}`).digest("hex").slice(0, 16);
-    return `\\\\.\\pipe\\p2pcg-${h}`;
+    return `\\\\.\\pipe\\vine-${h}`;
   }
   const preferred = join(dataDir, "run", `${graph}.sock`);
   if (Buffer.byteLength(preferred) <= 100) return preferred;
   const h = createHash("sha256").update(`${dataDir}\0${graph}`).digest("hex").slice(0, 16);
-  return join(process.platform === "darwin" ? "/tmp" : tmpdir(), `p2pcg-${h}.sock`);
+  return join(process.platform === "darwin" ? "/tmp" : tmpdir(), `vine-${h}.sock`);
 }
 
 export function hostDir(dataDir: string, graph: string): string {
   const dir = join(dataDir, "hosts", graph);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   return dir;
-}
-
-export interface ApprovedPeer {
-  name: string;
-  key: string;
-  role: Role;
-  /** When they first joined. */
-  approved_at: string;
-  /** The invite they first joined with. */
-  invite?: string;
-  /** What their install said about itself when they joined. */
-  agent?: string;
-  agent_version?: string;
-  p2pcg?: string;
-  platform?: string;
-}
-
-/** People let into the graph, keyed by public key. Written atomically, readable only by the host's user. */
-export class PeerStore {
-  private file: string;
-  private peers = new Map<string, ApprovedPeer>();
-
-  constructor(dir: string) {
-    this.file = join(dir, "peers.json");
-    if (existsSync(this.file)) for (const p of JSON.parse(readFileSync(this.file, "utf8")) as ApprovedPeer[]) this.peers.set(p.key, p);
-  }
-
-  get(key: string): ApprovedPeer | undefined {
-    return this.peers.get(key);
-  }
-
-  byName(name: string): ApprovedPeer | undefined {
-    return [...this.peers.values()].find((p) => p.name === name);
-  }
-
-  all(): ApprovedPeer[] {
-    return [...this.peers.values()];
-  }
-
-  put(p: ApprovedPeer): void {
-    this.peers.set(p.key, p);
-    this.save();
-  }
-
-  remove(key: string): boolean {
-    const had = this.peers.delete(key);
-    if (had) this.save();
-    return had;
-  }
-
-  private save(): void {
-    const tmp = `${this.file}.tmp`;
-    writeFileSync(tmp, JSON.stringify(this.all(), null, 1) + "\n", { mode: 0o600 });
-    chmodSync(tmp, 0o600);
-    renameSync(tmp, this.file);
-  }
 }
 
 /**

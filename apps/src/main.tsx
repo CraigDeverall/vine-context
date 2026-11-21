@@ -10,7 +10,7 @@ import { Receipt } from "./views/Receipt";
 
 declare global {
   interface Window {
-    __P2PCG_VIEW__?: string;
+    __VINE_VIEW__?: string;
   }
 }
 
@@ -46,7 +46,7 @@ function Root() {
       await setMode(["fullscreen", "pip"]);
     } catch (e) {
       if (!(e instanceof NoToolCalls)) return setError((e as Error).message);
-      await b.say(`Please run the p2p-context-graph tool ${PANEL_TOOL[view]} (from the view, which can't run tools in this app).`);
+      await b.say(`Please run the vine-context tool ${PANEL_TOOL[view]} (from the view, which can't run tools in this app).`);
     }
   };
   const back = async () => {
@@ -67,7 +67,7 @@ function Root() {
       </>
     );
   }
-  const View = VIEWS[window.__P2PCG_VIEW__ ?? ""];
+  const View = VIEWS[window.__VINE_VIEW__ ?? ""];
   if (!View) return <p className="notice bad">Unknown view.</p>;
   return (
     <>

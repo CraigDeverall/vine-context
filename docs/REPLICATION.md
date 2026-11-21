@@ -1,7 +1,7 @@
 # Replicated graphs: design
 
 Status: built, 2026-11-17 (all three stages, the model cut, and section 9).
-Where the build differs from this design, section 13 says how and why.
+Where the build differs from this design, section 12 says how and why.
 
 ## 1. Goal
 
@@ -17,7 +17,7 @@ when the host is gone (asleep, offline, sharing off) nobody can read or write.
 
 | Decision | Consequence |
 | --- | --- |
-| **Claims and Questions is the only model.** Other packs, the model studio, `install_model` / `validate_model` and `p2pcg model …` are removed (later, separately). | The changes are four fixed kinds, not arbitrary Cypher from a pack. |
+| **Claims and Questions is the only model.** Other packs, the model studio, `install_model` / `validate_model` and `vine model …` are removed (later, separately). | The changes are four fixed kinds, not arbitrary Cypher from a pack. |
 | **Ids are UUIDs** (v7: time-ordered, 128-bit) instead of today's 8 random characters. | Two machines never make the same id, so the only unique key in the model can't clash. |
 | **Machine clocks are assumed correct and in sync.** | Changes are ordered by their timestamp, ties broken by author key. No vector clocks for ordering. |
 | **Up to 20 members.** | Every member can connect to every other member (at most 190 links in the group). |
@@ -105,7 +105,7 @@ is sent to anyone:
 - After 10 seconds it's sent, and the receipt's button changes to
   *Withdraw*, which says that the text stays in the history.
 - The receipt shows the countdown.
-- Shutting down p2pcg within the 10 seconds keeps the change and sends it on
+- Shutting down vine within the 10 seconds keeps the change and sends it on
   the next start.
 
 10 seconds rather than 5, to leave time to read the receipt. It's one
@@ -194,8 +194,7 @@ Each stage is useful on its own and builds on the last.
 1. **Log, replicas, catch-up, still a star.** Writes become signed changes;
    every member keeps a full copy and can read and write offline; the host
    is the meeting point, and a returning member syncs with it. Ids become
-   UUIDs. Existing graphs are converted (section 10). *Most of the work is
-   here.*
+   UUIDs. *Most of the work is here.*
 2. **Mesh.** The group room and member-to-member sync (section 7). Any
    online members keep each other in step; the host is no longer special
    except for answering invites.
@@ -215,7 +214,7 @@ The mesh needs the same protections as the star, and a few more:
   `stop_sharing` turns it off (`start_sharing` turns it back on).
 - **To do:** WebRTC links pinged the same way; a dead link is dropped and
   set up again through the room.
-- **To do:** each machine's p2pcg starts at login (a login item / launch
+- **To do:** each machine's vine starts at login (a login item / launch
   agent), so a reboot doesn't take a member offline until someone opens an
   agent.
 - **To do:** `status` and the console show each relay's and each member
@@ -223,15 +222,7 @@ The mesh needs the same protections as the star, and a few more:
 - **To do:** a test for a member that comes back after a "sleep" (sockets
   that look open but are dead), on relays and on member links.
 
-## 10. Existing graphs
-
-Today's graphs have no log. Converting one writes a change for each existing
-claim, question, link and withdrawal, in `recorded_at` order, signed by the
-host. The original author's name is kept, and their key too where the host's
-member list has it. Old ids are kept as each node's `legacy_id`, so ids
-mentioned in earlier conversations still resolve.
-
-## 11. Testing
+## 10. Testing
 
 - Many replicas in one process (in-memory signalling, as the star tests use):
   random writes, random disconnects, random delivery order. Check every
@@ -244,17 +235,12 @@ mentioned in earlier conversations still resolve.
 - The real-relay check (as `invite-check.mjs` today), with three members and
   the creator offline.
 
-## 12. Open questions
+## 11. Open questions
 
 None at the moment. The four earlier ones are decided in section 2.
 
-## 13. As built: where it differs
+## 12. As built: where it differs
 
-- **Old ids are kept as they are** (section 10). A converted graph's items
-  keep their 8-character ids instead of getting UUIDs plus a `legacy_id`:
-  the formats can't clash, and ids in earlier conversations keep working. The
-  whole old graph is one `import` change by the creator, rather than one
-  change per item.
 - **The group secret isn't changed on removal** (sections 6 and 7). Every
   member's machine refuses a removed key at the link handshake and refuses
   its later changes, so a removed member gets nothing new; they can still see
@@ -275,7 +261,7 @@ None at the moment. The four earlier ones are decided in section 2.
   members syncing while the creator is away, roles and removal everywhere,
   three copies converging, held writes surviving a restart),
   `test/temporal-claims.test.ts` (order-independent applying),
-  `test/convert.test.ts` (old graphs), `test/nostr.test.ts` (relay keepalive).
+  `test/nostr.test.ts` (relay keepalive).
   A member link that goes silent is dropped by its pings, but that has no test
   of its own yet.
 
@@ -289,7 +275,7 @@ None at the moment. The four earlier ones are decided in section 2.
   attached contexts from a `.p2p-context` file per folder). A chat usually
   has one context and may add more (`add_context`, `remove_context`). The set
   and the write context are remembered in the data folder's `links.json`
-  under the chat's id (`P2PCG_CHAT`, else `CLAUDE_CODE_SESSION_ID`), so a
+  under the chat's id (`VINE_CHAT`, else `CLAUDE_CODE_SESSION_ID`), so a
   reopened chat gets them back. A new chat starts with its folder's linked
   contexts (the same file), else the one the CLI names, else none: there's no
   default. Contexts are found by id, then name. With one context the tools

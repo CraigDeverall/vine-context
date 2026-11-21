@@ -61,7 +61,7 @@ function machine(user: string) {
 describe("one context per chat", () => {
   it("starts with none, says how to choose, and keeps the chosen context when the chat is reopened", async () => {
     const me = machine("alice");
-    const first = await me.chat({ id: "chat-1", cwd: tempDir("p2pcg-empty-") });
+    const first = await me.chat({ id: "chat-1", cwd: tempDir("vine-empty-") });
     const none = await first.call("context_info");
     expect(none).toMatchObject({ context: null, your_contexts: [] });
     expect(none.next).toMatch(/no default/);
@@ -109,7 +109,7 @@ describe("one context per chat", () => {
 
   it("starts new chats in a linked folder with its context, without writing into the folder", async () => {
     const me = machine("alice");
-    const project = tempDir("p2pcg-project-");
+    const project = tempDir("vine-project-");
     const setup = await me.chat({ id: "setup", cwd: project });
     await setup.call("use_context", { name: "team", description: "What the team knows" });
     expect(await setup.call("link_folder")).toMatchObject({ folder: project, linked: ["team"] });

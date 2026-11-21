@@ -1,8 +1,8 @@
 {
   "mcpServers": {
-    "p2p-context-graph": {
-      "command": "sh",
-      "args": ["-c", "if command -v p2pcg >/dev/null 2>&1; then exec p2pcg mcp; else exec npx -y p2p-context-graph mcp; fi"]
+    "vine-context": {
+      "command": "vine",
+      "args": ["mcp"]
     }
   }
 }

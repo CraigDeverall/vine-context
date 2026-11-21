@@ -1,4 +1,4 @@
-// The p2p-context-graph mod: this chat's shared contexts inside Claude Code's own UI.
+// The vine-context mod: this chat's shared contexts inside Claude Code's own UI.
 //
 // - A band above the prompt, in every chat: the chat's context (usually one),
 //   who's online and the latest news. The context's name opens the panel's
@@ -16,7 +16,7 @@
 // "Save what this chat learned" hand the person's words to the agent as a
 // prompt, and the agent records them (see `prompts`).
 //
-// It reads through the p2p-context-graph MCP server's `context_activity` tool,
+// It reads through the vine-context MCP server's `context_activity` tool,
 // which never uses up the join notices meant for the agent, and acts through
 // the server's ordinary tools. It polls, so there's nothing to refresh.
 
@@ -31,28 +31,28 @@ const TICK_MS = 400
 const NOTICE_MS = 6000
 /** How many items a list shows before "Show more". */
 const PAGE = 20
-const SERVERS = ['plugin_p2p-context-graph_p2p-context-graph', 'plugin:p2p-context-graph:p2p-context-graph', 'p2p-context-graph']
+const SERVERS = ['plugin_vine-context_vine-context', 'plugin:vine-context:vine-context', 'vine-context']
 const NAME_RE = /^[a-z0-9][a-z0-9-]{0,62}$/
 
-const activity = atom({ plugin: 'p2p-context-graph', key: 'activity' } as const, null, { shape: 'activity-3' })
-const latest = atom({ plugin: 'p2p-context-graph', key: 'latest' } as const, null)
-const tab = atom({ plugin: 'p2p-context-graph', key: 'tab' } as const, 'overview', { shape: 'tab-3' })
-const code = atom({ plugin: 'p2p-context-graph', key: 'code' } as const, null)
-const notice = atom({ plugin: 'p2p-context-graph', key: 'notice' } as const, null)
-const error = atom({ plugin: 'p2p-context-graph', key: 'error' } as const, null)
-const confirmRemove = atom({ plugin: 'p2p-context-graph', key: 'confirmRemove' } as const, null)
-const draftName = atom({ plugin: 'p2p-context-graph', key: 'draftName' } as const, null)
-const editing = atom({ plugin: 'p2p-context-graph', key: 'editing' } as const, false)
-const switching = atom({ plugin: 'p2p-context-graph', key: 'switching' } as const, false)
-const detail = atom({ plugin: 'p2p-context-graph', key: 'detail' } as const, null)
-const composing = atom({ plugin: 'p2p-context-graph', key: 'composing' } as const, null)
-const renaming = atom({ plugin: 'p2p-context-graph', key: 'renaming' } as const, false)
-const filters = atom({ plugin: 'p2p-context-graph', key: 'filters' } as const, { text: '', claims: 'current', questions: 'open' })
-const more = atom({ plugin: 'p2p-context-graph', key: 'more' } as const, 0)
-const unattached = atom({ plugin: 'p2p-context-graph', key: 'unattached' } as const, null)
-const viewing = atom({ plugin: 'p2p-context-graph', key: 'viewing' } as const, null)
-const tick = atom({ plugin: 'p2p-context-graph', key: 'tick' } as const, 0)
-const inviting = atom({ plugin: 'p2p-context-graph', key: 'inviting' } as const, null)
+const activity = atom({ plugin: 'vine-context', key: 'activity' } as const, null, { shape: 'activity-3' })
+const latest = atom({ plugin: 'vine-context', key: 'latest' } as const, null)
+const tab = atom({ plugin: 'vine-context', key: 'tab' } as const, 'overview', { shape: 'tab-3' })
+const code = atom({ plugin: 'vine-context', key: 'code' } as const, null)
+const notice = atom({ plugin: 'vine-context', key: 'notice' } as const, null)
+const error = atom({ plugin: 'vine-context', key: 'error' } as const, null)
+const confirmRemove = atom({ plugin: 'vine-context', key: 'confirmRemove' } as const, null)
+const draftName = atom({ plugin: 'vine-context', key: 'draftName' } as const, null)
+const editing = atom({ plugin: 'vine-context', key: 'editing' } as const, false)
+const switching = atom({ plugin: 'vine-context', key: 'switching' } as const, false)
+const detail = atom({ plugin: 'vine-context', key: 'detail' } as const, null)
+const composing = atom({ plugin: 'vine-context', key: 'composing' } as const, null)
+const renaming = atom({ plugin: 'vine-context', key: 'renaming' } as const, false)
+const filters = atom({ plugin: 'vine-context', key: 'filters' } as const, { text: '', claims: 'current', questions: 'open' })
+const more = atom({ plugin: 'vine-context', key: 'more' } as const, 0)
+const unattached = atom({ plugin: 'vine-context', key: 'unattached' } as const, null)
+const viewing = atom({ plugin: 'vine-context', key: 'viewing' } as const, null)
+const tick = atom({ plugin: 'vine-context', key: 'tick' } as const, 0)
+const inviting = atom({ plugin: 'vine-context', key: 'inviting' } as const, null)
 
 type Engine = EngineInterface
 
@@ -194,7 +194,7 @@ let trail: string[] = []
 /** What's typed in the correction box, for its Send button. */
 let composeText = ''
 
-/** Calls a tool on the p2p-context-graph server, finding its name on first use. */
+/** Calls a tool on the vine-context server, finding its name on first use. */
 async function call($: Engine, tool: string, args: Record<string, unknown> = {}): Promise<any> {
   const names = server ? [server] : SERVERS
   let last: unknown
@@ -215,14 +215,14 @@ async function call($: Engine, tool: string, args: Record<string, unknown> = {})
       if (server) throw e
     }
   }
-  throw last instanceof Error ? last : new Error('The p2p-context-graph MCP server is not connected.')
+  throw last instanceof Error ? last : new Error('The vine-context MCP server is not connected.')
 }
 
 /** Why the server didn't answer, in words that say what to do about it. */
 export function trouble(message: string): string {
   if (/context_activity|unknown tool|not found|no such tool/i.test(message))
-    return 'This chat is still running an older p2p-context-graph server. Start a new chat (or restart this one) to pick up the new one.'
-  if (/not connected|no server|disconnected|closed/i.test(message)) return 'The p2p-context-graph server isn’t connected in this chat. Check it’s enabled, then start a new chat.'
+    return 'This chat is still running an older vine-context server. Start a new chat (or restart this one) to pick up the new one.'
+  if (/not connected|no server|disconnected|closed/i.test(message)) return 'The vine-context server isn’t connected in this chat. Check it’s enabled, then start a new chat.'
   return message
 }
 
@@ -593,7 +593,7 @@ export const register: Register = on => {
               {meta(`${short(a.folder.folder, 70)} · kept on this machine, nothing is written there`)}
             </Box>
           )}
-          {meta('Got a join code? Paste it to your agent, or run /p2p-context-graph:join with it.')}
+          {meta('Got a join code? Paste it to your agent, or run /vine-context:join with it.')}
         </Box>,
         none ? undefined : { label: 'Done', onPress: () => void update($, switching, () => false) },
       )
@@ -1036,7 +1036,7 @@ export const register: Register = on => {
       const waiting = t.open.filter(th => th.replies.length)
       const mineOpen = t.open.filter(th => isMine(th.q) && th.replies.length)
       const digest = a.digest?.at(-1)
-      const feed = a.recent.filter((c: Change) => c.kind !== 'import')
+      const feed = a.recent
       const ICON: Record<string, string> = { claim: '📌', question: '❓', reply: '↳', link: '🔗', withdraw: '✕', add_member: '👋', remove_member: '🚪', set_role: '🔑', rename: '✎', describe: '✎', create: '✦' }
       const need = (key: string, tone: string, text: unknown, button: unknown) =>
         card(
@@ -1447,7 +1447,7 @@ export const register: Register = on => {
                 {invites.length === 0
                   ? meta('Each code lets one person in: whoever uses it first. Codes stay here until they’re used, cancelled or expire.')
                   : invites.map((i: Invite) => {
-                      const send = `Join my context graph: /p2p-context-graph:join ${i.code}`
+                      const send = `Join my context graph: /vine-context:join ${i.code}`
                       const left = Math.max(0, Date.parse(i.expires_at) - now)
                       const hours = Math.round(left / 3600_000)
                       return (

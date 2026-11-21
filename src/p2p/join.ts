@@ -33,7 +33,7 @@ export class JoinRefused extends Error {}
 
 export function joinWithCode(link: Link, identity: Identity, o: JoinOptions): Promise<Welcome> {
   const me = b64u(randomBytes(6));
-  const pc = new nodeDataChannel.PeerConnection(`p2pcg-join-${me}`, { iceServers: o.ice });
+  const pc = new nodeDataChannel.PeerConnection(`vine-join-${me}`, { iceServers: o.ice });
   let answered = false;
   let offerTimer: NodeJS.Timeout | undefined;
   let settled = false;
@@ -73,7 +73,7 @@ export function joinWithCode(link: Link, identity: Identity, o: JoinOptions): Pr
         fail(
           new Error(
             answered
-              ? "Reached the person who invited you, but the connection didn't finish (a TURN server may be needed: P2PCG_ICE)."
+              ? "Reached the person who invited you, but the connection didn't finish (a TURN server may be needed: VINE_ICE)."
               : "No answer. The person who invited you isn't online right now (their machine answers the code), or the code has expired or was cancelled. Try again later, or ask them for a new code.",
           ),
         ),
@@ -81,10 +81,10 @@ export function joinWithCode(link: Link, identity: Identity, o: JoinOptions): Pr
     );
     deadline.unref();
     pc.onStateChange((s) => {
-      if (s === "failed") fail(new Error("Could not reach the person who invited you (NAT traversal failed; a TURN server may be needed: P2PCG_ICE)."));
+      if (s === "failed") fail(new Error("Could not reach the person who invited you (NAT traversal failed; a TURN server may be needed: VINE_ICE)."));
     });
 
-    const ch = new FramedChannel(pc.createDataChannel("p2pcg-join"));
+    const ch = new FramedChannel(pc.createDataChannel("vine-join"));
     ch.onMessage((m: any) => {
       if (settled) return;
       if (m?.t === "challenge") {
@@ -93,7 +93,7 @@ export function joinWithCode(link: Link, identity: Identity, o: JoinOptions): Pr
           proof: proof(link.secret, m.nonce, me),
           name: identity.name,
           key: identity.publicKey,
-          sig: identity.sign(`p2pcg-id-v1:${m.nonce}:${me}`),
+          sig: identity.sign(`vine-id-v1:${m.nonce}:${me}`),
           about: o.about ?? {},
         });
       } else if (m?.t === "denied") {

@@ -1,13 +1,13 @@
 // Join codes and the cryptography around them.
 //
-//   p2pcg1_<room>.<secret>
+//   vine1_<room>.<secret>
 //
 // Each invite has its own code. The room (16 random bytes) names the
 // signalling topic and tells the host which invite is being used. The secret
 // (32 random bytes) never leaves the two machines: signalling is encrypted with
 // a key derived from it, and a peer proves it holds it with an HMAC over the
 // host's challenge before any other message is accepted. The "1" is the format
-// version; "p2pcg2_" is kept for a later format (short code words).
+// version; "vine2_" is kept for a later format (short code words).
 
 import { createCipheriv, createDecipheriv, createHash, createHmac, hkdfSync, randomBytes, timingSafeEqual } from "node:crypto";
 
@@ -23,15 +23,14 @@ export function newLink(): Link {
   return { room: b64u(randomBytes(16)), secret: randomBytes(32) };
 }
 
-export const CODE_PREFIX = "p2pcg1_";
+export const CODE_PREFIX = "vine1_";
 
 export function formatCode(l: Link): string {
   return `${CODE_PREFIX}${l.room}.${b64u(l.secret)}`;
 }
 
-const CODE_RE = /(?<![A-Za-z0-9_-])p2pcg1_([A-Za-z0-9_-]{22})\.([A-Za-z0-9_-]{43})(?![A-Za-z0-9_-])/;
-const DAMAGED_RE = /p2pcg1_[A-Za-z0-9_.-]*/;
-const OLD_LINK_RE = /p2pcg:\/\/join\//;
+const CODE_RE = /(?<![A-Za-z0-9_-])vine1_([A-Za-z0-9_-]{22})\.([A-Za-z0-9_-]{43})(?![A-Za-z0-9_-])/;
+const DAMAGED_RE = /vine1_[A-Za-z0-9_.-]*/;
 
 /** Finds a join code in text (it may be pasted with other words around it). */
 export function parseCode(text: string): Link {
@@ -41,14 +40,13 @@ export function parseCode(text: string): Link {
     const secret = unb64u(m[2]!);
     if (b64u(unb64u(m[1]!)) === m[1] && unb64u(m[1]!).length === 16 && secret.length === 32 && b64u(secret) === m[2]) return { room: m[1]!, secret };
   }
-  if (m || DAMAGED_RE.test(t)) throw new Error("That join code is damaged or cut short: copy the whole code (p2pcg1_ then two parts joined by a dot) again.");
-  if (OLD_LINK_RE.test(t)) throw new Error("That is an old p2pcg:// join link, which no longer works. Ask the person for a new join code (it starts p2pcg1_).");
-  throw new Error("That is not a p2pcg join code. It looks like p2pcg1_<room>.<secret>.");
+  if (m || DAMAGED_RE.test(t)) throw new Error("That join code is damaged or cut short: copy the whole code (vine1_ then two parts joined by a dot) again.");
+  throw new Error("That is not a Vine Context join code. It looks like vine1_<room>.<secret>.");
 }
 
 export function roomKeys(l: Link): { tag: string; key: Buffer } {
-  const tag = createHash("sha256").update(`p2pcg-room:${l.room}`).digest("hex").slice(0, 32);
-  const key = Buffer.from(hkdfSync("sha256", l.secret, l.room, "p2pcg-signal-v1", 32));
+  const tag = createHash("sha256").update(`vine-room:${l.room}`).digest("hex").slice(0, 32);
+  const key = Buffer.from(hkdfSync("sha256", l.secret, l.room, "vine-signal-v1", 32));
   return { tag, key };
 }
 
@@ -72,7 +70,7 @@ export function unseal(key: Buffer, s: string): any | null {
 }
 
 export function proof(secret: Buffer, nonce: string, peer: string): string {
-  return b64u(createHmac("sha256", secret).update(`p2pcg-join-v1:${nonce}:${peer}`).digest());
+  return b64u(createHmac("sha256", secret).update(`vine-join-v1:${nonce}:${peer}`).digest());
 }
 
 export function checkProof(secret: Buffer, nonce: string, peer: string, given: unknown): boolean {

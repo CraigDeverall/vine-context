@@ -29,10 +29,10 @@ import { groupLink, Mesh } from "../p2p/mesh.js";
 import { lineReader, type Event, type Message, type Request } from "../p2p/protocol.js";
 import { iceServers, nostrSignaller, type SignalFactory } from "../p2p/signal.js";
 import { briefing, digest } from "./digest.js";
-import { InviteStore, PeerStore, hostDir, inviteLink, isLive, socketPath } from "./state.js";
+import { InviteStore, hostDir, inviteLink, isLive, socketPath } from "./state.js";
 
 /** How long a write stays on this machine, where Undo removes it without trace, before it is sent. */
-export const HOLD_MS = Number(process.env.P2PCG_HOLD_MS ?? 10_000);
+export const HOLD_MS = Number(process.env.VINE_HOLD_MS ?? 10_000);
 
 export interface HostOptions {
   dataDir: string;
@@ -209,22 +209,12 @@ export class Host {
     this.scheduleRelease();
   }
 
-  /** A new graph: this machine is its creator. Items from before change logs are imported. */
+  /** A new graph: this machine is its creator. */
   private async createGraph() {
     const id = uuidv7();
     this.group = { id, name: this.o.graph, secret: b64u(randomBytes(32)) };
     const now = new Date().toISOString();
     this.log.add(signChange({ id, graph: id, kind: "create", author: this.me, seq: 1, at: now, body: { name: this.o.graph, creator_name: this.identity.name } }, this.identity));
-    const legacy = await this.graph.legacyItems();
-    if (legacy) {
-      this.signNow("import", { nodes: legacy.nodes, edges: legacy.edges }, now);
-      // People the old host had let in become members.
-      const peers = new PeerStore(hostDir(this.o.dataDir, this.o.graph));
-      for (const p of peers.all())
-        if (p.key !== this.me)
-          this.signNow("add_member", { key: p.key, name: p.name, role: p.role, invite: p.invite ? { id: p.invite, label: null } : null, about: { agent: p.agent, agent_version: p.agent_version, p2pcg: p.p2pcg, platform: p.platform } }, now);
-      this.say(`imported ${legacy.nodes.length} items from before change logs`);
-    }
     writeGroup(this.o.dataDir, this.o.graph, this.group);
     await this.graph.reset();
   }
@@ -254,8 +244,7 @@ export class Host {
   /** Applies a data change if its author could make it then. */
   private async applyData(c: Pick<Change, "id" | "kind" | "author" | "at" | "body">, own = false) {
     const needs: Role = "contributor";
-    let allowed = own || this.members.allows(c.author, c.at, needs);
-    if (c.kind === "import") allowed = this.members.creator()?.key === c.author;
+    const allowed = own || this.members.allows(c.author, c.at, needs);
     if (!allowed) {
       this.refused.set(c.id, "its author couldn't make this change at that time");
       return { status: "refused" as const, reason: "not allowed" };
@@ -825,8 +814,6 @@ export class Host {
           return `linked ${b.from} ${String(b.relation ?? "").toLowerCase()} ${b.to}`;
         case "withdraw":
           return `withdrew ${b.node}${b.reason ? ` (${String(b.reason).slice(0, 80)})` : ""}`;
-        case "import":
-          return `brought in ${Array.isArray(b.nodes) ? b.nodes.length : 0} items from before change logs`;
         case "create":
           return `created the graph '${b.name}'`;
         case "add_member":
@@ -880,7 +867,7 @@ export class Host {
       removed_at: m.removed_at ?? null,
       invite: m.invite ?? null,
       agent: m.about?.agent ? `${m.about.agent}${m.about.agent_version ? ` ${m.about.agent_version}` : ""}` : null,
-      p2pcg: m.about?.p2pcg ?? null,
+      vine: m.about?.vine ?? null,
       platform: m.about?.platform ?? null,
       online: m.key === this.me ? Boolean(this.mesh) : Boolean(this.mesh?.isOnline(m.key)),
     }));

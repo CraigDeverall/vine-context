@@ -208,7 +208,7 @@ export class Graph {
 
   /** Opens (or creates) a graph's store on this machine. Every graph uses the Claims and Questions model. */
   static async open(opts: { name?: string; dataDir?: string; embedder?: Embedder } = {}): Promise<Graph> {
-    const name = opts.name ?? process.env.P2PCG_GRAPH ?? "default";
+    const name = opts.name ?? process.env.VINE_GRAPH ?? "default";
     if (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(name)) throw new ToolError(`Graph names are lower-case letters, digits and dashes: '${name}'.`);
     const dir = join(opts.dataDir ?? defaultDataDir(), "graphs", name);
     mkdirSync(dir, { recursive: true });
@@ -221,10 +221,10 @@ export class Graph {
     }
     const { db, conn } = store;
     const embedder = opts.embedder ?? makeEmbedder();
-    const found = conn.query("MATCH (m:_P2pcgMeta {key: 'meta'}) RETURN m {.*} AS m").rows[0]?.m as Meta | undefined;
+    const found = conn.query("MATCH (m:_VineMeta {key: 'meta'}) RETURN m {.*} AS m").rows[0]?.m as Meta | undefined;
     const pack = claimsPack();
     if (found && found.model !== pack.model.name)
-      throw new ToolError(`Graph '${name}' uses the model '${found.model}', which this version of p2p-context-graph no longer supports (only '${pack.model.name}').`);
+      throw new ToolError(`Graph '${name}' uses the model '${found.model}', which this version of vine-context no longer supports (only '${pack.model.name}').`);
     if (found && found.embedder !== embedder.name)
       throw new ToolError(`Graph '${name}' was embedded with '${found.embedder}', not '${embedder.name}'. Re-embedding is not supported yet.`);
     const graph = new Graph(name, dir, pack, embedder, db, conn, R, store);
@@ -259,7 +259,7 @@ export class Graph {
       applied.add(m.name);
     }
     this.conn.query(
-      "MERGE (m:_P2pcgMeta {key: 'meta'}) SET m.model = $model, m.model_version = $version, " +
+      "MERGE (m:_VineMeta {key: 'meta'}) SET m.model = $model, m.model_version = $version, " +
         "m.embedder = $embedder, m.embedding_dim = $dim, m.migrations = $migrations",
       {
         model: model.name,
@@ -413,7 +413,7 @@ export class Graph {
       this.conn.begin();
       try {
         const out = await this.applyOne(c, ctx);
-        if (out.status === "applied" && (c.kind === "claim" || c.kind === "question" || c.kind === "reply" || c.kind === "import")) await this.retryPending(ctx);
+        if (out.status === "applied" && (c.kind === "claim" || c.kind === "question" || c.kind === "reply")) await this.retryPending(ctx);
         this.conn.commit();
         return out;
       } catch (e) {
@@ -495,8 +495,6 @@ export class Graph {
         if (r.status === "pending") await this.addPending(c.id, "withdraw", { change: c.id, author: c.author, at: c.at, node, reason: str(b.reason, 500) });
         return r;
       }
-      case "import":
-        return this.importLegacy(c, ctx);
     }
     return { status: "refused", reason: `not a data change: ${c.kind}` };
   }
@@ -553,70 +551,21 @@ export class Graph {
     return { status: "applied", result: { id: w.node, withdrawn_at: w.at } };
   }
 
-  /** A graph from before change logs: its items, as they were, in one change by the graph's creator. */
-  private async importLegacy(c: Pick<Change, "id" | "body">, ctx: ApplyContext): Promise<Applied> {
-    const nodes = Array.isArray(c.body.nodes) ? c.body.nodes : [];
-    const edges = Array.isArray(c.body.edges) ? c.body.edges : [];
-    let n = 0;
-    for (const raw of nodes) {
-      const p = (raw?.props ?? {}) as Record<string, unknown>;
-      const label = raw?.label === "Question" ? "Question" : raw?.label === "Claim" ? "Claim" : undefined;
-      const id = str(p.id, 64);
-      const text = str(p.text, 2000);
-      if (!label || !id || !text || typeof p.recorded_at !== "string") continue;
-      const exists = await this.rows(`OPTIONAL MATCH (n:Claim|Question {id: $id}) RETURN n IS NOT NULL AS found`, { id });
-      if (exists[0]?.found) continue;
-      const author = typeof p.author === "string" ? p.author : null;
-      await this.rows(
-        `CREATE (n:${label} {id: $id, text: $text, embedding: $embedding, recorded_at: datetime($recorded_at), recorded_by: $recorded_by, author: $author, change: $change}) ` +
-          `SET n.source = $source, n.about_from = CASE WHEN $about_from IS NULL THEN null ELSE date($about_from) END, n.about_to = CASE WHEN $about_to IS NULL THEN null ELSE date($about_to) END, ` +
-          `n.withdrawn_at = CASE WHEN $withdrawn_at IS NULL THEN null ELSE datetime($withdrawn_at) END, n.withdrawn_by = $withdrawn_by, n.withdraw_reason = $withdraw_reason`,
-        {
-          id,
-          text,
-          embedding: contentWords(text).length ? this.embedder.embed(text) : null,
-          recorded_at: p.recorded_at,
-          recorded_by: author ? ctx.name(author) : (str(p.recorded_by, 60) ?? "unknown"),
-          author,
-          change: c.id,
-          source: str(p.source, 500),
-          about_from: day(p.about_from),
-          about_to: day(p.about_to),
-          withdrawn_at: typeof p.withdrawn_at === "string" ? p.withdrawn_at : null,
-          withdrawn_by: str(p.withdrawn_by, 60),
-          withdraw_reason: str(p.withdraw_reason, 500),
-        },
-      );
-      n++;
-    }
-    for (const e of edges) {
-      const type = str(e?.type, 20);
-      const p = (e?.props ?? {}) as Record<string, unknown>;
-      if (!type || !REL_TYPES.has(type) || typeof e.from !== "string" || typeof e.to !== "string") continue;
-      await this.rows(
-        `MATCH (a:Claim|Question {id: $from}), (b:Claim|Question {id: $to}) WHERE NOT EXISTS { MATCH (a)-[:${type}]->(b) } ` +
-          `CREATE (a)-[:${type} {recorded_at: datetime($at), recorded_by: $by, author: $author, change: $change}]->(b)`,
-        { from: e.from, to: e.to, at: typeof p.recorded_at === "string" ? p.recorded_at : new Date(0).toISOString(), by: str(p.recorded_by, 60) ?? "unknown", author: typeof p.author === "string" ? p.author : null, change: c.id },
-      );
-    }
-    return { status: "applied", result: { imported: n } };
-  }
-
   private async addPending(change: string, kind: "edge" | "withdraw", data: Record<string, unknown>) {
-    await this.rows(`CREATE (:_P2pcgPending {change: $change, kind: $kind, data: $data})`, { change, kind, data: JSON.stringify(data) });
+    await this.rows(`CREATE (:_VinePending {change: $change, kind: $kind, data: $data})`, { change, kind, data: JSON.stringify(data) });
   }
 
   /** Retries links and withdrawals that were waiting for an item that may now exist. */
   private async retryPending(ctx: ApplyContext) {
     for (let round = 0; round < 3; round++) {
-      const pending = await this.rows(`MATCH (p:_P2pcgPending) RETURN p.change AS change, p.kind AS kind, p.data AS data`);
+      const pending = await this.rows(`MATCH (p:_VinePending) RETURN p.change AS change, p.kind AS kind, p.data AS data`);
       if (!pending.length) return;
       let progress = false;
       for (const p of pending) {
         const d = JSON.parse(String(p.data));
         const r = p.kind === "edge" ? await this.link(d, ctx) : await this.withdraw(d, ctx);
         if (r.status !== "pending") {
-          await this.rows(`MATCH (p:_P2pcgPending {change: $change, kind: $kind, data: $data}) DELETE p`, { change: p.change, kind: p.kind, data: p.data });
+          await this.rows(`MATCH (p:_VinePending {change: $change, kind: $kind, data: $data}) DELETE p`, { change: p.change, kind: p.kind, data: p.data });
           progress = true;
         }
       }
@@ -629,7 +578,7 @@ export class Graph {
     return this.serial(async () => {
       const found = await this.rows(`MATCH (n:Claim|Question|Reply {change: $change}) RETURN count(n) AS n`, { change: changeId });
       await this.rows(`MATCH (n:Claim|Question|Reply {change: $change}) DETACH DELETE n`, { change: changeId });
-      await this.rows(`MATCH (p:_P2pcgPending {change: $change}) DELETE p`, { change: changeId });
+      await this.rows(`MATCH (p:_VinePending {change: $change}) DELETE p`, { change: changeId });
       return Number(found[0]?.n ?? 0) > 0;
     });
   }
@@ -637,18 +586,18 @@ export class Graph {
   /** Empties the store (keeping the model's indexes), to build it again from the log. */
   async reset(): Promise<void> {
     await this.serial(async () => {
-      await this.rows(`MATCH (n) WHERE NOT n:_P2pcgMeta DETACH DELETE n`);
-      await this.rows(`MATCH (m:_P2pcgMeta {key: 'meta'}) SET m.applied = null`);
+      await this.rows(`MATCH (n) WHERE NOT n:_VineMeta DETACH DELETE n`);
+      await this.rows(`MATCH (m:_VineMeta {key: 'meta'}) SET m.applied = null`);
     });
   }
 
   /** Records which changes the store holds (a digest of their ids, in the order applied). */
   async setApplied(digest: string): Promise<void> {
-    await this.serial(() => this.rows(`MATCH (m:_P2pcgMeta {key: 'meta'}) SET m.applied = $digest`, { digest }));
+    await this.serial(() => this.rows(`MATCH (m:_VineMeta {key: 'meta'}) SET m.applied = $digest`, { digest }));
   }
 
   async getApplied(): Promise<string | null> {
-    const r = await this.serial(() => this.rows(`MATCH (m:_P2pcgMeta {key: 'meta'}) RETURN m.applied AS applied`));
+    const r = await this.serial(() => this.rows(`MATCH (m:_VineMeta {key: 'meta'}) RETURN m.applied AS applied`));
     return (r[0]?.applied as string | null) ?? null;
   }
 
@@ -709,19 +658,6 @@ export class Graph {
   async linkedIds(id: string): Promise<Set<string>> {
     const rows = await this.serial(() => this.rows(`MATCH (n:Claim|Question {id: $id})-[]-(m:Claim|Question) RETURN m.id AS id`, { id }));
     return new Set(rows.map((r) => String(r.id)));
-  }
-
-  /** Whether this store holds items from before change logs (to import them once). */
-  async legacyItems(): Promise<{ nodes: { label: string; props: Record<string, unknown> }[]; edges: { type: string; from: string; to: string; props: Record<string, unknown> }[] } | null> {
-    return this.serial(async () => {
-      const nodes = await this.rows(`MATCH (n:Claim|Question) WHERE n.change IS NULL RETURN labels(n) AS labels, n {.*} AS props ORDER BY n.recorded_at`);
-      if (!nodes.length) return null;
-      const edges = await this.rows(`MATCH (a:Claim|Question)-[r]->(b:Claim|Question) WHERE r.change IS NULL RETURN type(r) AS type, a.id AS from, b.id AS to, r {.*} AS props`);
-      return {
-        nodes: nodes.map((n) => ({ label: (n.labels as string[]).includes("Claim") ? "Claim" : "Question", props: n.props as Record<string, unknown> })),
-        edges: edges.map((e) => ({ type: String(e.type), from: String(e.from), to: String(e.to), props: e.props as Record<string, unknown> })),
-      };
-    });
   }
 
   /** The model summary and its instructions, for agents (the model_guide tool). */

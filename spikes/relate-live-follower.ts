@@ -1,5 +1,5 @@
 // Spike B: can the host's agent attach Relate's own MCP server, read-only, to
-// the store that p2pcg is writing through embedded Relate?
+// the store that vine is writing through embedded Relate?
 //
 // The writer (this process) keeps the store open and writes. A child process
 // runs `relate serve --mcp stdio --read-only=live` on the same directory. We

@@ -1,5 +1,5 @@
 {
-  "name": "p2p-context-graph",
+  "name": "vine-context",
   "version": "0.0.0",
   "description": "Share a Relate context graph of dated claims and open questions with other people's AI agents, peer to peer. Every member keeps a full copy, synced whenever they're online.",
   "license": "Apache-2.0",
@@ -7,7 +7,7 @@
   "skills": "./skills/",
   "mcpServers": "./.mcp.json",
   "interface": {
-    "displayName": "p2p context graph",
+    "displayName": "Vine Context",
     "shortDescription": "Share a context graph between people's agents",
     "longDescription": "One shared Relate graph for a group's agents, peer to peer with no server. Every member keeps a full copy that syncs when they're online. Record claims and questions; share it with a join code; see who believed what, when.",
     "category": "Productivity",

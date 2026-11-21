@@ -2,19 +2,19 @@
   "format_version": 5,
   "next_node_id": 1,
   "next_rel_id": 0,
-  "checkpoint_lsn": 5,
-  "commit_ts": 5,
+  "checkpoint_lsn": 6,
+  "commit_ts": 6,
   "node_parts": [
     {
-      "path": "nodes/0-262144-42e6b051cf938d2b82ed305464e70033.parquet",
+      "path": "nodes/0-262144-21b78fe928fe4d94ab97d4ee2cd6e477.parquet",
       "id_lo": 0,
       "id_hi": 262144,
       "rows": 1,
-      "bytes": 1942
+      "bytes": 1941
     }
   ],
   "rel_parts": [],
-  "bytes_per_node": 1942.0,
+  "bytes_per_node": 1941.0,
   "bytes_per_rel": 0.0,
   "codec": "parquet",
   "indexes": [
@@ -27,6 +27,11 @@
       "name": "question_id_key",
       "label": "Question",
       "property": "id#RANGE#question_id_key"
+    },
+    {
+      "name": "reply_id_key",
+      "label": "Reply",
+      "property": "id#RANGE#reply_id_key"
     },
     {
       "name": "search_embedding",
@@ -54,6 +59,16 @@
       "name": "question_id_key",
       "relationship": false,
       "label": "Question",
+      "properties": [
+        "id"
+      ],
+      "kind": "unique",
+      "property_type": null
+    },
+    {
+      "name": "reply_id_key",
+      "relationship": false,
+      "label": "Reply",
       "properties": [
         "id"
       ],
@@ -99,6 +114,17 @@
         ],
         "with_properties": []
       },
+      "reply_id_key": {
+        "kind": "Range",
+        "relationship": false,
+        "labels": [
+          "Reply"
+        ],
+        "properties": [
+          "id"
+        ],
+        "with_properties": []
+      },
       "search_embedding": {
         "kind": "Vector",
         "relationship": false,
@@ -127,6 +153,7 @@
     "index_options": {
       "claim_id_key": {},
       "question_id_key": {},
+      "reply_id_key": {},
       "search_embedding": {
         "indexConfig": {
           "t": "map",
