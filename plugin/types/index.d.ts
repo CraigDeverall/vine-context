@@ -73,6 +73,30 @@ export type Invite = {
   expires_at: string
 }
 
+/** One of this machine's contexts in full (the server's `context_details`), for the panel's details view. */
+export type ContextDetails = {
+  name: string
+  id: string | null
+  description: string | null
+  role: Person['role']
+  /** Whether you made it. */
+  yours: boolean
+  created_by: string | null
+  in_chat: boolean
+  writes_here: boolean
+  sharing: boolean
+  members: number
+  /** How many of the other members are online. */
+  online: number
+  /** How many items of each kind it holds, withdrawn ones included. */
+  items: Record<string, number>
+  changes: number
+  held: number
+  /** Join codes waiting to be used; null unless you're an admin. */
+  open_invites: number | null
+  stored_at: string
+}
+
 export type Tab = 'overview' | 'questions' | 'claims' | 'people'
 
 /** What the Questions and Claims lists show: the words to match, and which part of each list. */
@@ -101,8 +125,14 @@ declare module 'claude-code' {
       notice: string | null
       error: string | null
       confirmRemove: string | null
-      /** A new context's name, waiting for its description; starting with ! it's what's wrong with the name typed. */
-      draftName: string | null
+      /** The new-context step (the panel shows only that), with what's wrong with what was typed; null while it's closed. */
+      creating: { error: string | null } | null
+      /** The context (by name) whose details the panel shows; null is the list. */
+      managing: string | null
+      /** The details of the context being managed, once the server has answered. */
+      details: ContextDetails | null
+      /** The context whose deletion is being confirmed (the panel shows only that), with what's wrong with what was typed. */
+      deleting: { name: string; error: string | null } | null
       /** Whether the description is being edited (the panel shows only that). */
       editing: boolean
       /** Whether the panel shows the chat's contexts, to turn on and off, instead of a context. */

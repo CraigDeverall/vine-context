@@ -140,6 +140,7 @@ From then on everyone works on their own copy, limited by their role (contributo
 **A chat's contexts.** A chat usually uses one context, and keeps it when you reopen the chat: it's remembered on your machine under the chat's id (Claude Code's session id, or `VINE_CHAT`), with nothing written into your project.
 - *"Use the incident-42 context"* (`use_context`) sets or switches it; a new name starts a new context, and the agent asks what it's for (its description, which `describe_context` or ✎ in the panel changes).
 - *"Also use the infra context"* (`add_context`) adds another; `remove_context` takes one out (or all). With several, reads search them all, and the agent puts each write in the one whose description fits.
+- *"Delete the old-spike context"* (`delete_context`) deletes this machine's copy for good, after you confirm it by name; other members keep theirs. In the panel it's under a context's **Details**, beside its description, sharing state and where it's stored.
 - There's no default: a new chat has none until you choose, so the agent asks before its first write, and the band shows *No context · Choose*.
 - Optionally, *"start this folder's chats with these contexts"* (`link_folder`) makes new chats in that folder, or below it, start with them. That's kept on your machine too.
 

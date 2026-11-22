@@ -3,7 +3,7 @@
 // and there's no default. With several, reads span them and writes are routed.
 
 import { EventEmitter } from "node:events";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -170,6 +170,56 @@ describe("several contexts in one chat", () => {
     links.chats.old = { name: "team", id: links.chats.old.contexts[0].id, at: links.chats.old.at };
     writeFileSync(file, JSON.stringify(links));
     expect((await me.chat({ id: "old" }).then((x) => x.call("context_info"))).context).toBe("team");
+  });
+});
+
+describe("details and deleting", () => {
+  it("shows any local context's details, and deletes one only when its name is confirmed", async () => {
+    const me = machine("alice");
+    const c = await me.chat({ id: "chat-1", cwd: "/work/app" });
+    await c.call("use_context", { name: "incident", description: "The checkout slowdown" });
+    await c.call("add_context", { name: "infra", description: "How our infrastructure is set up" });
+    await c.call("add_claim", { text: "Checkout p95 rose to 4 s" });
+    await c.call("link_folder");
+    const other = await me.chat({ id: "chat-2" });
+    await other.call("use_context", { name: "incident" });
+
+    // Details: for a context in the chat, and for one that isn't.
+    expect(await c.call("context_details", { name: "incident" })).toMatchObject({
+      name: "incident",
+      description: "The checkout slowdown",
+      role: "admin",
+      yours: true,
+      in_chat: true,
+      writes_here: true,
+      members: 1,
+      items: { Claim: 1 },
+    });
+    expect(await other.call("context_details", { name: "infra" })).toMatchObject({ name: "infra", in_chat: false, writes_here: false, role: "admin" });
+    expect((await other.call("context_info")).contexts.map((x: any) => x.name)).toEqual(["incident"]);
+    await expect(c.call("context_details", { name: "lunch" })).rejects.toThrow(/no context 'lunch'/);
+
+    // Deleting needs the name again, exactly.
+    await expect(c.call("delete_context", { name: "incident", confirm: "yes" })).rejects.toThrow(/Not deleted/);
+    expect(existsSync(join(me.dataDir, "graphs", "incident"))).toBe(true);
+
+    const r = await c.call("delete_context", { name: "incident", confirm: "incident" });
+    expect(r).toMatchObject({ deleted: "incident", your_contexts: ["infra"], write_to: "infra" });
+    expect(existsSync(join(me.dataDir, "graphs", "incident"))).toBe(false);
+    expect(existsSync(join(me.dataDir, "hosts", "incident"))).toBe(false);
+    expect(readdirSync(join(me.dataDir, "graphs"))).toEqual(["infra"]);
+    expect((await c.call("context_info")).contexts.map((x: any) => x.name)).toEqual(["infra"]);
+    // The chat's and the folder's links no longer name it.
+    const links = JSON.parse(readFileSync(join(me.dataDir, "links.json"), "utf8"));
+    expect(links.chats["chat-1"].contexts.map((x: any) => x.name)).toEqual(["infra"]);
+    expect(links.folders["/work/app"].contexts.map((x: any) => x.name)).toEqual(["infra"]);
+    expect(links.chats["chat-2"]).toBeUndefined();
+
+    // Another chat that used it is told, and doesn't start an empty context under its name.
+    await expect(other.call("context_info")).rejects.toThrow(/was deleted from this machine/);
+    expect((await other.call("context_info")).context).toBe(null);
+    expect(existsSync(join(me.dataDir, "graphs", "incident"))).toBe(false);
+    await expect(c.call("delete_context", { name: "incident", confirm: "incident" })).rejects.toThrow(/no context 'incident'/);
   });
 });
 

@@ -117,3 +117,21 @@ export function setFolderLink(dataDir: string, folder: string, link: Omit<Link, 
   else delete links.folders[dir];
   save(dataDir, links);
 }
+
+/** Takes a deleted context out of every chat's and folder's link (a link left with none goes too). */
+export function forgetContext(dataDir: string, name: string, id?: string): void {
+  const links = load(dataDir);
+  const is = (r: Ref) => (id && r.id ? r.id === id : r.name === name);
+  const prune = (all: Record<string, Stored>) => {
+    for (const [k, v] of Object.entries(all)) {
+      const l = asLink(v);
+      if (!l || !l.contexts.some(is)) continue;
+      const contexts = l.contexts.filter((r) => !is(r));
+      if (!contexts.length) delete all[k];
+      else all[k] = { contexts, ...(l.write_to && contexts.some((r) => r.name === l.write_to) ? { write_to: l.write_to } : {}), at: l.at };
+    }
+  };
+  prune(links.chats);
+  prune(links.folders);
+  save(dataDir, links);
+}

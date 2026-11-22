@@ -19,6 +19,8 @@
 // contexts or a role change.
 
 import { spawn } from "node:child_process";
+import { existsSync, renameSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import { McpServer, type RegisteredTool } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { RANK } from "../core/changes.js";
@@ -27,14 +29,15 @@ import { fingerprint, nameSource, setName, type Identity } from "../core/identit
 import { claimsPack } from "../core/pack.js";
 import { packageInfo } from "../core/package-root.js";
 import { autoShare, defaultDataDir } from "../core/paths.js";
-import type { LocalHost } from "../host/client.js";
-import { placeReplica, readGroup } from "../host/host.js";
+import { LocalHost } from "../host/client.js";
+import { hostAlive, placeReplica, readGroup } from "../host/host.js";
+import { socketPath } from "../host/state.js";
 import { joinWithCode } from "../p2p/join.js";
 import { parseCode } from "../p2p/link.js";
 import type { GraphDescription } from "../p2p/protocol.js";
 import type { SignalFactory } from "../p2p/signal.js";
 import { registerViews, uiMeta } from "./apps.js";
-import { chatLink, folderLink, localContexts, resolveRef, setChatLink, setFolderLink, type Link } from "./links.js";
+import { chatLink, folderLink, forgetContext, localContexts, resolveRef, setChatLink, setFolderLink, type Link } from "./links.js";
 
 type Content = { content: { type: "text"; text: string }[]; structuredContent?: Record<string, unknown>; isError?: boolean };
 const text = (value: unknown): Content => ({
@@ -276,6 +279,14 @@ export class Session {
       throw new Error(`This chat doesn't use '${name}': it uses ${[...this.contexts.keys()].map((n) => `'${n}'`).join(", ") || "no context"}. add_context adds one.`);
     if (!c) throw new Error(this.noContext());
     if (!c.host.closed) return c;
+    // Deleted from this machine (by another chat): reopening it would start an empty context under its name.
+    if (!this.localNames().includes(c.name)) {
+      this.contexts.delete(c.name);
+      if (this.writeTo === c.name) this.writeTo = [...this.contexts.keys()][0];
+      if (this.o.chat) setChatLink(this.dataDir, this.o.chat, this.contexts.size ? this.link() : null);
+      this.offer();
+      throw new Error(`The context '${c.name}' was deleted from this machine, so this chat no longer uses it.`);
+    }
     c.host = await this.o.openLocal!(c.name);
     c.d = await c.host.request<Description>("describe");
     return c;
@@ -436,6 +447,84 @@ export class Session {
     const lines = this.news.splice(0);
     out.content.unshift({ type: "text", text: `${lines.join("\n")}\nTell the person this, briefly.` });
     return out;
+  }
+
+  /** One of this machine's contexts in full, whether or not the chat uses it: what the panel's details show. */
+  private async details(name: string): Promise<Record<string, unknown>> {
+    if (!this.localNames().includes(name)) throw new Error(`There's no context '${name}' on this machine.`);
+    const attached = this.contexts.has(name);
+    // One the chat doesn't use is opened just for this read.
+    const host = attached ? (await this.target(name)).host : await this.o.openLocal!(name);
+    try {
+      const d = await host.request<Description>("describe");
+      const info = await host.request<Record<string, any>>("info");
+      const role: Role | null = d.member === false ? null : d.you.role;
+      const people = ((info.people ?? []) as { role: Role | null; online?: boolean; you?: boolean }[]).filter((p) => p.role);
+      let invites: number | null = null;
+      if (role === "admin") {
+        const s = await host.request<{ invites?: { state: string }[] }>("status");
+        invites = (s.invites ?? []).filter((i) => i.state === "open").length;
+      }
+      return {
+        name,
+        id: d.graph_id ?? null,
+        description: d.description ?? null,
+        role,
+        yours: Boolean(d.creator),
+        created_by: info.created_by ?? null,
+        in_chat: attached,
+        writes_here: attached && this.writeTo === name,
+        sharing: Boolean(info.sharing?.sharing),
+        members: people.length,
+        online: people.filter((p) => p.online && !p.you).length,
+        items: info.nodes ?? {},
+        changes: info.log?.changes ?? 0,
+        held: info.log?.held ?? 0,
+        open_invites: invites,
+        stored_at: join(this.dataDir, "graphs", name),
+      };
+    } finally {
+      if (!attached) host.close();
+    }
+  }
+
+  /** Deletes this machine's copy of a context: its items, change log, join codes and every link to it. */
+  private async deleteLocal(name: string): Promise<Record<string, unknown>> {
+    if (!this.localNames().includes(name)) throw new Error(`There's no context '${name}' on this machine.`);
+    const id = readGroup(this.dataDir, name)?.id;
+    if (this.contexts.has(name)) this.detach(name);
+    // Out of the list first, so no chat on this machine reopens it (which would start an empty one) while its host stops.
+    const store = join(this.dataDir, "graphs", name);
+    let doomed = store;
+    try {
+      const aside = join(this.dataDir, "graphs", `.deleting-${name}-${Date.now()}`);
+      renameSync(store, aside);
+      doomed = aside;
+    } catch {
+      // Windows won't move a folder with open files: it goes once the host has stopped.
+    }
+    const sock = socketPath(this.dataDir, name);
+    if (await hostAlive(sock)) {
+      try {
+        const h = await LocalHost.connect(sock);
+        await h.request("shutdown").catch(() => undefined);
+        h.close();
+      } catch {
+        // it stopped by itself
+      }
+      for (let i = 0; i < 40 && (await hostAlive(sock)); i++) await new Promise((r) => setTimeout(r, 150));
+      if (await hostAlive(sock)) {
+        if (doomed !== store) renameSync(doomed, store);
+        throw new Error(`The host for '${name}' didn't stop, so nothing was deleted. Try again in a moment.`);
+      }
+      await new Promise((r) => setTimeout(r, 200)); // let the host's process exit
+    }
+    const rm = (dir: string) => rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    rm(doomed);
+    rm(join(this.dataDir, "hosts", name));
+    if (process.platform !== "win32" && existsSync(sock)) rmSync(sock, { force: true });
+    forgetContext(this.dataDir, name, id);
+    return { deleted: name, id: id ?? null, contexts: this.list(), write_to: this.writeTo ?? null, your_contexts: this.localNames() };
   }
 
   private localNames(): string[] {
@@ -792,6 +881,43 @@ export class Session {
       wrap(async ({ name }: { name?: string }) => {
         for (const n of name ? [name] : [...this.contexts.keys()]) this.detach(n);
         return { contexts: this.list(), write_to: this.writeTo ?? null, ...(this.contexts.size ? {} : { next: this.noContext() }) };
+      }),
+    );
+
+    this.server.registerTool(
+      "context_details",
+      {
+        title: "A context's details",
+        description:
+          "Everything about one context on this machine, whether or not this chat uses it: what it's for, its id, your role, who made it, how many members and items it has, whether it's syncing, and where it's stored. Read-only.",
+        inputSchema: { name: nameArg },
+        annotations: ro,
+      },
+      async ({ name }: { name: string }) => {
+        try {
+          const out = await this.details(name);
+          return { ...text(out), structuredContent: out };
+        } catch (e) {
+          return failure((e as Error).message); // no withNews: the panel reads this too
+        }
+      },
+    );
+
+    this.server.registerTool(
+      "delete_context",
+      {
+        title: "Delete a context from this machine",
+        description:
+          "Permanently delete this machine's copy of a context: its claims, questions and replies, its change log, the join codes made here, and every chat's and folder's link to it. It can't be undone. " +
+          "Other members keep their own copies; with no other member, it is gone for good. Getting it back means joining again with a new code from an admin. " +
+          "Only when the person asked to delete it: first tell them what it removes and ask them to confirm by name, then pass that name as `confirm`. To only stop using it in this chat, use remove_context.",
+        inputSchema: { name: nameArg, confirm: z.string().describe("The context's name again, as the person confirmed it") },
+        annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+      },
+      wrap(async ({ name, confirm }: { name: string; confirm: string }) => {
+        if (confirm !== name) throw new Error(`Not deleted: to confirm, pass the context's name ('${name}') as \`confirm\`, exactly.`);
+        const r = await this.deleteLocal(name);
+        return { ...r, note: "Deleted from this machine. Other members keep their copies.", ...(this.contexts.size ? {} : { next: this.noContext() }) };
       }),
     );
 

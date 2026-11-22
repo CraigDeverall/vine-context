@@ -8,8 +8,9 @@
 //   changed, recent activity), the context's Questions with their threads, its
 //   Claims (with conflicts and history), and its People. An item opens on its
 //   own, with everything linked to it. Anything being edited (the description,
-//   an answer, a correction, an invite, a new context, the chat's contexts)
-//   takes the whole panel until it's done or cancelled.
+//   an answer, a correction, an invite, a new context, the chat's contexts,
+//   one context's details, a deletion being confirmed) takes the whole panel
+//   until it's done or cancelled.
 //
 // Agents write; people steer. The panel never writes a claim itself: Answer,
 // "Answer with this", Correct, "Keep this one", Look into it, Catch me up and
@@ -23,7 +24,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, UiPressArgument } from 'claude-code'
 
-import type { Activity, Change, Compose, Filters, GraphEdge, GraphNode, Invite, Latest, Person, Tab } from '../types'
+import type { Activity, Change, Compose, ContextDetails, Filters, GraphEdge, GraphNode, Invite, Latest, Person, Tab } from '../types'
 
 const PANE = 'context-graph'
 const POLL_MS = 4000
@@ -41,7 +42,10 @@ const code = atom({ plugin: 'vine-context', key: 'code' } as const, null)
 const notice = atom({ plugin: 'vine-context', key: 'notice' } as const, null)
 const error = atom({ plugin: 'vine-context', key: 'error' } as const, null)
 const confirmRemove = atom({ plugin: 'vine-context', key: 'confirmRemove' } as const, null)
-const draftName = atom({ plugin: 'vine-context', key: 'draftName' } as const, null)
+const creating = atom({ plugin: 'vine-context', key: 'creating' } as const, null)
+const managing = atom({ plugin: 'vine-context', key: 'managing' } as const, null)
+const details = atom({ plugin: 'vine-context', key: 'details' } as const, null)
+const deleting = atom({ plugin: 'vine-context', key: 'deleting' } as const, null)
 const editing = atom({ plugin: 'vine-context', key: 'editing' } as const, false)
 const switching = atom({ plugin: 'vine-context', key: 'switching' } as const, false)
 const detail = atom({ plugin: 'vine-context', key: 'detail' } as const, null)
@@ -58,6 +62,11 @@ type Engine = EngineInterface
 
 /** What's typed in the new invite's note, for its Make button (the field's own submit works too). */
 let inviteNote = ''
+/** What's typed in the new context's two fields, for its Create button. */
+let newName = ''
+let newDescription = ''
+/** What's typed to confirm a deletion, for its Delete button. */
+let deleteText = ''
 
 /** The tabs, each with its icon. */
 const TABS: { tab: Tab; icon: string; label: string }[] = [
@@ -220,7 +229,7 @@ async function call($: Engine, tool: string, args: Record<string, unknown> = {})
 
 /** Why the server didn't answer, in words that say what to do about it. */
 export function trouble(message: string): string {
-  if (/context_activity|unknown tool|not found|no such tool/i.test(message))
+  if (/context_activity|context_details|delete_context|unknown tool|not found|no such tool/i.test(message))
     return 'This chat is still running an older vine-context server. Start a new chat (or restart this one) to pick up the new one.'
   if (/not connected|no server|disconnected|closed/i.test(message)) return 'The vine-context server isn’t connected in this chat. Check it’s enabled, then start a new chat.'
   return message
@@ -307,6 +316,35 @@ async function act($: Engine, tool: string, args: Record<string, unknown>, done?
     await update($, error, () => (e as Error).message)
   }
   await refresh($)
+  await loadDetails($)
+}
+
+/** Reads the details of the context being managed (again, after a change). */
+async function loadDetails($: Engine) {
+  const name = await read($, managing)
+  if (!name) return
+  try {
+    const d = (await call($, 'context_details', { name })) as ContextDetails
+    if ((await read($, managing)) === name) await update($, details, () => d)
+  } catch (e) {
+    await update($, error, () => trouble((e as Error).message))
+  }
+}
+
+/** Opens one context's details (or, with null, goes back to the list). */
+async function manage($: Engine, name: string | null) {
+  await update($, details, () => null)
+  await update($, managing, () => name)
+  if (name) await loadDetails($)
+}
+
+/** What's wrong with a new context's name and description, or null. */
+export function newContextProblem(name: string, description: string, existing: string[]): string | null {
+  if (!name) return 'Give it a name.'
+  if (!NAME_RE.test(name)) return 'A context name is lower-case letters, digits and dashes, such as "checkout-incident".'
+  if (existing.includes(name)) return `There's already a context '${name}' on this machine: turn it on in the list.`
+  if (!description.trim()) return 'Say what it’s for: every member’s agent reads that to decide what belongs there.'
+  return null
 }
 
 /** Hands the person's words to the agent, as their own prompt: it shows in the chat, so the panel says nothing more. */
@@ -325,6 +363,10 @@ async function ask($: Engine, text: string) {
 async function openPane($: Engine, contexts = false) {
   wantSnapshot = true
   await update($, switching, () => contexts)
+  // The panel opens on the list or the context, never on a step left half done.
+  await update($, creating, () => null)
+  await update($, deleting, () => null)
+  await manage($, null)
   if (contexts) await openItem($, null)
   await refresh($)
   return $.ui.open({ id: PANE, title: 'Context', closeOnEscape: true })
@@ -443,7 +485,6 @@ export const register: Register = on => {
       <Button key={key} label={`${active ? '▸ ' : ''}${label}`} variant={active ? 'primary' : 'secondary'} dimColor={!active} onPress={onPress} />
     )
     const note = await read($, notice)
-    const draft = await read($, draftName)
     const made = await read($, code)
     const none = await read($, unattached)
     const dismiss = () => void update($, error, () => null).then(() => say($, null))
@@ -479,106 +520,372 @@ export const register: Register = on => {
       </Box>
     )
 
-    // A new context's second step: what it's for. Only that.
-    if (draft && !draft.startsWith('!'))
+    /** A label over a field as wide as the panel, with a line of help under it. */
+    const field = (label: string, input: unknown, help?: string) => (
+      <Box flexDirection="column" gap="xs">
+        <Text weight="semibold" bold>
+          {label}
+        </Text>
+        {input}
+        {help && meta(help)}
+      </Box>
+    )
+    const here = none ?? a?.your_contexts ?? []
+    const using = a?.contexts ?? []
+    const inChat = (n: string) => using.find(c => c.name === n)
+    /** Turns a context on or off for this chat. */
+    const toggle = (n: string) =>
+      void (inChat(n)
+        ? act($, 'remove_context', { name: n }, `'${n}' is off for this chat. It stays on this machine.`)
+        : act($, using.length ? 'add_context' : 'use_context', { name: n }, `'${n}' is on for this chat.`))
+    /** Starts the join-code step for one of the chat's contexts: the panel moves to it, and the code lands in its People tab. */
+    const share = (n: string) => {
+      inviteNote = ''
+      return update($, viewing, () => n)
+        .then(() => refresh($))
+        .then(() => manage($, null))
+        .then(() => update($, switching, () => false))
+        .then(() => update($, inviting, () => 'contributor' as Invite['role']))
+    }
+
+    // A new context: its name and what it's for, together. Only that.
+    const creatingNow = await read($, creating)
+    if (creatingNow) {
+      const close = () => void update($, creating, () => null)
+      const create = () => {
+        const name = newName.trim().toLowerCase().replace(/\s+/g, '-')
+        const description = newDescription.trim()
+        const problem = newContextProblem(name, description, here)
+        if (problem) return update($, creating, () => ({ error: problem }))
+        newName = ''
+        newDescription = ''
+        return update($, creating, () => null)
+          .then(() => update($, switching, () => false))
+          .then(() => update($, viewing, () => name))
+          .then(() => act($, a ? 'add_context' : 'use_context', { name, description }, `Created '${name}'${a ? ' and added it to this chat' : ''}. Its first join code is under People.`))
+      }
       return modal(
         'new-context-step',
-        `New context: ${draft}`,
-        'What goes in it? Every member’s agent reads this to decide what belongs there.',
-        <Box flexDirection="column" gap="xs">
-          <Input
-            key="new-description"
-            label={`What is '${draft}' for?`}
-            placeholder="What goes in it, in a sentence or two"
-            submitLabel="Create"
-            autoFocus
-            onSubmit={(v: string) =>
-              v.trim() &&
-              void update($, draftName, () => null)
-                .then(() => update($, switching, () => false))
-                .then(() => update($, viewing, () => draft))
-                .then(() => act($, a ? 'add_context' : 'use_context', { name: draft, description: v.trim() }, `Created '${draft}'${a ? ' and added it to this chat' : ''}. Its first join code is under People.`))
-            }
-          />
-          {meta('It’s yours: you’re its admin. Invite people from its People tab.')}
+        'Create a new context',
+        'A context holds what a group knows, as claims and questions, shared with the people you invite.',
+        <Box flexDirection="column" gap="md">
+          {field(
+            'Name',
+            <Input
+              key="new-name"
+              placeholder="e.g. checkout-incident"
+              autoFocus
+              onInput={(v: string) => (newName = v)}
+              onSubmit={(v: string) => {
+                newName = v
+                return create()
+              }}
+            />,
+            'Short: lower-case letters, digits and dashes.',
+          )}
+          {field(
+            'What is it for?',
+            <Input
+              key="new-description"
+              placeholder="What goes in it, in a sentence or two"
+              rows={3}
+              onInput={(v: string) => (newDescription = v)}
+              onSubmit={(v: string) => {
+                newDescription = v
+                return create()
+              }}
+            />,
+            'Every member’s agent reads this to decide what belongs there. You can change it later.',
+          )}
+          {creatingNow.error && (
+            <Text color="error" wrap="wrap">
+              {creatingNow.error}
+            </Text>
+          )}
+          <Box flexDirection="row" gap="xs">
+            <Button key="create-context" label="Create" variant="primary" onPress={() => create()} />
+            <Button key="cancel-create" label="Cancel" variant="secondary" dimColor onPress={close} />
+          </Box>
+          {meta('It’s yours: you’re its admin, and it’s added to this chat. Invite people from its People tab, or with Share in the list.')}
         </Box>,
-        { label: 'Cancel', onPress: () => void update($, draftName, () => null) },
+        { label: 'Cancel', onPress: close },
       )
+    }
 
     // The chat's contexts, each with a switch: on means this chat uses it.
     if (none !== null || (await read($, switching))) {
-      const here = none ?? a?.your_contexts ?? []
-      const using = a?.contexts ?? []
-      const inChat = (n: string) => using.find(c => c.name === n)
       const many = using.length > 1
+
+      // Confirming a deletion: only that. Nothing goes until the name is typed.
+      const doomed = await read($, deleting)
+      if (doomed && here.includes(doomed.name)) {
+        const n = doomed.name
+        const d = await read($, details)
+        const known = d && d.name === n ? d : null
+        const close = () => {
+          deleteText = ''
+          void update($, deleting, () => null)
+        }
+        const confirm = (typed: string) => {
+          if (typed.trim() !== n) return update($, deleting, () => ({ name: n, error: `Type ${n} exactly to delete it. Nothing was deleted.` }))
+          deleteText = ''
+          return update($, deleting, () => null)
+            .then(() => manage($, null))
+            .then(() => update($, viewing, () => null))
+            .then(() => act($, 'delete_context', { name: n, confirm: n }, `'${n}' was deleted from this machine.`))
+        }
+        const items = known ? Object.values(known.items).reduce((x, y) => x + y, 0) : null
+        const others = known ? known.members - (known.role ? 1 : 0) : null
+        return modal(
+          'delete-step',
+          `Delete ${n}?`,
+          `This permanently deletes this machine’s copy of '${n}'${items !== null ? `: its ${items} item${items === 1 ? '' : 's'}, their history` : ': its claims, questions and replies, their history'}, the join codes made here, and every chat’s and folder’s link to it. It can’t be undone.`,
+          <Box flexDirection="column" gap="md">
+            {card(
+              'delete-effects',
+              <Box flexDirection="column" gap="xs">
+                {others === null ? (
+                  <Text wrap="wrap">Other members keep their own copies. If you’re its only member, it’s gone for good.</Text>
+                ) : others > 0 ? (
+                  <Text wrap="wrap">
+                    {others} other member{others === 1 ? ' keeps their' : 's keep their'} own copy, and nothing is deleted for them. To get it back you’d need a new join code from one of its admins.
+                  </Text>
+                ) : (
+                  <Text color="warning" wrap="wrap">
+                    You’re its only member, so this is the only copy: once deleted, it’s gone for good.
+                  </Text>
+                )}
+                {known?.yours && others !== null && others > 0 && (
+                  <Text color="warning" wrap="wrap">
+                    You made this context. The other members keep syncing with each other, but the join codes you made stop working.
+                  </Text>
+                )}
+                {inChat(n) && meta('To only stop using it in this chat, turn it off instead: it stays on this machine.')}
+              </Box>,
+              'warning',
+            )}
+            {field(
+              `Type ${n} to confirm`,
+              <Input key={`delete-confirm-${n}`} placeholder={n} autoFocus onInput={(v: string) => (deleteText = v)} onSubmit={(v: string) => confirm(v)} />,
+            )}
+            {doomed.error && (
+              <Text color="error" wrap="wrap">
+                {doomed.error}
+              </Text>
+            )}
+            <Box flexDirection="row" gap="xs">
+              <Button key="keep-context" label="Keep it" variant="primary" onPress={close} />
+              <Button key={`delete-${n}`} label="Delete permanently" variant="secondary" onPress={() => confirm(deleteText)} />
+            </Box>
+          </Box>,
+          { label: 'Cancel', onPress: close },
+        )
+      }
+
+      // One context's details and settings.
+      const managed = await read($, managing)
+      if (managed && here.includes(managed)) {
+        const n = managed
+        const c = inChat(n)
+        const loadedDetails = await read($, details)
+        const d = loadedDetails && loadedDetails.name === n ? loadedDetails : null
+        const isAdmin = (d?.role ?? c?.role) === 'admin'
+        const description = d ? d.description : (c?.description ?? null)
+        const row = (label: string, value: unknown) => (
+          <Box key={`detail-${label}`} flexDirection="row" gap={1}>
+            <Box width={12} flexShrink={0}>
+              <Text dimColor>{label}</Text>
+            </Box>
+            <Box flexShrink={1}>
+              <Text wrap="wrap">{value}</Text>
+            </Box>
+          </Box>
+        )
+        const count = (k: string, one: string, many: string) => `${d?.items[k] ?? 0} ${(d?.items[k] ?? 0) === 1 ? one : many}`
+        return modal(
+          'context-details',
+          n,
+          null,
+          <Box flexDirection="column" gap="md">
+            <Box flexDirection="column" gap="xs">
+              {heading('What it’s for')}
+              {description ? (
+                <Text wrap="wrap">{description}</Text>
+              ) : (
+                <Text italic dimColor wrap="wrap">
+                  No description yet, so agents won’t know what belongs here.
+                </Text>
+              )}
+              {isAdmin && c && (
+                <Box flexDirection="row">
+                  <Button
+                    key={`describe-${n}`}
+                    label="✎ Edit description"
+                    variant="secondary"
+                    onPress={() =>
+                      update($, viewing, () => n)
+                        .then(() => refresh($))
+                        .then(() => manage($, null))
+                        .then(() => update($, switching, () => false))
+                        .then(() => update($, editing, () => true))
+                    }
+                  />
+                </Box>
+              )}
+            </Box>
+            <Box flexDirection="column" gap="xs">
+              {heading('This chat')}
+              <Box flexDirection="row" gap="xs" flexWrap="wrap" alignItems="center">
+                <Button key={`detail-toggle-${n}`} label={c ? '◉ On' : '○ Off'} variant={c ? 'primary' : 'secondary'} dimColor={!c} onPress={() => toggle(n)} />
+                {c && many && !c.writes_here && (
+                  <Button key={`detail-write-${n}`} label="✎ Write here" variant="secondary" onPress={() => void act($, 'add_context', { name: n, write_here: true }, `New items go to '${n}' unless another fits better.`)} />
+                )}
+                {c && (
+                  <Button
+                    key={`detail-open-${n}`}
+                    label="Open"
+                    variant="secondary"
+                    onPress={() =>
+                      update($, viewing, () => n)
+                        .then(() => refresh($))
+                        .then(() => manage($, null))
+                        .then(() => update($, switching, () => false))
+                    }
+                  />
+                )}
+              </Box>
+              {meta(
+                c
+                  ? many
+                    ? c.writes_here
+                      ? 'Your agent reads it, and writes here when no other context clearly fits.'
+                      : 'Your agent reads it, and writes here when its description fits.'
+                    : 'Your agent reads and writes here.'
+                  : 'Off for this chat. Turn it on to use it here, and to share it or change its settings.',
+              )}
+            </Box>
+            <Box flexDirection="column" gap="xs">
+              {heading('Sharing')}
+              {d ? (
+                <Text wrap="wrap">
+                  <Text color={d.sharing ? 'success' : 'warning'}>● </Text>
+                  {d.sharing ? 'Syncing' : 'Offline'}
+                  <Text dimColor>
+                    {' '}
+                    · {d.members} member{d.members === 1 ? '' : 's'}
+                    {d.members > 1 ? ` · ${d.online} of the others online` : ''}
+                    {d.open_invites ? ` · ${d.open_invites} join code${d.open_invites === 1 ? '' : 's'} waiting` : ''}
+                  </Text>
+                </Text>
+              ) : (
+                <Text dimColor>Loading…</Text>
+              )}
+              {c && (
+                <Box flexDirection="row" gap="xs" flexWrap="wrap">
+                  {isAdmin && <Button key={`detail-share-${n}`} label="+ Share" variant="primary" onPress={() => share(n)} />}
+                  {d &&
+                    (d.sharing ? (
+                      <Button key={`detail-offline-${n}`} label="Go offline" variant="secondary" dimColor onPress={() => void act($, 'stop_sharing', { context: n }, `'${n}' is offline: not syncing until you go online again.`)} />
+                    ) : (
+                      <Button key={`detail-online-${n}`} label="Go online" variant="secondary" onPress={() => void act($, 'start_sharing', { context: n }, `'${n}' is back online: syncing with the other members.`)} />
+                    ))}
+                </Box>
+              )}
+              {c && !isAdmin && meta('Only an admin can invite people.')}
+            </Box>
+            <Box flexDirection="column" gap="xs">
+              {heading('About')}
+              {d ? (
+                <Box flexDirection="column">
+                  {row('Your role', d.role ?? 'removed (you keep your copy to read)')}
+                  {row('Made by', d.yours ? 'you' : (d.created_by ?? 'unknown'))}
+                  {row('Holds', `${count('Claim', 'claim', 'claims')} · ${count('Question', 'question', 'questions')} · ${count('Reply', 'reply', 'replies')} · ${d.changes} change${d.changes === 1 ? '' : 's'} in all`)}
+                  {d.held > 0 && row('Not yet sent', `${d.held} just written, still only on this machine`)}
+                  {row('Id', d.id ?? 'none')}
+                  {row('Stored at', d.stored_at)}
+                </Box>
+              ) : (
+                <Text dimColor>{err ? 'Couldn’t read its details.' : 'Loading…'}</Text>
+              )}
+            </Box>
+            <Box flexDirection="column" gap="xs">
+              {heading('Delete')}
+              {meta('Deletes this machine’s copy for good. Other members keep theirs. You’ll be asked to confirm.')}
+              <Box flexDirection="row">
+                <Button
+                  key={`ask-delete-${n}`}
+                  label="Delete from this machine…"
+                  variant="secondary"
+                  dimColor
+                  onPress={() => {
+                    deleteText = ''
+                    return update($, deleting, () => ({ name: n, error: null }))
+                  }}
+                />
+              </Box>
+            </Box>
+          </Box>,
+          { label: '‹ Contexts', onPress: () => void manage($, null) },
+        )
+      }
+
       return modal(
         'contexts',
         'Contexts in this chat',
         none
           ? here.length
-            ? 'This chat has no context yet, so your agent will ask which it’s for. Turn one on, or start one.'
-            : 'A context holds what a group knows, as claims and questions, shared with the people you invite. Start one for this chat, or ask your agent to join one with a code someone sent you.'
+            ? 'This chat has no context yet, so your agent will ask which it’s for. Turn one on, or create one.'
+            : 'A context holds what a group knows, as claims and questions, shared with the people you invite. Create one for this chat, or join one with a code someone sent you.'
           : many
             ? 'Your agent reads all of these, and puts each new item in the one whose description fits. ✎ marks where it writes when none clearly does.'
             : 'Most chats use one context. Turn another on to use it too: your agent then picks the right one for each item.',
         <Box flexDirection="column" gap="sm">
+          <Box flexDirection="column" gap="xs">
+            <Box flexDirection="row">
+              <Button
+                key="create-new-context"
+                label="+ Create new context"
+                variant="primary"
+                onPress={() => {
+                  newName = ''
+                  newDescription = ''
+                  return update($, creating, () => ({ error: null }))
+                }}
+              />
+            </Box>
+            {meta('Got a join code? Paste it to your agent, or run /vine-context:join with it.')}
+          </Box>
           {here.map(n => {
             const c = inChat(n)
             return card(
               `ctx-${n}`,
-              <Box flexDirection="row" gap={1} justifyContent="space-between" alignItems="center">
-                <Box flexDirection="column" flexShrink={1}>
-                  <Text weight="semibold" bold>
-                    {n}
-                    {c && <Text dimColor weight="regular"> · {c.role ?? 'removed'}</Text>}
-                    {c && many && c.writes_here ? <Text color="suggestion"> ✎ writes here</Text> : ''}
-                  </Text>
-                  {c && (
-                    <Text size="footnote" dimColor italic={!c.description} wrap="wrap">
-                      {c.description ?? 'No description yet'}
+              <Box flexDirection="column" gap="xs">
+                <Box flexDirection="row" gap={1} justifyContent="space-between" alignItems="center">
+                  <Box flexDirection="row" gap="xs" alignItems="center" flexShrink={1} flexWrap="wrap">
+                    <Button key={`name-${n}`} label={n} plain onPress={() => manage($, n)} />
+                    <Text>
+                      {c && <Text dimColor>· {c.role ?? 'removed'}</Text>}
+                      {c && many && c.writes_here ? <Text color="suggestion"> ✎ writes here</Text> : ''}
                     </Text>
-                  )}
+                  </Box>
+                  <Button key={`toggle-${n}`} label={c ? '◉ On' : '○ Off'} variant={c ? 'primary' : 'secondary'} dimColor={!c} onPress={() => toggle(n)} />
                 </Box>
-                <Box flexDirection="row" gap="xs" alignItems="center">
+                {c && (
+                  <Text size="footnote" dimColor italic={!c.description} wrap="wrap">
+                    {c.description ?? 'No description yet'}
+                  </Text>
+                )}
+                <Box flexDirection="row" gap="xs" flexWrap="wrap" alignItems="center">
+                  <Button key={`details-${n}`} label="Details" variant="secondary" dimColor onPress={() => manage($, n)} />
+                  {c?.role === 'admin' && <Button key={`share-${n}`} label="Share" variant="secondary" dimColor onPress={() => share(n)} />}
                   {c && many && !c.writes_here && (
                     <Button key={`write-${n}`} label="✎ Write here" variant="secondary" dimColor onPress={() => void act($, 'add_context', { name: n, write_here: true }, `New items go to '${n}' unless another fits better.`)} />
                   )}
-                  <Button
-                    key={`toggle-${n}`}
-                    label={c ? '◉ On' : '○ Off'}
-                    variant={c ? 'primary' : 'secondary'}
-                    dimColor={!c}
-                    onPress={() =>
-                      void (c
-                        ? act($, 'remove_context', { name: n }, `'${n}' is off for this chat. It stays on this machine.`)
-                        : act($, using.length ? 'add_context' : 'use_context', { name: n }, `'${n}' is on for this chat.`))
-                    }
-                  />
                 </Box>
               </Box>,
               c ? 'suggestion' : undefined,
             )
           })}
-          {card(
-            'new-context',
-            <Box flexDirection="column" gap="xs">
-              <Text weight="semibold" bold>
-                New context
-              </Text>
-              <Input
-                key="new-name"
-                placeholder="A short name: lower-case letters, digits and dashes"
-                submitLabel="Next"
-                onSubmit={(v: string) => {
-                  const name = v.trim().toLowerCase().replace(/\s+/g, '-')
-                  if (!NAME_RE.test(name)) return update($, draftName, () => `!A context name is lower-case letters, digits and dashes, such as "checkout-incident".`)
-                  if (here.includes(name)) return update($, draftName, () => `!There's already a context '${name}' on this machine: turn it on above.`)
-                  return update($, draftName, () => name)
-                }}
-              />
-              {draft?.startsWith('!') && <Text color="error">{draft.slice(1)}</Text>}
-            </Box>,
-          )}
           {a?.folder && (
             <Box flexDirection="column" gap="xs">
               <Button
@@ -593,7 +900,6 @@ export const register: Register = on => {
               {meta(`${short(a.folder.folder, 70)} · kept on this machine, nothing is written there`)}
             </Box>
           )}
-          {meta('Got a join code? Paste it to your agent, or run /vine-context:join with it.')}
         </Box>,
         none ? undefined : { label: 'Done', onPress: () => void update($, switching, () => false) },
       )
