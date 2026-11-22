@@ -1,0 +1,22 @@
+[package]
+name = "vine_embedder"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+napi = "3.16.2"
+napi-derive = "3.7.1"
+tokenizers = { version = "0.23.2", default-features = false, features = ["fancy-regex"] }
+tract-onnx = "0.23.10"
+
+[build-dependencies]
+napi-build = "2.6.0"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+strip = true

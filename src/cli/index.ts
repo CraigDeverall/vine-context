@@ -28,6 +28,7 @@ Environment:
   VINE_CONTEXT     The context a new chat starts with when its folder has none linked (default: none; the agent asks)
   VINE_CHAT        The chat's id, to remember its context (default: Claude Code's session id)
   VINE_DATA_DIR    Where contexts live (default: ~/.local/share/vine-context)
+  VINE_EMBEDDER    How search turns text into vectors: hash (default), or bge-small or minilm once built with \`npm run build:embedder\`
   VINE_AUTO_SHARE  off: new contexts don't sync until you share them
   VINE_HOLD_MS     How long a write stays on this machine (Undo) before it is sent (default 10000)
   VINE_RELAYS      Nostr relays for signalling, comma-separated
@@ -282,6 +283,13 @@ async function doctor(): Promise<number> {
     const { claimsPack } = await import("../core/pack.js");
     const p = claimsPack();
     return `${p.model.title}: ${p.tools.length} tools`;
+  });
+  await check("search embedder", async () => {
+    const { makeEmbedder } = await import("../core/embed.js");
+    const e = makeEmbedder();
+    const v = e.embed("hello graph");
+    if (v?.length !== e.dim) throw new Error(`${e.name} returned ${v?.length ?? "no"} numbers, not ${e.dim}`);
+    return e.name === "hash-256" ? `${e.name} (built in; matches words, not meaning)` : `${e.name} (${e.dim} dimensions, matches meaning)`;
   });
   await check("data directory", async () => {
     const { defaultDataDir } = await import("../core/graph.js");

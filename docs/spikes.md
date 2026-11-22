@@ -82,3 +82,92 @@ Findings that change the plan:
   CI covers this once the repo is on GitHub.
 
 Both are carried into M2's "done when".
+
+# Post-M4 spike: a Rust semantic embedder
+
+Run on 2026-11-21 on macOS arm64 (Apple M1 Pro), with Node 22.17, Rust 1.100,
+`tract-onnx` 0.23.10, `tokenizers` 0.23.2 and `napi` 3.16.2. The addon is now in
+[`native/embedder/`](../native/embedder) and the benchmark scripts are in
+[`spikes/embed-rs/`](../spikes/embed-rs).
+
+## D. Sentence embeddings from a Rust addon, called synchronously: passed
+
+A napi-rs addon runs the model in pure Rust with tract, so there is no
+onnxruntime library. Node loads it with `require` and calls
+`embed(text): Float32Array` synchronously, which is the shape of the `Embedder`
+interface in `src/core/embed.ts`. The model files are the ONNX exports from
+`Xenova/bge-small-en-v1.5` and `Xenova/all-MiniLM-L6-v2` on Hugging Face.
+
+- **Addon size:** 21.6 MB, stripped, thin LTO. It links only `libSystem` and
+  `libiconv`.
+- **Dynamic length works.** tract ran the models with a different token count
+  on every call, with no padding and no per-length plan.
+- **The int8-quantized exports run in tract** and agree with full precision:
+  cosine 0.996 (bge-small) and 0.990 (MiniLM) at worst over 8 texts.
+
+| Model | File | Load | 14 tokens (p50) | 256 tokens (p50) | Memory added |
+|---|---|---|---|---|---|
+| bge-small-en-v1.5, int8 | 34.0 MB | 0.6–0.7 s | 6.3–7.2 ms | 99–101 ms | 130–175 MB |
+| bge-small-en-v1.5, fp32 | 133.1 MB | 0.9 s | 6.9 ms | 66 ms | 353 MB |
+| all-MiniLM-L6-v2, int8 | 23.0 MB | 0.3 s | 3.6 ms | 51 ms | 107 MB |
+| all-MiniLM-L6-v2, fp32 | 90.4 MB | 0.5 s | 3.6 ms | 38 ms | 226 MB |
+| hash-256 (today) | none | none | 0.04 ms | not measured | none |
+
+All four produce 384-dimension unit vectors. tract ran on one thread.
+Quantizing saves disk and memory but not time: on long texts the int8 files
+were slower than fp32.
+
+**Ranking by meaning.** `bench.mjs` holds 8 claims and 6 queries written to
+share meaning but few words ("When do we ship?" for "The release is scheduled
+for the first week of December."). All four model variants put the right claim
+first for 6 of 6. `hash-256` managed 2 of 6 (`baseline.mjs`). This is a sanity
+check on a hand-written set, not a retrieval benchmark.
+
+Consequence: the Rust route removes both objections recorded in M3. Installed
+cost is about 45 MB (addon plus MiniLM int8) or 56 MB (addon plus bge-small
+int8) per platform, with no download on first run if the model ships in the
+package.
+
+**Not yet proven:**
+
+- **Other platforms.** Only darwin-arm64 was built. Linux x64/arm64 and
+  Windows x64 need a CI build matrix, and their speed is unmeasured.
+- **Vectors against a reference.** The output was checked for self-consistency
+  (int8 against fp32) and ranking, not against sentence-transformers.
+- **Startup.** The 0.3–0.7 s load would be paid at every server start unless
+  the model loads on first use.
+
+To run it again: `npm run build:embedder -- all`, then
+`node spikes/embed-rs/bench.mjs all-MiniLM-L6-v2 model_quantized.onnx mean`
+(one model per process), and `npx tsx spikes/embed-rs/baseline.mjs` for
+`hash-256`.
+
+## E. The embedder as a per-platform npm package: passed on macOS arm64
+
+Run on 2026-11-23 on the same machine. `scripts/pack-embedder.mjs` assembles
+`vine-context-embedder-<os>-<arch>` from the built addon and the bge-small
+int8 model; `scripts/pack-check.mjs` installs it beside the vine-context
+tarball in an empty folder.
+
+- **Size, darwin-arm64:** a 32.0 MB tarball; 56.3 MB installed (addon 21.6 MB,
+  model 34.0 MB, tokenizer 0.7 MB).
+- **Found without configuration.** From the clean install,
+  `VINE_EMBEDDER=bge-small vine doctor` reported
+  `bge-small-en-v1.5-int8 (384 dimensions, matches meaning)` with no
+  `VINE_EMBEDDER_DIR`: vine resolved the package beside itself.
+- **darwin-x64 cross-compiles** from this machine
+  (`--target x86_64-apple-darwin`): a 25.9 MB addon. It was not run.
+- **Without the package nothing changes.** The same clean install ran
+  `hash-256` by default. Asking for a model that is not installed fails with
+  how to install it (covered by a unit test, not by a clean install).
+
+**Not yet proven:**
+
+- **The `embedder` workflow has never run.** It is written for darwin-arm64,
+  darwin-x64 (cross-compiled, run under Rosetta by an x64 Node), linux-x64,
+  linux-arm64 and win32-x64, and each job runs the addon's tests and the clean
+  install. Whether the runners have Rosetta, and whether tract builds on
+  Windows and Linux arm64, is unknown until it runs on GitHub.
+- **Publishing.** No package is on npm, and vine-context does not list them as
+  optional dependencies yet (see Open in `docs/PLAN.md`).
+- **musl Linux** (Alpine) has no package; it keeps `hash-256`.

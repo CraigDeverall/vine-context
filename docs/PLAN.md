@@ -348,7 +348,33 @@ Decided:
 
 Open:
 
-- None blocking. Revisit after the hackathon: an optional semantic embedder.
+- Publishing the semantic embedder's platform packages, and whether it then
+  becomes the default. To publish: run the `embedder` workflow, check all five
+  jobs, `npm publish` each `vine-context-embedder-<os>-<arch>` tarball from its
+  artifact, then add the five to `optionalDependencies` at the same version
+  and update the lockfile. The dependency lines wait until the names are ours
+  on npm: an unpublished name anyone can register would be installed on every
+  user's machine.
+- To make it the default afterwards: `makeEmbedder` picks the model when its
+  package is installed and `hash-256` otherwise; the first open of each graph
+  then re-embeds, which wants a progress line; and the hybrid search needs its
+  full-text half tuned first (a match on a common word such as "we" outranks
+  the best match by meaning).
+
+Decided after M4 (22 Nov):
+
+- **Semantic embedder, opt-in:** `VINE_EMBEDDER=bge-small` (or `minilm`) runs a
+  small sentence model on the CPU through a Rust addon (`native/embedder`,
+  tract, no onnxruntime), built locally with `npm run build:embedder`. Spike D
+  in `docs/spikes.md` has the sizes and timings. `hash-256` stays the default
+  and the fallback. A graph opened with a different embedder rebuilds its
+  vectors from the text on that machine; nothing is synced.
+- **Embedder packaging:** one npm package per platform,
+  `vine-context-embedder-<os>-<arch>`, holding the addon and the bge-small
+  model (`scripts/pack-embedder.mjs`), limited by `os` and `cpu` (and glibc on
+  Linux). Vine looks for it beside itself before a checkout's own build. The
+  `embedder` workflow builds, runs and packs it for all five platforms and
+  does not publish. MiniLM stays build-from-source.
 
 Decided in M3 (16 Nov):
 

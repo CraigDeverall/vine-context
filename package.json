@@ -46,6 +46,8 @@
     "spike:host": "tsx spikes/p2p-star.ts host",
     "spike:join": "tsx spikes/p2p-star.ts join",
     "build:apps": "node scripts/build-apps.mjs",
+    "build:embedder": "node scripts/build-embedder.mjs",
+    "pack:embedder": "node scripts/pack-embedder.mjs --pack",
     "examples": "tsx scripts/make-examples.ts"
   },
   "dependencies": {

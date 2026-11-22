@@ -217,7 +217,7 @@ If two machines can't reach each other directly (some networks block it), set a 
 ## Limits
 
 - Relate 1.0 is new: this pins `@relate/relate` 1.0.1 and uses its `hybrid-search` preview.
-- **Search embedder:** the default matches words and word fragments, not meaning. It runs offline with no model download, and the `Embedder` interface allows a semantic one later.
+- **Search embedder:** the default matches words and word fragments, not meaning, and runs offline with no model download. An optional one matches meaning with a small sentence model on the CPU: in a checkout, with a Rust toolchain, run `npm run build:embedder`, then start vine with `VINE_EMBEDDER=bge-small` (or `minilm`). A prebuilt package per platform (`vine-context-embedder-<os>-<arch>`, about 56 MB installed) is built in CI but not published yet, and it has only been run on macOS arm64. Each machine makes its own vectors, so members of one context can differ; changing the setting rebuilds a graph's vectors the next time its host starts.
 - **Tested connections:**
   - Replication was tested between processes on one machine, over real public relays, and between hosts in one process.
   - Networks with strict NAT need a TURN server.

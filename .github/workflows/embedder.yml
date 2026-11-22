@@ -1,0 +1,87 @@
+name: embedder
+
+# Builds the optional semantic embedder (native/embedder) for every platform
+# vine supports, runs it there, and keeps each platform's npm package as an
+# artifact. It does not publish.
+on:
+  push:
+    branches: [main]
+    paths:
+      - native/embedder/**
+      - scripts/build-embedder.mjs
+      - scripts/pack-embedder.mjs
+      - scripts/pack-check.mjs
+      - src/core/embed.ts
+      - test/embed.test.ts
+      - .github/workflows/embedder.yml
+  pull_request:
+    paths:
+      - native/embedder/**
+      - scripts/build-embedder.mjs
+      - scripts/pack-embedder.mjs
+      - scripts/pack-check.mjs
+      - src/core/embed.ts
+      - test/embed.test.ts
+      - .github/workflows/embedder.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: darwin-arm64, os: macos-latest, node-arch: arm64 }
+          # Cross-compiled on Apple silicon, then run by an x64 Node under Rosetta.
+          - { name: darwin-x64, os: macos-latest, node-arch: x64, target: x86_64-apple-darwin }
+          - { name: linux-x64, os: ubuntu-latest, node-arch: x64 }
+          - { name: linux-arm64, os: ubuntu-24.04-arm, node-arch: arm64 }
+          - { name: win32-x64, os: windows-latest, node-arch: x64 }
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          architecture: ${{ matrix.node-arch }}
+          cache: npm
+      - name: Rust toolchain
+        shell: bash
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          if [ -n "${{ matrix.target }}" ]; then rustup target add "${{ matrix.target }}"; fi
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            native/embedder/target
+          key: embedder-${{ matrix.name }}-${{ hashFiles('native/embedder/Cargo.lock') }}
+      - run: npm ci
+      - name: Build the addon and fetch the model
+        shell: bash
+        run: node scripts/build-embedder.mjs bge-small ${{ matrix.target && format('--target {0}', matrix.target) || '' }}
+      - name: Assemble the platform package
+        run: node scripts/pack-embedder.mjs --pack
+      - name: The package is named for this job's platform
+        shell: bash
+        run: test -f "native/embedder/npm/vine-context-embedder-${{ matrix.name }}-$(node -p "require('./package.json').version").tgz"
+      # Loads the addon on this platform: unit vectors, ranking by meaning, and
+      # taking over a graph written with the built-in embedder.
+      - run: npx vitest run test/embed.test.ts
+        env:
+          # Fail, rather than skip, if the addon is not there to test.
+          VINE_TEST_EMBEDDER: bge-small
+      - run: npm run build
+      # vine-context and the embedder package installed into an empty folder.
+      - run: node scripts/pack-check.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vine-context-embedder-${{ matrix.name }}
+          path: native/embedder/npm/*.tgz
+          if-no-files-found: error
