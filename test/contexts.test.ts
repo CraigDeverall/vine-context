@@ -4,7 +4,7 @@
 
 import { EventEmitter } from "node:events";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { afterAll, describe, expect, it } from "vitest";
@@ -212,7 +212,7 @@ describe("details and deleting", () => {
     // The chat's and the folder's links no longer name it.
     const links = JSON.parse(readFileSync(join(me.dataDir, "links.json"), "utf8"));
     expect(links.chats["chat-1"].contexts.map((x: any) => x.name)).toEqual(["infra"]);
-    expect(links.folders["/work/app"].contexts.map((x: any) => x.name)).toEqual(["infra"]);
+    expect(links.folders[resolve("/work/app")].contexts.map((x: any) => x.name)).toEqual(["infra"]);
     expect(links.chats["chat-2"]).toBeUndefined();
 
     // Another chat that used it is told, and doesn't start an empty context under its name.
