@@ -111,8 +111,11 @@ is sent to anyone:
 10 seconds rather than 5, to leave time to read the receipt. It's one
 constant, so easy to change; or drop Undo entirely and keep only Withdraw.
 
-**Embeddings** are made on each machine from the text. The hash embedder is
-deterministic, so every copy gets the same vectors and nothing extra is sent.
+**Embeddings** are made on each machine from the text, and are never sent.
+Members may use different embedders (`VINE_EMBEDDER`): their searches can rank
+the same claims differently, but the claims themselves are the same. A graph
+opened with a different embedder from the one that made its vectors rebuilds
+them locally.
 
 ## 5. Syncing
 

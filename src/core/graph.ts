@@ -225,11 +225,39 @@ export class Graph {
     const pack = claimsPack();
     if (found && found.model !== pack.model.name)
       throw new ToolError(`Graph '${name}' uses the model '${found.model}', which this version of vine-context no longer supports (only '${pack.model.name}').`);
-    if (found && found.embedder !== embedder.name)
-      throw new ToolError(`Graph '${name}' was embedded with '${found.embedder}', not '${embedder.name}'. Re-embedding is not supported yet.`);
     const graph = new Graph(name, dir, pack, embedder, db, conn, R, store);
+    if (found && found.embedder !== embedder.name) graph.reembed();
     graph.applyModel(found);
     return graph;
+  }
+
+  /**
+   * Replaces every search vector with this graph's embedder's, after the graph
+   * was last written with another. Vectors are made from the text and are never
+   * sent to peers, so this changes nothing a peer can see. The index is dropped
+   * first because the new vectors may have another length; applyModel makes it again.
+   */
+  private reembed(): void {
+    const { search, nodes } = this.pack.model;
+    if (!search) return;
+    this.conn.query("DROP INDEX search_embedding IF EXISTS");
+    this.conn.begin();
+    try {
+      for (const label of search.labels) {
+        const key = nodes[label]?.key;
+        if (!key) throw new Error(`'${label}' is searched but has no key to re-embed it by`);
+        const rows = this.conn.query(`MATCH (n:${label}) RETURN n.${key} AS key, n.${search.text} AS text`).rows;
+        for (const row of rows) {
+          const text = typeof row.text === "string" ? row.text : "";
+          const embedding = contentWords(text).length ? this.embedder.embed(text) : null;
+          this.conn.query(`MATCH (n:${label} {${key}: $key}) SET n.embedding = $embedding`, { key: String(row.key), embedding });
+        }
+      }
+      this.conn.commit();
+    } catch (e) {
+      this.conn.rollback();
+      throw new Error(`re-embedding graph '${this.name}' with '${this.embedder.name}' failed: ${(e as Error).message}`);
+    }
   }
 
   private applyModel(found: Meta | undefined): void {
