@@ -1244,7 +1244,6 @@ export const register: Register = on => {
         .then(() => (x === current ? undefined : update($, filters, (v: Filters): Filters => ({ ...v, text: '' }))))
         .then(() => update($, tab, () => x))
     const setFilter = (patch: Partial<Filters>) => void update($, more, () => 0).then(() => update($, filters, (v: Filters): Filters => ({ ...v, ...patch })))
-    const away = a.members - 1
     const members = a.people.filter((p: Person) => p.role)
     const counts: Record<Tab, number | undefined> = { overview: undefined, questions: t?.open.length, claims: t?.claims.length, people: members.length }
     const goOnline = <Button key="go-online" label="Go online" variant="primary" onPress={() => void act($, 'start_sharing', { ...ctx }, 'Back online: syncing with the other members.')} />
@@ -1252,16 +1251,19 @@ export const register: Register = on => {
     const header = (
       <Box flexDirection="column" gap="xs">
         <Box flexDirection="row" justifyContent="space-between" alignItems="center">
-          <Box flexDirection="row" gap="xs" alignItems="center">
-            <Text size="title" weight="semibold" bold>
-              {a.context}
+          {/* Who's online is listed under the description: only being offline is said up here. */}
+          {a.sharing ? (
+            <Text> </Text>
+          ) : (
+            <Text size="footnote" color="warning">
+              ● offline
             </Text>
-            <Button key="switch" label={many ? `⇄ ${a.contexts.length} contexts` : '⇄ Contexts'} plain dimColor onPress={() => void update($, switching, () => true)} />
-          </Box>
-          <Text size="footnote" color={a.sharing ? 'success' : 'warning'}>
-            ● {a.sharing ? (away ? `${a.online.length} of ${away} online` : 'just you') : 'offline'}
-          </Text>
+          )}
+          <Button key="switch" label={many ? `⇄ ${a.contexts.length} contexts` : '⇄ Contexts'} plain dimColor onPress={() => void update($, switching, () => true)} />
         </Box>
+        <Text size="title" weight="semibold" bold wrap="wrap">
+          {a.context}
+        </Text>
         {many && (
           <Box flexDirection="row" gap="xs" flexWrap="wrap">
             {a.contexts.map(c => (
