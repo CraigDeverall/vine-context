@@ -612,7 +612,7 @@ export const register: Register = on => {
             <Input
               key="new-description"
               placeholder="What goes in it, in a sentence or two"
-              rows={3}
+              rows={4}
               onInput={(v: string) => (newDescription = v)}
               onSubmit={(v: string) => {
                 newDescription = v
@@ -968,18 +968,21 @@ export const register: Register = on => {
         'describe-step',
         `Describe ${a.context}`,
         'What goes in it, and what doesn’t. It syncs to every member, and their agents use it to decide what belongs here.',
-        <Input
-          key="describe"
-          label={`What is '${a.context}' for?`}
-          value={a.description ?? ''}
-          placeholder="What goes in it, in a sentence or two"
-          submitLabel="Save"
-          autoFocus
-          onSubmit={(v: string) => {
-            void update($, editing, () => false)
-            if (v.trim() && v.trim() !== a.description) void act($, 'describe_context', { description: v.trim(), ...ctx }, 'Saved. Every member’s agent sees it.')
-          }}
-        />,
+        field(
+          `What is '${a.context}' for?`,
+          <Input
+            key="describe"
+            value={a.description ?? ''}
+            placeholder="What goes in it, in a sentence or two"
+            submitLabel="Save"
+            rows={4}
+            autoFocus
+            onSubmit={(v: string) => {
+              void update($, editing, () => false)
+              if (v.trim() && v.trim() !== a.description) void act($, 'describe_context', { description: v.trim(), ...ctx }, 'Saved. Every member’s agent sees it.')
+            }}
+          />,
+        ),
         { label: 'Cancel', onPress: () => void update($, editing, () => false) },
       )
 
@@ -1018,15 +1021,17 @@ export const register: Register = on => {
         composeOn.title,
         <Box flexDirection="column" gap="sm">
           {meta(`${byline(composeOn)} · ${composeOn.key}`)}
-          <Input
-            key={`correct-input-${composeOn.key}`}
-            label="What’s right instead?"
-            placeholder="In your own words: your agent records it as a claim that replaces this one"
-            rows={3}
-            autoFocus
-            onInput={(v: string) => (composeText = v)}
-            onSubmit={send}
-          />
+          {field(
+            'What’s right instead?',
+            <Input
+              key={`correct-input-${composeOn.key}`}
+              placeholder="In your own words: your agent records it as a claim that replaces this one"
+              rows={4}
+              autoFocus
+              onInput={(v: string) => (composeText = v)}
+              onSubmit={send}
+            />,
+          )}
           <Box flexDirection="row">
             <Button key="send-correction" label="Send to agent" variant="primary" onPress={() => send(composeText)} />
           </Box>
@@ -1177,14 +1182,17 @@ export const register: Register = on => {
             {th && group('Answer', '✓', 'success', th.answers)}
             {group('Questions about this one', '?', 'warning', asked)}
             {!answered && !item.ended && canWrite && (
-              <Input
-                key={`answer-input-${item.key}`}
-                label="Your answer"
-                placeholder="In your own words: your agent records it as a claim that answers this"
-                submitLabel="Send to agent"
-                autoFocus
-                onSubmit={(v: string) => v.trim() && void ask($, answerPrompt(item, { text: v.trim() }, named))}
-              />
+              field(
+                'Your answer',
+                <Input
+                  key={`answer-input-${item.key}`}
+                  placeholder="In your own words: your agent records it as a claim that answers this"
+                  submitLabel="Send to agent"
+                  rows={4}
+                  autoFocus
+                  onSubmit={(v: string) => v.trim() && void ask($, answerPrompt(item, { text: v.trim() }, named))}
+                />,
+              )
             )}
             <Box flexDirection="row" gap="xs" flexWrap="wrap">
               {!answered && !item.ended && canWrite && <Button key={`investigate-${item.key}`} label="Ask my agent to look into it" variant="secondary" onPress={() => void ask($, prompts.investigate(item, named))} />}
