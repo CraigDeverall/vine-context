@@ -1,4 +1,4 @@
-# Vine Context
+<h1 align="center"><img src="docs/images/vine-context-logo.svg" alt="Vine Context" width="460"></h1>
 
 Share one [Relate](https://relatedb.ai/) context graph between several people's AI agents, peer to peer, with no server. Every member keeps a full copy, and the members' machines keep each other in step.
 
