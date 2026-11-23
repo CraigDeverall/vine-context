@@ -2,8 +2,14 @@
 // (host:port): `npm run test:turn` starts coturn in Docker and sets it, and CI
 // does the same on Linux.
 //
-// The member with the TURN server is made relay-only, so a link can only form
-// through the server; the other member has no STUN or TURN server at all.
+// A relay-only member advertises only its TURN server's relay address, so a
+// connection can only start through the server. It doesn't stay there: once
+// the two machines learn each other's addresses through it, the library moves
+// to a direct path if one works, and on one machine one always does. So these
+// tests check that joins and sync work with a server set, that a relay-only
+// pair can't connect without one and can once it's set (on a host that's
+// already running), and that status reports a route. Which route a link takes
+// is checked on its own in test/ice.test.ts (routeOf).
 
 import { EventEmitter } from "node:events";
 import { afterAll, describe, expect, it } from "vitest";
@@ -61,6 +67,11 @@ async function member(name: string, graph: string, dataDir: string, signal: Retu
   return { host, local, texts: async () => ((await local.request("call", { tool: "beliefs", args: {} })) as Row[]).map((r) => r.text).sort() };
 }
 
+/** A joiner that uses its data folder's setting and nothing but its TURN server. */
+const relayOnly =
+  (dataDir: string): IceSource =>
+  () => ({ ...resolveIce(dataDir).config, policy: "relay" });
+
 const linked = (m: Member) => async () => (await m.local.request<Row>("status")).links.some((l: Row) => l.state === "active");
 let n = 0;
 
@@ -98,7 +109,7 @@ describe.skipIf(!where)("a TURN server", () => {
     const status = await alice.local.request<Row>("status");
     expect(status.ice).toEqual(resolveIce(aliceDir).summary);
     expect(status.ice).toMatchObject({ turn: expect.stringContaining("(udp)"), source: "setting" });
-    expect(status.links).toEqual([expect.objectContaining({ name: "bob", state: "active", route: "relayed" })]);
+    expect(status.links).toEqual([expect.objectContaining({ name: "bob", state: "active", route: expect.stringMatching(/^(direct|relayed)$/) })]);
     expect(JSON.stringify(status)).not.toContain(password);
     // Bob set nothing, so his status has no server to show.
     expect((await bob.local.request<Row>("status")).ice).toBeUndefined();
@@ -111,30 +122,29 @@ describe.skipIf(!where)("a TURN server", () => {
 
     const { code } = await alice.local.request<{ code: string }>("share", {});
     const bobDir = withTurn();
-    const relayOnly: IceSource = () => ({ ...resolveIce(bobDir).config, policy: "relay" });
-    const welcome = await joinWithCode(parseCode(code), loadIdentity(bobDir, "bob"), { signal, ice: relayOnly, about: {} });
+    const welcome = await joinWithCode(parseCode(code), loadIdentity(bobDir, "bob"), { signal, ice: relayOnly(bobDir), about: {} });
     expect(placeReplica(bobDir, welcome.graph.name, welcome.graph, welcome.changes)).toBe(true);
     const bob = await member("bob", welcome.graph.name, bobDir, signal, true);
 
     await waitFor(linked(bob));
     await bob.local.request("call", { tool: "add_claim", args: { text: "Bob's claim" } });
     await waitFor(async () => (await alice.texts()).includes("Bob's claim"));
-    expect((await bob.local.request<Row>("status")).links).toEqual([expect.objectContaining({ name: "alice", route: "relayed" })]);
+    expect((await bob.local.request<Row>("status")).links).toEqual([expect.objectContaining({ name: "alice", route: expect.stringMatching(/^(direct|relayed)$/) })]);
   });
 
   it("is picked up by a host that was already running", async () => {
     const signal = memorySignaller(new EventEmitter());
-    // Alice starts relay-only with no server set: no link can form.
+    // Both are relay-only, and alice has no server set: she has no address to offer, so no link can form.
     const aliceDir = tempDir();
     const alice = await member("alice", `turn${++n}`, aliceDir, signal, true);
     const { code } = await alice.local.request<{ code: string }>("share", {});
-    const bobDir = tempDir();
-    await expect(joinWithCode(parseCode(code), loadIdentity(bobDir, "bob"), { signal, ice: [], about: {}, timeoutMs: 6000 })).rejects.toThrow(/TURN server/);
+    const bobDir = withTurn();
+    await expect(joinWithCode(parseCode(code), loadIdentity(bobDir, "bob"), { signal, ice: relayOnly(bobDir), about: {}, timeoutMs: 8000 })).rejects.toThrow(/TURN server/);
 
-    // The server is set while her host runs: the next join goes through.
+    // The server is set while her host runs: the next join goes through it.
     withTurn(aliceDir);
     const again = await alice.local.request<{ code: string }>("share", {});
-    const welcome = await joinWithCode(parseCode(again.code), loadIdentity(bobDir, "bob"), { signal, ice: [], about: {} });
+    const welcome = await joinWithCode(parseCode(again.code), loadIdentity(bobDir, "bob"), { signal, ice: relayOnly(bobDir), about: {} });
     expect(welcome.graph.name).toBeDefined();
   });
 });

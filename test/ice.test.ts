@@ -7,6 +7,8 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { DEFAULT_STUN, checkStoredTurn, clearTurn, parseHostPort, readTurn, resolveIce, rtcConfig, saveTurn, storedIce } from "../src/p2p/ice.js";
 import { tempDir } from "./helpers.js";
+import type { PeerConnection } from "node-datachannel";
+import { routeOf } from "../src/p2p/mesh.js";
 
 const PASSWORD = "p:a@ss word";
 
@@ -114,3 +116,18 @@ describe("the TURN setting", () => {
     expect(await checkStoredTurn(dir)).toMatchObject({ ok: false, turn: "t.example:3478 (udp)", error: expect.stringContaining("VINE_TURN_PASSWORD") });
   });
 });
+
+describe("a link's route", () => {
+  const pc = (pair: unknown) => ({ getSelectedCandidatePair: () => pair }) as unknown as PeerConnection;
+  it("is relayed when either end of the pair is a TURN relay address, and direct otherwise", () => {
+    expect(routeOf(pc({ local: { type: "relay" }, remote: { type: "host" } }))).toBe("relayed");
+    expect(routeOf(pc({ local: { type: "prflx" }, remote: { type: "relay" } }))).toBe("relayed");
+    expect(routeOf(pc({ local: { type: "host" }, remote: { type: "srflx" } }))).toBe("direct");
+  });
+  it("is unknown until a pair is chosen, or when the library can't say", () => {
+    expect(routeOf(pc(null))).toBeUndefined();
+    const broken = { getSelectedCandidatePair: () => { throw new Error("closed"); } } as unknown as PeerConnection;
+    expect(routeOf(broken)).toBeUndefined();
+  });
+});
+
