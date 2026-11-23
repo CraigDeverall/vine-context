@@ -64,6 +64,8 @@
 html, body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.45 var(--font); }
 body { padding: 12px; }
 h1 { font-size: 15px; font-weight: 600; margin: 0; }
+h1.brand { display: flex; align-items: center; gap: 6px; }
+h1.brand svg { height: 20px; width: auto; fill: var(--ok); flex: none; }
 h2 { font-size: 12px; font-weight: 600; margin: 16px 0 6px; color: var(--fg2); text-transform: uppercase; letter-spacing: .04em; }
 p { margin: 4px 0; }
 code, .mono { font-family: var(--mono); font-size: 12px; }

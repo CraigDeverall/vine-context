@@ -8,6 +8,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
+import { LOGO_PATH, LOGO_VIEWBOX } from "./logo";
 import "./styles.css";
 
 interface AppTool {
@@ -116,7 +117,12 @@ function Shell() {
   return (
     <div style={{ maxWidth: 1000, margin: "0 auto" }}>
       <div className="head">
-        <h1>Vine Context</h1>
+        <h1 className="brand">
+          <svg viewBox={LOGO_VIEWBOX} aria-hidden="true">
+            <path fillRule="evenodd" d={LOGO_PATH} />
+          </svg>
+          Vine Context
+        </h1>
         <div className="tabs" role="tablist" style={{ margin: 0, border: 0 }}>
           {tools.map((t) => (
             <button key={t.name} role="tab" aria-selected={tool?.name === t.name} onClick={() => pick(t.name)}>
