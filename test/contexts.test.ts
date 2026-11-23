@@ -3,8 +3,8 @@
 // and there's no default. With several, reads span them and writes are routed.
 
 import { EventEmitter } from "node:events";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { afterAll, describe, expect, it } from "vitest";
@@ -12,6 +12,7 @@ import { loadIdentity } from "../src/core/identity.js";
 import { LocalHost } from "../src/host/client.js";
 import { Host } from "../src/host/host.js";
 import { Session } from "../src/mcp/server.js";
+import { readTurn, saveTurn } from "../src/p2p/ice.js";
 import { memorySignaller } from "../src/p2p/signal.js";
 import { tempDir } from "./helpers.js";
 
@@ -170,6 +171,109 @@ describe("several contexts in one chat", () => {
     links.chats.old = { name: "team", id: links.chats.old.contexts[0].id, at: links.chats.old.at };
     writeFileSync(file, JSON.stringify(links));
     expect((await me.chat({ id: "old" }).then((x) => x.call("context_info"))).context).toBe("team");
+  });
+});
+
+describe("pinning one context to a folder", () => {
+  it("pins and unpins contexts one at a time, in the chat or not", async () => {
+    const me = machine("alice");
+    const c = await me.chat({ id: "chat-1", cwd: "/work/shop" });
+    await c.call("use_context", { name: "incident", description: "The checkout slowdown" });
+    await c.call("add_context", { name: "infra", description: "How our infrastructure is set up" });
+    await c.call("remove_context", { name: "infra" });
+    expect((await c.call("context_info")).folder).toMatchObject({ linked: false, pinned: [] });
+
+    await c.call("link_folder", { name: "infra" }); // not in this chat
+    await c.call("link_folder", { name: "incident" });
+    await c.call("link_folder", { name: "incident" }); // again: still once
+    expect((await c.call("context_info")).folder.pinned).toEqual(["infra", "incident"]);
+    await expect(c.call("link_folder", { name: "lunch" })).rejects.toThrow(/no context 'lunch'/);
+    // A new chat in the folder, or below it, starts with both.
+    const fresh = await me.chat({ id: "chat-2", cwd: "/work/shop/api" });
+    expect((await fresh.call("context_info")).contexts.map((x: any) => x.name)).toEqual(["infra", "incident"]);
+
+    await c.call("link_folder", { name: "infra", off: true });
+    expect((await c.call("context_info")).folder).toMatchObject({ linked: true, pinned: ["incident"] });
+    await c.call("link_folder", { name: "incident", off: true });
+    expect((await c.call("context_info")).folder.pinned).toEqual([]);
+    expect((await me.chat({ id: "chat-3", cwd: "/work/shop" }).then((x) => x.call("context_info"))).context).toBe(null);
+  });
+});
+
+describe("the TURN server tools", () => {
+  it("never take a password: the server is saved for VINE_TURN_PASSWORD, and a kept password is left alone", async () => {
+    const me = machine("alice");
+    const c = await me.chat({ id: "chat-1" });
+    const tool = (await c.tools()).find((t) => t.name === "set_turn_server")!;
+    expect(Object.keys(tool.inputSchema.properties!).sort()).toEqual(["host", "port", "transport", "username"]);
+
+    const before = process.env.VINE_TURN_PASSWORD;
+    delete process.env.VINE_TURN_PASSWORD;
+    try {
+      const r = await c.call("set_turn_server", { host: "turn.example.org", username: "sam", transport: "tls" });
+      expect(r).toMatchObject({ turn: "turn.example.org:5349 (tls)", password_store: "env", answered: false, terminal_command: "vine turn set turn.example.org:5349 --user sam --tls" });
+      expect(readFileSync(join(me.dataDir, "network.json"), "utf8")).not.toMatch(/password/);
+
+      // Set in a terminal, with the password kept by vine: the tool won't replace it.
+      saveTurn(me.dataDir, { host: "turn.example.org", username: "sam", store: "file", password: "kept-secret" });
+      await expect(c.call("set_turn_server", { host: "other.example.org", username: "sam" })).rejects.toThrow(/already set[\s\S]*vine turn set/);
+      expect(readTurn(me.dataDir)).toMatchObject({ host: "turn.example.org", store: "file", password: "kept-secret" });
+
+      expect(await c.call("remove_turn_server")).toMatchObject({ removed: true });
+      expect(readTurn(me.dataDir)).toBeUndefined();
+    } finally {
+      if (before !== undefined) process.env.VINE_TURN_PASSWORD = before;
+    }
+  });
+});
+
+describe("details and deleting", () => {
+  it("shows any local context's details, and deletes one only when its name is confirmed", async () => {
+    const me = machine("alice");
+    const c = await me.chat({ id: "chat-1", cwd: "/work/app" });
+    await c.call("use_context", { name: "incident", description: "The checkout slowdown" });
+    await c.call("add_context", { name: "infra", description: "How our infrastructure is set up" });
+    await c.call("add_claim", { text: "Checkout p95 rose to 4 s" });
+    await c.call("link_folder");
+    const other = await me.chat({ id: "chat-2" });
+    await other.call("use_context", { name: "incident" });
+
+    // Details: for a context in the chat, and for one that isn't.
+    expect(await c.call("context_details", { name: "incident" })).toMatchObject({
+      name: "incident",
+      description: "The checkout slowdown",
+      role: "admin",
+      yours: true,
+      in_chat: true,
+      writes_here: true,
+      members: 1,
+      items: { Claim: 1 },
+    });
+    expect(await other.call("context_details", { name: "infra" })).toMatchObject({ name: "infra", in_chat: false, writes_here: false, role: "admin" });
+    expect((await other.call("context_info")).contexts.map((x: any) => x.name)).toEqual(["incident"]);
+    await expect(c.call("context_details", { name: "lunch" })).rejects.toThrow(/no context 'lunch'/);
+
+    // Deleting needs the name again, exactly.
+    await expect(c.call("delete_context", { name: "incident", confirm: "yes" })).rejects.toThrow(/Not deleted/);
+    expect(existsSync(join(me.dataDir, "graphs", "incident"))).toBe(true);
+
+    const r = await c.call("delete_context", { name: "incident", confirm: "incident" });
+    expect(r).toMatchObject({ deleted: "incident", your_contexts: ["infra"], write_to: "infra" });
+    expect(existsSync(join(me.dataDir, "graphs", "incident"))).toBe(false);
+    expect(existsSync(join(me.dataDir, "hosts", "incident"))).toBe(false);
+    expect(readdirSync(join(me.dataDir, "graphs"))).toEqual(["infra"]);
+    expect((await c.call("context_info")).contexts.map((x: any) => x.name)).toEqual(["infra"]);
+    // The chat's and the folder's links no longer name it.
+    const links = JSON.parse(readFileSync(join(me.dataDir, "links.json"), "utf8"));
+    expect(links.chats["chat-1"].contexts.map((x: any) => x.name)).toEqual(["infra"]);
+    expect(links.folders[resolve("/work/app")].contexts.map((x: any) => x.name)).toEqual(["infra"]);
+    expect(links.chats["chat-2"]).toBeUndefined();
+
+    // Another chat that used it is told, and doesn't start an empty context under its name.
+    await expect(other.call("context_info")).rejects.toThrow(/was deleted from this machine/);
+    expect((await other.call("context_info")).context).toBe(null);
+    expect(existsSync(join(me.dataDir, "graphs", "incident"))).toBe(false);
+    await expect(c.call("delete_context", { name: "incident", confirm: "incident" })).rejects.toThrow(/no context 'incident'/);
   });
 });
 

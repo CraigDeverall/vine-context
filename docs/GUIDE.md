@@ -15,6 +15,7 @@ Back to the [README](../README.md).
 - [What a sync tells you](#what-a-sync-tells-you)
 - [Undo and withdraw](#undo-and-withdraw)
 - [Staying in sync](#staying-in-sync)
+- [Strict networks: TURN and STUN](#strict-networks-turn-and-stun)
 - [Removing someone](#removing-someone)
 - [The Claude Code panel](#the-claude-code-panel)
 - [Commands](#commands)
@@ -112,7 +113,8 @@ A chat usually uses one context, and keeps it when you reopen the chat. The choi
 - *"Use the incident-42 context"* (`use_context`) sets or switches it. A new name starts a new context, and the agent asks what it's for. That description can be changed later (`describe_context`, or ✎ in the panel).
 - *"Also use the infra context"* (`add_context`) adds another, and `remove_context` takes one out. With several, reads search them all, and the agent puts each write in the one whose description fits.
 - There is no default. A new chat has no context until you choose, so the agent asks before its first write.
-- *"Start this folder's chats with these contexts"* (`link_folder`) makes new chats in that folder, or below it, start with them. That is kept on your machine too.
+- Pin contexts to a folder (`link_folder`; the 📌 on each context in the panel): new chats started in that folder, or below it, start with the pinned ones. That is kept on your machine too.
+- *"Delete the old-spike context"* (`delete_context`) deletes this machine's copy for good, after you confirm it by name; other members keep theirs. In the panel it's under a context's **Details**.
 
 ## Questions have threads
 
@@ -140,7 +142,24 @@ After that it can only be *withdrawn*, which keeps it in everyone's history.
 - Sharing is on by default and survives restarts. *"Stop sharing"* takes a context offline until you share again. Your copy keeps working.
 - Each context's host runs while an agent uses it. To keep contexts syncing without an agent open, and after a reboot, run `vine autostart on` (macOS only for now).
 - `vine status --graph <name>` shows the members, the live links to them, and whether the signalling relays are reachable.
-- If two machines can't reach each other directly (some networks block it), set a TURN server: `VINE_ICE=turn:user:pass@host:3478`.
+- If two machines can't reach each other directly (some networks block it), set a TURN server: see [Strict networks](#strict-networks-turn-and-stun).
+
+## Strict networks: TURN and STUN
+
+If two machines can't reach each other directly (some networks block it), one of them sets a TURN server, which then carries that pair's connection. There's none by default: you bring your own.
+
+- `vine turn set turn.example.org --user sam` asks for the password in the terminal and keeps it in a file only you can read (`--store keychain` uses the macOS Keychain or the Linux secret service; `--store env` keeps nothing and reads `VINE_TURN_PASSWORD`). `--tcp` and `--tls` pick how the server is reached.
+- `vine turn show`, `vine turn test` and `vine turn clear` show, check and remove it; `vine doctor` checks it too.
+- It applies to every context on the machine from the next connection on, with nothing to restart. `vine status` and the console say which links are direct and which are relayed.
+- An agent can set the server and username (`set_turn_server`) but never takes the password: it's read from `VINE_TURN_PASSWORD`, or you run `vine turn set` yourself.
+
+**STUN servers.** To find a route between two machines, Vine asks public STUN servers for each machine's public address: by default `stun.l.google.com:19302` and `stun.cloudflare.com:3478`. Those servers see your public IP address, nothing else. To use your own, or none, set `VINE_ICE` where vine runs (for Claude Code, in the environment it starts with), then stop each running context's host (`vine host stop --context NAME`) so it picks it up:
+
+- `VINE_ICE=stun:stun.example.org:3478` uses only your STUN server.
+- `VINE_ICE=stun:stun.example.org:3478,turn:user:pass@turn.example.org:3478` adds a TURN server too. `VINE_ICE` replaces both the default STUN servers and the `vine turn` setting, so a TURN server goes in the same list, with its password.
+- `VINE_ICE=` (set but empty) uses no servers: machines connect only when they can reach each other directly, such as on the same network.
+
+`vine turn show` says when `VINE_ICE` is in effect. There's no stored STUN setting: `vine turn set` only adds a TURN server alongside the default STUN servers.
 
 ## Removing someone
 
@@ -161,7 +180,9 @@ In Claude Code the plugin adds to Claude Code's own interface:
 | **Claims** | Current, yours, in conflict, or history. A conflict shows both sides with *Keep this one*. A claim opens with everything linked to it, and *Correct it* records a claim that replaces it |
 | **People** | Who is in, what each has recorded and when they were last active; roles and *Remove* for admins; the join codes still waiting, with *Copy* and *Cancel*; *Invite someone*; *Go offline* and *Go online* |
 
-Both lists filter by words, a person or an id. *⇄ Contexts*, or the context's name in the band, turns the chat's contexts on and off.
+Both lists filter by words, a person or an id.
+
+*⇄ Contexts*, or the context's name in the band, opens the chat's contexts: each one's switch turns it on or off for the chat, and its 📌 pins it to the chat's folder. *+ Create new context* asks for a name and what it's for. A context's **Details** show its description, your role, who made it, what it holds, whether it's syncing and where it's stored, with *Share* (a join code), *Go offline* or *Go online*, and *Delete from this machine*, which asks you to type its name first.
 
 The panel never writes a claim or question itself: your agent does, from what you tell it. Its source is [`plugin/hooks/register.tsx`](../plugin/hooks/register.tsx), and `claude plugin test plugin` runs its tests.
 
@@ -174,13 +195,15 @@ The panel never writes a claim or question itself: your agent does, from what yo
 | `vine doctor` | Check Node, Relate, WebRTC, the model and the data directory |
 | `vine status --graph <name>` | Members, live links and relay reachability for one context |
 | `vine whoami` | Your name and key |
+| `vine turn set \| show \| test \| clear` | Set, show, check or remove a TURN server ([strict networks](#strict-networks-turn-and-stun)) |
 | `vine autostart on` | Keep contexts syncing after login (macOS) |
 
 | Setting | What it changes |
 |---|---|
 | `VINE_DATA_DIR` | Where contexts are kept (default `~/.local/share/vine-context/`) |
 | `VINE_USER` | Your name in new contexts (default: your git name) |
-| `VINE_ICE` | A TURN server for strict networks |
+| `VINE_ICE` | STUN and TURN servers, replacing the defaults and the `vine turn` setting ([strict networks](#strict-networks-turn-and-stun)) |
+| `VINE_TURN_PASSWORD` | The TURN server's password, when it was set with `--store env` |
 | `VINE_EMBEDDER` | The search embedder ([limits](HOW-IT-WORKS.md#limits)) |
 
 ## Trying it with two identities on one machine

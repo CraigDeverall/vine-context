@@ -85,7 +85,7 @@ Online members meet in a signalling room named and sealed with the group secret,
 
 Links and relay connections are pinged and replaced when they go quiet, and reconnect for as long as the host runs. Changes are forwarded, so members who are never online together still get each other's writes through anyone who is.
 
-If two machines can't reach each other directly, set a TURN server: `VINE_ICE=turn:user:pass@host:3478`.
+Each machine learns its public address from public STUN servers (Google's and Cloudflare's by default). If two machines can't reach each other directly, a TURN server carries their link: `vine turn set` stores one, and `vine status` and the console say which links are relayed. See [Strict networks](GUIDE.md#strict-networks-turn-and-stun).
 
 ## Join codes
 

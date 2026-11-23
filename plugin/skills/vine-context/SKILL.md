@@ -42,6 +42,13 @@ is written into the folder.
   model's tools answer with how to choose one. Before the first write, ask the
   person which context this chat is for: one in `your_contexts`, a new one
   (with what it's for), or someone else's (`join_context` with their code).
+- **Deleting is not removing.** `remove_context` only takes a context out of
+  this chat. `delete_context` permanently deletes this machine's copy (items,
+  history, join codes made here, every chat's link to it). Only when the
+  person asks for exactly that: say what it removes, that other members keep
+  their copies (and that with no other member it's gone for good), ask them
+  to confirm by name, then pass that name as `confirm`. `context_details`
+  shows what a context holds first.
 - **Sometimes several.** `add_context` adds another alongside, and
   `remove_context` takes one out (with no name, all of them, which leaves the
   chat with none). With several, reads search all of them and each row says
@@ -185,8 +192,14 @@ unchanged.
   <name>` shows its members, links, relays and invites; `vine host stop`
   stops it). Sessions start it as needed. `vine up` starts every sharing
   context's host, and `vine autostart on` (macOS) runs that at login.
-- If members never connect, the networks may block direct WebRTC
-  connections. A TURN server (`VINE_ICE`) fixes that.
+- If members never connect, or a join fails with "could not connect", the
+  networks may block direct WebRTC connections. A TURN server fixes that, and
+  one of the two members having it is enough. There's none by default: the
+  person needs their own. `set_turn_server` saves the server and username.
+  **Never ask for its password or take one in the chat**: it's read from
+  `VINE_TURN_PASSWORD`, or the person runs the `terminal_command` from the
+  result (`vine turn set …`) themselves, which asks for it privately.
+  `vine turn test` checks it; `remove_turn_server` forgets it.
 - Data lives in `~/.local/share/vine-context` (`VINE_DATA_DIR`):
   `graphs/<name>` (the store), `hosts/<name>/changes.jsonl` (the change log
   every copy is built from) and `hosts/<name>/host.log`.

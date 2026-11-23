@@ -19,6 +19,8 @@
 // contexts or a role change.
 
 import { spawn } from "node:child_process";
+import { existsSync, renameSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import { McpServer, type RegisteredTool } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { RANK } from "../core/changes.js";
@@ -27,14 +29,16 @@ import { fingerprint, nameSource, setName, type Identity } from "../core/identit
 import { claimsPack } from "../core/pack.js";
 import { packageInfo } from "../core/package-root.js";
 import { autoShare, defaultDataDir } from "../core/paths.js";
-import type { LocalHost } from "../host/client.js";
-import { placeReplica, readGroup } from "../host/host.js";
+import { LocalHost } from "../host/client.js";
+import { hostAlive, placeReplica, readGroup } from "../host/host.js";
+import { socketPath } from "../host/state.js";
+import { checkStoredTurn, clearTurn, readTurn, saveTurn, type IceSource } from "../p2p/ice.js";
 import { joinWithCode } from "../p2p/join.js";
 import { parseCode } from "../p2p/link.js";
 import type { GraphDescription } from "../p2p/protocol.js";
 import type { SignalFactory } from "../p2p/signal.js";
 import { registerViews, uiMeta } from "./apps.js";
-import { chatLink, folderLink, localContexts, resolveRef, setChatLink, setFolderLink, type Link } from "./links.js";
+import { chatLink, folderLink, forgetContext, localContexts, resolveRef, setChatLink, setFolderLink, type Link, type Ref } from "./links.js";
 
 type Content = { content: { type: "text"; text: string }[]; structuredContent?: Record<string, unknown>; isError?: boolean };
 const text = (value: unknown): Content => ({
@@ -83,7 +87,8 @@ export interface SessionOptions {
   openLocal?: (graph: string) => Promise<LocalHost>;
   identity: () => Identity;
   signal: SignalFactory;
-  ice: string[];
+  /** STUN/TURN servers for joining. Read when a join starts. */
+  ice: IceSource;
   /** How long join_context waits for the person who made the code to answer. */
   joinWaitMs?: number;
   /** Where contexts live. */
@@ -276,6 +281,14 @@ export class Session {
       throw new Error(`This chat doesn't use '${name}': it uses ${[...this.contexts.keys()].map((n) => `'${n}'`).join(", ") || "no context"}. add_context adds one.`);
     if (!c) throw new Error(this.noContext());
     if (!c.host.closed) return c;
+    // Deleted from this machine (by another chat): reopening it would start an empty context under its name.
+    if (!this.localNames().includes(c.name)) {
+      this.contexts.delete(c.name);
+      if (this.writeTo === c.name) this.writeTo = [...this.contexts.keys()][0];
+      if (this.o.chat) setChatLink(this.dataDir, this.o.chat, this.contexts.size ? this.link() : null);
+      this.offer();
+      throw new Error(`The context '${c.name}' was deleted from this machine, so this chat no longer uses it.`);
+    }
     c.host = await this.o.openLocal!(c.name);
     c.d = await c.host.request<Description>("describe");
     return c;
@@ -438,6 +451,84 @@ export class Session {
     return out;
   }
 
+  /** One of this machine's contexts in full, whether or not the chat uses it: what the panel's details show. */
+  private async details(name: string): Promise<Record<string, unknown>> {
+    if (!this.localNames().includes(name)) throw new Error(`There's no context '${name}' on this machine.`);
+    const attached = this.contexts.has(name);
+    // One the chat doesn't use is opened just for this read.
+    const host = attached ? (await this.target(name)).host : await this.o.openLocal!(name);
+    try {
+      const d = await host.request<Description>("describe");
+      const info = await host.request<Record<string, any>>("info");
+      const role: Role | null = d.member === false ? null : d.you.role;
+      const people = ((info.people ?? []) as { role: Role | null; online?: boolean; you?: boolean }[]).filter((p) => p.role);
+      let invites: number | null = null;
+      if (role === "admin") {
+        const s = await host.request<{ invites?: { state: string }[] }>("status");
+        invites = (s.invites ?? []).filter((i) => i.state === "open").length;
+      }
+      return {
+        name,
+        id: d.graph_id ?? null,
+        description: d.description ?? null,
+        role,
+        yours: Boolean(d.creator),
+        created_by: info.created_by ?? null,
+        in_chat: attached,
+        writes_here: attached && this.writeTo === name,
+        sharing: Boolean(info.sharing?.sharing),
+        members: people.length,
+        online: people.filter((p) => p.online && !p.you).length,
+        items: info.nodes ?? {},
+        changes: info.log?.changes ?? 0,
+        held: info.log?.held ?? 0,
+        open_invites: invites,
+        stored_at: join(this.dataDir, "graphs", name),
+      };
+    } finally {
+      if (!attached) host.close();
+    }
+  }
+
+  /** Deletes this machine's copy of a context: its items, change log, join codes and every link to it. */
+  private async deleteLocal(name: string): Promise<Record<string, unknown>> {
+    if (!this.localNames().includes(name)) throw new Error(`There's no context '${name}' on this machine.`);
+    const id = readGroup(this.dataDir, name)?.id;
+    if (this.contexts.has(name)) this.detach(name);
+    // Out of the list first, so no chat on this machine reopens it (which would start an empty one) while its host stops.
+    const store = join(this.dataDir, "graphs", name);
+    let doomed = store;
+    try {
+      const aside = join(this.dataDir, "graphs", `.deleting-${name}-${Date.now()}`);
+      renameSync(store, aside);
+      doomed = aside;
+    } catch {
+      // Windows won't move a folder with open files: it goes once the host has stopped.
+    }
+    const sock = socketPath(this.dataDir, name);
+    if (await hostAlive(sock)) {
+      try {
+        const h = await LocalHost.connect(sock);
+        await h.request("shutdown").catch(() => undefined);
+        h.close();
+      } catch {
+        // it stopped by itself
+      }
+      for (let i = 0; i < 40 && (await hostAlive(sock)); i++) await new Promise((r) => setTimeout(r, 150));
+      if (await hostAlive(sock)) {
+        if (doomed !== store) renameSync(doomed, store);
+        throw new Error(`The host for '${name}' didn't stop, so nothing was deleted. Try again in a moment.`);
+      }
+      await new Promise((r) => setTimeout(r, 200)); // let the host's process exit
+    }
+    const rm = (dir: string) => rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    rm(doomed);
+    rm(join(this.dataDir, "hosts", name));
+    if (process.platform !== "win32" && existsSync(sock)) rmSync(sock, { force: true });
+    forgetContext(this.dataDir, name, id);
+    return { deleted: name, id: id ?? null, contexts: this.list(), write_to: this.writeTo ?? null, your_contexts: this.localNames() };
+  }
+
   private localNames(): string[] {
     return localContexts(this.dataDir).map((c) => c.name);
   }
@@ -448,12 +539,13 @@ export class Session {
   }
 
   /** Whether the folder this chat started in (or a parent) starts new chats with exactly this chat's contexts. */
-  private folderState(): { folder: string; linked: boolean } | null {
+  private folderState(): { folder: string; linked: boolean; pinned: string[] } | null {
     if (!this.o.cwd) return null;
     const f = folderLink(this.dataDir, this.o.cwd);
     const mine = [...this.contexts.keys()].sort().join(",");
     const theirs = f ? f.contexts.map((r) => resolveRef(this.dataDir, r) ?? "?").sort().join(",") : "";
-    return { folder: f?.folder ?? this.o.cwd, linked: !!f && !!mine && mine === theirs };
+    const pinned = f ? f.contexts.map((r) => resolveRef(this.dataDir, r)).filter((n): n is string => !!n) : [];
+    return { folder: f?.folder ?? this.o.cwd, linked: !!f && !!mine && mine === theirs, pinned };
   }
 
   private registerSessionTools(): void {
@@ -596,6 +688,61 @@ export class Session {
         for (const c of this.contexts.values()) await this.request("rename", { name: n }, c.name);
         return { name: n, fingerprint: fingerprint(this.o.identity().publicKey), note: "This chat's contexts have it now; your other contexts take it when their hosts next start." };
       }),
+    );
+
+    this.server.registerTool(
+      "set_turn_server",
+      {
+        title: "Set a TURN server",
+        description:
+          "Set the TURN server this machine's connections go through when two members' networks block a direct connection (a join that fails with 'could not connect', or members who never link). " +
+          "Most people don't need one, and there is none by default. The person must have a server and a username on it: ask for them, never invent them. " +
+          "Never ask for the server's password, and never accept one in the chat: this tool takes none. It saves the server and username only, and the password is read from the VINE_TURN_PASSWORD environment variable where vine runs. " +
+          "To have vine keep the password instead (in a file only the person can read, or the OS keychain), the person runs the `terminal_command` from the result in their own terminal: it asks for the password there, unseen. " +
+          "It applies to every context on this machine, from the next connection on, with nothing to restart. One of two members having a server is enough for that pair. The result says whether the server answered.",
+        inputSchema: {
+          host: z.string().min(1).max(255).describe("The server's host name or address, e.g. turn.example.org"),
+          port: z.number().int().min(1).max(65535).optional().describe("Default 3478 (5349 for tls)"),
+          username: z.string().min(1).max(255),
+          transport: z.enum(["udp", "tcp", "tls"]).optional().describe("How to reach the server (default udp)"),
+        },
+        annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+      },
+      wrap(async (a: { host: string; port?: number; username: string; transport?: "udp" | "tcp" | "tls" }) => {
+        if (process.env.VINE_ICE !== undefined) throw new Error("VINE_ICE is set in this agent's configuration and replaces this setting; change it there, or remove it first.");
+        // A server whose password vine keeps is left alone: saving from here would drop that password.
+        const kept = readTurn(this.dataDir);
+        if (kept && kept.store !== "env")
+          throw new Error(
+            `A TURN server is already set (${kept.host}:${kept.port}, user ${kept.username}) with its password kept by vine, and this tool can't replace it without losing that password. ` +
+              "To change it, the person runs `vine turn set` in a terminal; or remove it first with remove_turn_server.",
+          );
+        const t = saveTurn(this.dataDir, { host: a.host, port: a.port, username: a.username, transport: a.transport, store: "env" });
+        const check = await checkStoredTurn(this.dataDir);
+        const flag = t.transport === "udp" ? "" : ` --${t.transport}`;
+        return {
+          turn: `${t.host}:${t.port} (${t.transport})`,
+          username: t.username,
+          password_store: t.store,
+          answered: check.ok,
+          ...(check.ok ? {} : { problem: check.error }),
+          terminal_command: `vine turn set ${t.host}:${t.port} --user ${t.username}${flag}`,
+          note: check.ok
+            ? "Saved, and the server answered with the password from VINE_TURN_PASSWORD. New connections use it when a direct one isn't possible; if a join failed, try it again."
+            : "Saved, but the server hasn't answered yet. If VINE_TURN_PASSWORD isn't set where vine runs, give the person the terminal_command to run themselves: it asks for the password privately and keeps it. Don't ask them for the password.",
+        };
+      }),
+    );
+
+    this.server.registerTool(
+      "remove_turn_server",
+      {
+        title: "Remove the TURN server",
+        description: "Forget this machine's TURN server and its password. New connections are direct only; links already open stay as they are.",
+        inputSchema: {},
+        annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+      },
+      wrap(async () => ({ removed: clearTurn(this.dataDir), note: "Members whose networks block direct connections can no longer reach this machine directly." })),
     );
 
     this.server.registerTool(
@@ -796,17 +943,74 @@ export class Session {
     );
 
     this.server.registerTool(
+      "context_details",
+      {
+        title: "A context's details",
+        description:
+          "Everything about one context on this machine, whether or not this chat uses it: what it's for, its id, your role, who made it, how many members and items it has, whether it's syncing, and where it's stored. Read-only.",
+        inputSchema: { name: nameArg },
+        annotations: ro,
+      },
+      async ({ name }: { name: string }) => {
+        try {
+          const out = await this.details(name);
+          return { ...text(out), structuredContent: out };
+        } catch (e) {
+          return failure((e as Error).message); // no withNews: the panel reads this too
+        }
+      },
+    );
+
+    this.server.registerTool(
+      "delete_context",
+      {
+        title: "Delete a context from this machine",
+        description:
+          "Permanently delete this machine's copy of a context: its claims, questions and replies, its change log, the join codes made here, and every chat's and folder's link to it. It can't be undone. " +
+          "Other members keep their own copies; with no other member, it is gone for good. Getting it back means joining again with a new code from an admin. " +
+          "Only when the person asked to delete it: first tell them what it removes and ask them to confirm by name, then pass that name as `confirm`. To only stop using it in this chat, use remove_context.",
+        inputSchema: { name: nameArg, confirm: z.string().describe("The context's name again, as the person confirmed it") },
+        annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+      },
+      wrap(async ({ name, confirm }: { name: string; confirm: string }) => {
+        if (confirm !== name) throw new Error(`Not deleted: to confirm, pass the context's name ('${name}') as \`confirm\`, exactly.`);
+        const r = await this.deleteLocal(name);
+        return { ...r, note: "Deleted from this machine. Other members keep their copies.", ...(this.contexts.size ? {} : { next: this.noContext() }) };
+      }),
+    );
+
+    this.server.registerTool(
       "link_folder",
       {
         title: "Start this folder's chats here",
         description:
           "Make new chats started in this chat's folder (or below it) start with this chat's contexts, or with `off`, stop that. " +
+          "With `name`, pin just that one context to the folder (any on this machine), or with `off` too, unpin it, leaving the folder's others as they are. " +
           "It's kept on this machine (nothing is written into the folder). Ask the person first.",
-        inputSchema: { off: z.boolean().optional().describe("Stop linking the folder") },
+        inputSchema: {
+          off: z.boolean().optional().describe("Stop linking the folder (or, with name, unpin that context)"),
+          name: z.string().regex(GRAPH_RE).optional().describe("Pin or unpin only this context"),
+        },
         annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       },
-      wrap(async ({ off }: { off?: boolean }) => {
+      wrap(async ({ off, name }: { off?: boolean; name?: string }) => {
         if (!this.o.cwd) throw new Error("This session doesn't know which folder it started in.");
+        if (name) {
+          if (!this.localNames().includes(name)) throw new Error(`There's no context '${name}' on this machine.`);
+          // The folder's own link, or the one it gets from a parent folder.
+          const f = folderLink(this.dataDir, this.o.cwd);
+          const folder = f?.folder ?? this.o.cwd;
+          const id = readGroup(this.dataDir, name)?.id;
+          const rest: Ref[] = (f?.contexts ?? []).filter((r) => resolveRef(this.dataDir, r) !== name);
+          const contexts: Ref[] = off ? rest : [...rest, { name, ...(id ? { id } : {}) }];
+          const write_to = f?.write_to && contexts.some((r) => r.name === f.write_to) ? { write_to: f.write_to } : {};
+          setFolderLink(this.dataDir, folder, contexts.length ? { contexts, ...write_to } : null);
+          return {
+            folder,
+            pinned: contexts.map((r) => r.name),
+            note: off ? `New chats in this folder no longer start with '${name}'.` : `New chats started in this folder, or below it, start with '${name}'.`,
+          };
+        }
         if (off) {
           const f = folderLink(this.dataDir, this.o.cwd);
           if (f) setFolderLink(this.dataDir, f.folder, null);

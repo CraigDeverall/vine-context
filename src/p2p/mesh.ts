@@ -19,6 +19,7 @@ import nodeDataChannel, { type PeerConnection } from "node-datachannel";
 import type { Change, Have } from "../core/changes.js";
 import { fingerprint, verifySignature, type Identity } from "../core/identity.js";
 import { FramedChannel } from "./channel.js";
+import { rtcConfig, type IceSource } from "./ice.js";
 import { gathered } from "./invites.js";
 import { b64u, checkProof, proof, type Link } from "./link.js";
 import type { SignalFactory, Signaller } from "./signal.js";
@@ -32,7 +33,8 @@ export interface MeshOptions {
   graphId: string;
   identity: Identity;
   signal: SignalFactory;
-  ice: string[];
+  /** Read for each new link. */
+  ice: IceSource;
   /** Is this key a current member? */
   isMember(key: string): boolean;
   /** This machine's add_member change, if it has one, to show members who haven't seen it yet. */
@@ -71,6 +73,19 @@ export interface LinkInfo {
   fingerprint: string;
   state: "connecting" | "active";
   since: string;
+  /** How the data travels once linked: straight between the two machines, or through a TURN server. */
+  route?: "direct" | "relayed";
+}
+
+/** The route a connected link settled on, if the library can say. */
+export function routeOf(pc: PeerConnection): "direct" | "relayed" | undefined {
+  try {
+    const pair = pc.getSelectedCandidatePair();
+    if (!pair) return undefined;
+    return [pair.local?.type, pair.remote?.type].some((t) => String(t).toLowerCase() === "relay") ? "relayed" : "direct";
+  } catch {
+    return undefined;
+  }
 }
 
 export class Mesh {
@@ -98,7 +113,10 @@ export class Mesh {
   online(): LinkInfo[] {
     return [...this.links.values()]
       .filter((l) => l.key)
-      .map((l) => ({ key: l.key!, fingerprint: fingerprint(l.key!), state: l.state, since: l.since }));
+      .map((l) => {
+        const route = l.state === "active" ? routeOf(l.pc) : undefined;
+        return { key: l.key!, fingerprint: fingerprint(l.key!), state: l.state, since: l.since, ...(route ? { route } : {}) };
+      });
   }
 
   /** The signalling relays' states, for status. */
@@ -211,7 +229,7 @@ export class Mesh {
       this.log(`ignoring ${them}: ${MAX_LINKS} links already`);
       return undefined;
     }
-    const pc = new nodeDataChannel.PeerConnection(`vine-mesh-${this.me}-${them}`, { iceServers: this.o.ice });
+    const pc = new nodeDataChannel.PeerConnection(`vine-mesh-${this.me}-${them}`, rtcConfig(this.o.ice));
     const l: PeerLink = {
       id: them,
       pc,

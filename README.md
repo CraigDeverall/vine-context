@@ -1,4 +1,4 @@
-# Vine Context
+<h1 align="center"><img src="docs/images/vine-context-logo.svg" alt="Vine Context" width="460"></h1>
 
 **Shared memory for a team's AI agents.** One [Relate](https://relatedb.ai/) context graph of claims and questions, kept in step between everyone's machines, peer to peer, with no server.
 
@@ -176,7 +176,7 @@ The full account is in [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md), and the des
 ## Limits
 
 - **Search matches words, not meaning, by default.** A semantic embedder is optional and not yet published as a package.
-- **Strict networks need a TURN server.** Replication has been tested between processes on one machine and over real public relays.
+- **Strict networks need a TURN server.** You bring your own, and `vine turn set` stores it ([strict networks](docs/GUIDE.md#strict-networks-turn-and-stun)). Replication has been tested between processes on one machine and over real public relays.
 - **Removing someone can't recall the copy they already have.**
 - **Clocks are assumed correct,** and a context is sized for about 20 members and 100,000 changes.
 - **Desktop only for now:** phones, and assistants that only reach remote MCP servers, can't connect yet.

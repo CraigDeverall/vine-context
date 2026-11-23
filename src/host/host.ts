@@ -27,7 +27,8 @@ import { InviteDesk, type Admission, type Newcomer } from "../p2p/invites.js";
 import { b64u, formatCode, unb64u } from "../p2p/link.js";
 import { groupLink, Mesh } from "../p2p/mesh.js";
 import { lineReader, type Event, type Message, type Request } from "../p2p/protocol.js";
-import { iceServers, nostrSignaller, type SignalFactory } from "../p2p/signal.js";
+import { resolveIce, type IceSource } from "../p2p/ice.js";
+import { nostrSignaller, type SignalFactory } from "../p2p/signal.js";
 import { briefing, digest } from "./digest.js";
 import { InviteStore, hostDir, inviteLink, isLive, socketPath } from "./state.js";
 
@@ -43,7 +44,10 @@ export interface HostOptions {
   /** Exit after this many seconds with no local clients and no sharing. 0 never exits. */
   idleSeconds?: number;
   signal?: SignalFactory;
-  ice?: string[];
+  /** STUN/TURN servers. Left out, each new link reads this machine's setting (`vine turn set`, or VINE_ICE). */
+  ice?: IceSource;
+  /** Tests: "relay" allows only links through the TURN server. */
+  icePolicy?: "all" | "relay";
   /** Overrides HOLD_MS (tests). */
   holdMs?: number;
   log?(msg: string): void;
@@ -628,7 +632,8 @@ export class Host {
     this.rememberSharing(true);
     if (!this.members.isMember(this.me)) return;
     const signal = this.o.signal ?? nostrSignaller;
-    const ice = this.o.ice ?? iceServers();
+    const policy = this.o.icePolicy;
+    const ice: IceSource = this.o.ice ?? (() => ({ ...resolveIce(this.o.dataDir).config, ...(policy ? { policy } : {}) }));
     this.mesh = new Mesh({
       group: groupLink(this.group.id, unb64u(this.group.secret)),
       graphId: this.group.id,
@@ -887,8 +892,10 @@ export class Host {
         .filter((i) => !i.revoked || Date.now() - Date.parse(i.revoked.at) < 24 * 3600_000)
         .sort((a, b) => b.created_at.localeCompare(a.created_at))
         .map((i) => this.invites.summary(i)),
-      links: this.mesh?.online().map((l) => ({ name: this.members.displayName(l.key), fingerprint: l.fingerprint, state: l.state, since: l.since })) ?? [],
+      links: this.mesh?.online().map((l) => ({ name: this.members.displayName(l.key), fingerprint: l.fingerprint, state: l.state, since: l.since, ...(l.route ? { route: l.route } : {}) })) ?? [],
       relays: this.mesh?.relayStatus() ?? {},
+      // The STUN/TURN servers new links use (never a password). Absent when the host was given a fixed list.
+      ...(this.o.ice ? {} : { ice: resolveIce(this.o.dataDir).summary }),
       people: this.people(),
       log: { changes: this.log.size, held: this.log.heldChanges().length, refused: this.refused.size },
     };
