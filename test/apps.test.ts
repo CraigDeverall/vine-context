@@ -261,13 +261,20 @@ describe("names, auto-share and which graph", () => {
     }
   });
 
-  it("shares a new graph straight away and returns a join code", async () => {
+  it("puts a new context online straight away, and makes no join code until asked", async () => {
     const me = await agent("alice");
     process.env.VINE_AUTO_SHARE = "on";
     try {
       const r = await me.call("use_context", { name: "planning" });
-      expect(r).toMatchObject({ created: "your context 'planning'", code: expect.stringMatching(/^vine1_/), send: expect.stringContaining(r.code), shared_as: { name: "alice" } });
+      expect(r).toMatchObject({ created: "your context 'planning'", next: expect.stringContaining("no join code") });
+      expect(r).not.toHaveProperty("code");
+      expect(r).not.toHaveProperty("send");
       expect(await me.call("context_info")).toMatchObject({ sharing: { sharing: true } });
+      expect((await me.call("sharing_status")).invites).toEqual([]);
+      // Inviting is its own step, with the role the person chose.
+      const inv = await me.call("share_context", { label: "for Sam", role: "reader" });
+      expect(inv).toMatchObject({ code: expect.stringMatching(/^vine1_/), send: expect.stringContaining(inv.code), invite: { role: "reader" }, shared_as: { name: "alice" } });
+      expect((await me.call("sharing_status")).invites).toHaveLength(1);
       // Switching back to an existing graph doesn't share it.
       const back = await me.call("use_context", { name: "main" });
       expect(back).not.toHaveProperty("code");

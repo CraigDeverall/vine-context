@@ -156,11 +156,14 @@ link (tell them not to share it: it acts as them).
   it's in `your_contexts`: `use_context` (or `add_context` to use it as
   well), not `join_context`.
 - **To invite someone** (admins), call `share_context` (it invites them to
-  this chat's context), with a `label` such as "for Sam", and
-  `role: "reader"` if they should only read. Give them the `send` line and
-  tell them to send it privately to that one person. One code per person.
-- **A new context is shared as soon as it's created.** Show the person the
-  code `use_context` returns. `stop_sharing` takes a context offline (it stops
+  this chat's context), with a `label` such as "for Sam" and the `role` the
+  person chose. Unless they already said, ask first what the new member may
+  do: read and add (`contributor`), only read (`reader`), or read, add and
+  invite (`admin`). Give them the `send` line and tell them to send it
+  privately to that one person. One code per person.
+- **A new context is online as soon as it's created, with no one invited.**
+  There is no join code until the person asks to invite someone; never make
+  one unasked. `stop_sharing` takes a context offline (it stops
   syncing; the copy keeps working), and `start_sharing` brings it back.
 - `sharing_status` shows a context's invites, people, live links to other
   members, and whether the signalling relays are reachable. If none are, no

@@ -759,10 +759,11 @@ export class Session {
           "Invite one person to a context (you must be an admin of it; default: the chat's context): makes a new join code (vine1_…) for that person. " +
           "Your machine answers the code, so it must be online when they use it. The first person to use it is let straight in with the code's role and gets a full copy; anyone else using it is turned away. " +
           "Everyone in the context is told when someone joins, with their name, key fingerprint and agent. remove_peer takes anyone out. " +
-          "An unused code expires (default 24 hours). Call it once per person. sharing_status lists invites; revoke_invite cancels one.",
+          "An unused code expires (default 24 hours). Call it once per person, and only when the person asks to invite someone. " +
+          "Unless they already said, ask first what the person may do: read and add (contributor), only read (reader), or read, add and invite (admin). sharing_status lists invites; revoke_invite cancels one.",
         inputSchema: {
           label: z.string().max(60).optional().describe("Who it's for, e.g. 'for Sam': shown in sharing_status and in the join notice"),
-          role: z.enum(["reader", "contributor", "admin"]).optional().describe("The role they get when they join (default contributor)"),
+          role: z.enum(["reader", "contributor", "admin"]).optional().describe("The role they get when they join: the person's choice (default contributor)"),
           expires_hours: z.number().positive().max(720).optional().describe("Hours until an unused code stops working (default 24)"),
           context: which,
         },
@@ -864,7 +865,7 @@ export class Session {
     const nameArg = z.string().regex(GRAPH_RE).describe("Context name: lower-case letters, digits and dashes");
     const descriptionArg = z.string().max(500).optional().describe("For a new context: what it's for (what goes in it), in a sentence or two");
 
-    /** Starts a context of one's own if the name is new: describes it, and shares it if sharing is on by default. */
+    /** Starts a context of one's own if the name is new: describes it, and puts it online if sharing is on by default. It makes no join code: inviting is the person's step. */
     const created = async (name: string, isNew: boolean, description?: string) => {
       const c = this.contexts.get(name)!;
       if (isNew && description) {
@@ -873,15 +874,13 @@ export class Session {
         this.offer();
       }
       if (!isNew) return {};
-      const shared = autoShare() ? this.invited(await this.request<Record<string, any>>("share", {}, name), name) : {};
+      if (autoShare()) await this.request("start_sharing", undefined, name);
       return {
         created: this.where(name),
-        ...shared,
         next:
           (c.d.description ? "" : "Ask the person what this context is for and set it with describe_context. ") +
-          (autoShare()
-            ? "Show the person this join code now, and say: send it privately to one person; whoever uses it first is let in at once and gets a full copy, and everyone is told who joined. Then call model_guide before writing."
-            : "Call model_guide before writing."),
+          "No one is invited yet and there is no join code. When the person wants someone in, ask who and what they may do (read and add, only read, or also invite), then call share_context for that one person. " +
+          "Call model_guide before writing.",
       };
     };
 

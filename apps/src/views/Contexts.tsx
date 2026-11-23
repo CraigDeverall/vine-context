@@ -252,7 +252,7 @@ export function Contexts({ b }: { b: Bridge }) {
     try {
       const r = await b.call<{ invite?: { id?: string } } | undefined>(tool, args);
       setNotice(done ?? null);
-      // A new join code (from Invite, or a new context's first): marked in the People tab's list.
+      // A new join code (from Invite): marked in the People tab's list.
       if (r && typeof r === "object" && r.invite?.id) setMade(r.invite.id);
     } catch (e) {
       if (!(e instanceof NoToolCalls)) setError((e as Error).message);
@@ -366,7 +366,7 @@ export function Contexts({ b }: { b: Bridge }) {
       setCreating(null);
       setSwitching(false);
       viewing.current = name;
-      void act(a ? "add_context" : "use_context", { name, description }, `Created '${name}'${a ? " and added it to this chat" : ""}. Its first join code is under People.`);
+      void act(a ? "add_context" : "use_context", { name, description }, `Created '${name}'${a ? " and added it to this chat" : ""}. No one is invited yet: use Invite someone when you want to let a person in.`);
     };
     return modal(
       "Create a new context",

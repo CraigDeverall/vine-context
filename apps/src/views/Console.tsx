@@ -70,6 +70,8 @@ export function Console({ b }: { b: Bridge }) {
   const [error, setError] = useState<string>();
   const [copied, setCopied] = useState<string>();
   const [label, setLabel] = useState("");
+  // What the next join code lets its person do: chosen each time, never assumed.
+  const [role, setRole] = useState<Role>("contributor");
   const [naming, setNaming] = useState<string>();
   const saveName = async () => {
     await act("name", "set_my_name", { name: naming!.trim() });
@@ -116,7 +118,7 @@ export function Console({ b }: { b: Bridge }) {
     }
   };
   const invite = async () => {
-    await act("invite", "share_context", label.trim() ? { label: label.trim() } : {});
+    await act("invite", "share_context", { ...(label.trim() ? { label: label.trim() } : {}), role });
     setLabel("");
   };
   const open = state.invites.filter((i) => i.state === "open");
@@ -141,8 +143,8 @@ export function Console({ b }: { b: Bridge }) {
             Go offline
           </button>
         ) : admin ? (
-          <button className="primary" disabled={!!busy} onClick={() => act("share", "share_context")}>
-            Go online and make a join code
+          <button className="primary" disabled={!!busy} onClick={() => act("share", "start_sharing")}>
+            Go online
           </button>
         ) : null}
       </div>
@@ -229,6 +231,11 @@ export function Console({ b }: { b: Bridge }) {
               onInput={(e) => setLabel(e.currentTarget.value)}
               onKeyDown={(e) => e.key === "Enter" && void invite()}
             />
+            <select value={role} aria-label="What they can do" onChange={(e) => setRole(e.currentTarget.value as typeof role)}>
+              <option value="contributor">Read and add (contributor)</option>
+              <option value="reader">Only read (reader)</option>
+              <option value="admin">Read, add and invite (admin)</option>
+            </select>
             <button disabled={!!busy} onClick={() => void invite()}>
               New join code
             </button>
