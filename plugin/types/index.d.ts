@@ -98,7 +98,7 @@ export type ContextDetails = {
   stored_at: string
 }
 
-export type Tab = 'overview' | 'questions' | 'claims' | 'people'
+export type Tab = 'overview' | 'questions' | 'claims' | 'people' | 'settings'
 
 /** What the Questions and Claims lists show: the words to match, and which part of each list. */
 export type Filters = {
@@ -106,9 +106,6 @@ export type Filters = {
   claims: 'current' | 'mine' | 'conflicts' | 'history'
   questions: 'open' | 'answered' | 'mine'
 }
-
-/** Something being written for the agent about an item: a correction to a claim. */
-export type Compose = { kind: 'correct'; key: string }
 
 /** The latest line from someone else, for the band. */
 export type Latest = { by: string; summary: string; at: string }
@@ -128,9 +125,9 @@ declare module 'claude-code' {
       confirmRemove: string | null
       /** The new-context step (the panel shows only that), with what's wrong with what was typed; null while it's closed. */
       creating: { error: string | null } | null
-      /** The context (by name) whose details the panel shows; null is the list. */
+      /** A context that's off for this chat (by name), shown on its own page: it can't be opened. Null is the list. */
       managing: string | null
-      /** The details of the context being managed, once the server has answered. */
+      /** The details (`context_details`) of that context, or of the open context's Settings tab, once the server has answered. */
       details: ContextDetails | null
       /** The context whose deletion is being confirmed (the panel shows only that), with what's wrong with what was typed. */
       deleting: { name: string; error: string | null } | null
@@ -144,13 +141,13 @@ declare module 'claude-code' {
       tick: number
       /** The item (a claim's or question's id) the panel shows on its own; null is the lists. */
       detail: string | null
-      /** The correction being written (the panel shows only that). */
-      composing: Compose | null
       /** Whether your name is being changed (the panel shows only that). */
       renaming: boolean
       filters: Filters
       /** How many more items than the first page a list shows. */
       more: number
+      /** The folded parts the person has opened ("3 more ▾"), by id: everything else shows only its first few. */
+      folds: string[]
       /** With no context in this chat (there's no default): the contexts on this machine to choose from. Null while it has one. */
       unattached: string[] | null
     }

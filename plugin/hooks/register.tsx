@@ -4,18 +4,24 @@
 //   who's online and the latest news. The context's name opens the panel's
 //   Contexts view, where contexts are turned on and off for the chat.
 // - A status line entry, and a toast when someone else's change or a digest arrives.
-// - A panel (/contexts) with four tabs: an Overview (what needs you, what
+// - A panel (/contexts) with five tabs: an Overview (what needs you, what
 //   changed, recent activity), the context's Questions with their threads, its
-//   Claims (with conflicts and history), and its People. An item opens on its
-//   own, with everything linked to it. Anything being edited (the description,
-//   an answer, a correction, an invite, a new context, the chat's contexts,
-//   one context's details, a deletion being confirmed) takes the whole panel
-//   until it's done or cancelled.
+//   Claims (with conflicts and history), its People, and its Settings (this
+//   chat's use of it, sharing, what it holds, deleting it). Whether it's
+//   syncing, with a link to go online or offline, sits in the header. Long or
+//   secondary lists show their first few behind an underlined "N more ▾". An
+//   item opens on its own, with everything linked to it. Anything being edited
+//   (the description, an invite, a new context, the chat's contexts, the page
+//   of a context that's off for this chat, a deletion being confirmed) takes
+//   the whole panel until it's done or cancelled. An answer or a correction is
+//   written in the prompt box.
 //
-// Agents write; people steer. The panel never writes a claim itself: Answer,
-// "Answer with this", Correct, "Keep this one", Look into it, Catch me up and
-// "Save what this chat learned" hand the person's words to the agent as a
-// prompt, and the agent records them (see `prompts`).
+// Agents write; people steer. The panel never writes a claim itself: "Answer
+// with this", "Keep this one", Look into it, Catch me up and "Save what this
+// chat learned" hand the person's choice to the agent as a prompt, and the
+// agent records it (see `prompts`). Answering a question and correcting a claim
+// start a prompt in the prompt box instead (see `drafts`): the person writes
+// their answer or correction on its last line and sends it themselves.
 //
 // It reads through the vine-context MCP server's `context_activity` tool,
 // which never uses up the join notices meant for the agent, and acts through
@@ -24,7 +30,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, UiPressArgument } from 'claude-code'
 
-import type { Activity, Change, Compose, ContextDetails, Filters, GraphEdge, GraphNode, Invite, Latest, Person, Tab } from '../types'
+import type { Activity, Change, ContextDetails, Filters, GraphEdge, GraphNode, Invite, Latest, Person, Tab } from '../types'
 
 const PANE = 'context-graph'
 const POLL_MS = 4000
@@ -32,6 +38,8 @@ const TICK_MS = 400
 const NOTICE_MS = 6000
 /** How many items a list shows before "Show more". */
 const PAGE = 20
+/** How many recent changes the Overview shows before "N more". */
+const RECENT = 5
 const SERVERS = ['plugin_vine-context_vine-context', 'plugin:vine-context:vine-context', 'vine-context']
 const NAME_RE = /^[a-z0-9][a-z0-9-]{0,62}$/
 
@@ -49,7 +57,6 @@ const deleting = atom({ plugin: 'vine-context', key: 'deleting' } as const, null
 const editing = atom({ plugin: 'vine-context', key: 'editing' } as const, false)
 const switching = atom({ plugin: 'vine-context', key: 'switching' } as const, false)
 const detail = atom({ plugin: 'vine-context', key: 'detail' } as const, null)
-const composing = atom({ plugin: 'vine-context', key: 'composing' } as const, null)
 const renaming = atom({ plugin: 'vine-context', key: 'renaming' } as const, false)
 const filters = atom({ plugin: 'vine-context', key: 'filters' } as const, { text: '', claims: 'current', questions: 'open' })
 const more = atom({ plugin: 'vine-context', key: 'more' } as const, 0)
@@ -57,6 +64,7 @@ const unattached = atom({ plugin: 'vine-context', key: 'unattached' } as const, 
 const viewing = atom({ plugin: 'vine-context', key: 'viewing' } as const, null)
 const tick = atom({ plugin: 'vine-context', key: 'tick' } as const, 0)
 const inviting = atom({ plugin: 'vine-context', key: 'inviting' } as const, null)
+const folds = atom({ plugin: 'vine-context', key: 'folds' } as const, [] as string[])
 
 type Engine = EngineInterface
 
@@ -74,6 +82,7 @@ const TABS: { tab: Tab; icon: string; label: string }[] = [
   { tab: 'questions', icon: '❓', label: 'Questions' },
   { tab: 'claims', icon: '📌', label: 'Claims' },
   { tab: 'people', icon: '👥', label: 'People' },
+  { tab: 'settings', icon: '⚙', label: 'Settings' },
 ]
 
 const short = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s)
@@ -168,20 +177,29 @@ export const prompts = {
     `Record what we've learned in this chat in the context '${context}'. Search it first, so you link to what's already there instead of repeating it. Add a claim for each finding and a question for each thing we still don't know, then tell me what you recorded, with the ids.`,
   investigate: (q: GraphNode, context?: string) =>
     `Look into the open question ${q.key} ("${short(q.title, 200)}")${context ? ` in the context '${context}'` : ''}. Search the context for what's already known about it, find out what you can, and reply on its thread with what you find. If that settles it, record a claim that answers it.`,
-  correct: (claim: GraphNode, text: string, context?: string) =>
-    `The claim ${claim.key} ("${short(claim.title, 200)}")${context ? ` in the context '${context}'` : ''} is wrong or out of date. What's right: ${text}\n\n` +
-    `Record it: paraphrase it as a claim that stands alone, and add it with replaces: [${claim.key}]${context ? ` (context: ${context})` : ''}.`,
   settle: (keep: GraphNode, drop: GraphNode, context?: string) =>
     `The claims ${keep.key} ("${short(keep.title, 200)}") and ${drop.key} ("${short(drop.title, 200)}") contradict each other${context ? ` in the context '${context}'` : ''}. ${keep.key} is the one that's right.\n\n` +
     `Settle it so only one stands: withdraw ${drop.key} with that as the reason if you may, otherwise record a claim that replaces it (replaces: [${drop.key}])${context ? ` (context: ${context})` : ''}. Then tell me what you did.`,
 }
 
-/** What the agent is asked when the person answers a question, or picks a reply as the answer. */
-export function answerPrompt(q: GraphNode, answer: { text: string } | { reply: GraphNode }, context?: string): string {
+/**
+ * What the prompt box is started with to answer a question or correct a claim:
+ * what the agent is to do, the item, and a last line for the person to finish
+ * in their own words before they send it.
+ */
+export const drafts = {
+  answer: (q: GraphNode, context?: string) =>
+    `Record my answer to the open question ${q.key}${context ? ` in the context '${context}'` : ''}: paraphrase it as a claim that stands alone, with answers: [${q.key}].\n` +
+    `Q: ${short(q.title, 300)}\nA: `,
+  correct: (claim: GraphNode, context?: string) =>
+    `The claim ${claim.key}${context ? ` in the context '${context}'` : ''} is wrong or out of date. Record what's right: paraphrase it as a claim that stands alone, with replaces: [${claim.key}].\n` +
+    `Was: ${short(claim.title, 300)}\nNow: `,
+}
+
+/** What the agent is asked when the person picks a reply as a question's answer. */
+export function answerPrompt(q: GraphNode, answer: { reply: GraphNode }, context?: string): string {
   const question = `the open question ${q.key} ("${short(q.title, 200)}")${context ? ` in the context '${context}'` : ''}`
   const where = context ? ` (context: ${context})` : ''
-  if ('text' in answer)
-    return `My answer to ${question}: ${answer.text}\n\nRecord it: paraphrase it as a claim that stands alone, and add it with answers: [${q.key}]${where}.`
   const r = answer.reply
   return (
     `Answer ${question} with ${prop(r, 'recorded_by') || 'its'}'s reply ${r.key}: "${short(r.title, 400)}"\n\n` +
@@ -202,8 +220,6 @@ const GIVE_UP_AFTER = 3
 let noticeTimer: { cancel(): void } | undefined
 /** The items opened one after another, so Back returns to the one before. */
 let trail: string[] = []
-/** What's typed in the correction box, for its Send button. */
-let composeText = ''
 
 /** Calls a tool on the vine-context server, finding its name on first use. */
 async function call($: Engine, tool: string, args: Record<string, unknown> = {}): Promise<any> {
@@ -321,19 +337,30 @@ async function act($: Engine, tool: string, args: Record<string, unknown>, done?
   await loadDetails($)
 }
 
-/** Reads the details of the context being managed (again, after a change). */
+/** The context whose details the panel shows: an off context's page, else the open context's Settings tab. */
+async function detailsOf($: Engine): Promise<string | null> {
+  const m = await read($, managing)
+  if (m) return m
+  if ((await read($, tab)) !== 'settings' || (await read($, switching))) return null
+  return (await read($, activity))?.context ?? null
+}
+
+/** The context whose details were last asked for by drawing the Settings tab, so a failing read isn't asked again on every redraw. */
+let askedDetails: string | undefined
+
+/** Reads the details of the context being shown (again, after a change). */
 async function loadDetails($: Engine) {
-  const name = await read($, managing)
+  const name = await detailsOf($)
   if (!name) return
   try {
     const d = (await call($, 'context_details', { name })) as ContextDetails
-    if ((await read($, managing)) === name) await update($, details, () => d)
+    if ((await detailsOf($)) === name) await update($, details, () => d)
   } catch (e) {
     await update($, error, () => trouble((e as Error).message))
   }
 }
 
-/** Opens one context's details (or, with null, goes back to the list). */
+/** Opens the page of a context that's off for this chat (or, with null, goes back to the list). */
 async function manage($: Engine, name: string | null) {
   await update($, details, () => null)
   await update($, managing, () => name)
@@ -349,9 +376,24 @@ export function newContextProblem(name: string, description: string, existing: s
   return null
 }
 
+/**
+ * Starts a prompt in the prompt box for the person to finish and send: what they
+ * had typed stays, above it. The panel stays on the item, to read while writing.
+ */
+async function draft($: Engine, text: string, what: string) {
+  try {
+    const box = await $.prompt.read()
+    const kept = box.text.replace(/\s+$/, '')
+    const r = await $.prompt.fill({ text: kept ? `${kept}\n\n${text}` : text })
+    if (r.isFilled) await say($, `Your ${what} is started in the prompt box: finish its last line, then press Enter to send it to your agent.`)
+    else await update($, error, () => (r.refusal === 'dialog' ? 'Close the open dialog first: the prompt box can’t take text while it’s up.' : 'The prompt box couldn’t take the text here.'))
+  } catch (e) {
+    await update($, error, () => (e as Error).message)
+  }
+}
+
 /** Hands the person's words to the agent, as their own prompt: it shows in the chat, so the panel says nothing more. */
 async function ask($: Engine, text: string) {
-  await update($, composing, () => null)
   await openItem($, null)
   await say($, null)
   try {
@@ -368,6 +410,8 @@ async function openPane($: Engine, contexts = false) {
   // The panel opens on the list or the context, never on a step left half done.
   await update($, creating, () => null)
   await update($, deleting, () => null)
+  await update($, folds, () => [])
+  askedDetails = undefined
   await manage($, null)
   if (contexts) await openItem($, null)
   await refresh($)
@@ -532,9 +576,59 @@ export const register: Register = on => {
         {help && meta(help)}
       </Box>
     )
+    const opened: string[] = await read($, folds)
+    const flip = (id: string) => void update($, folds, (v: string[]) => (v.includes(id) ? v.filter(x => x !== id) : [...v, id]))
+    /** An underlined link that opens and closes what it's about. */
+    const foldLink = (id: string, open: boolean, label: string) => (
+      <Box key={`fold-row-${id}`} flexDirection="row">
+        <Button key={`fold-${id}`} plain dimColor onPress={() => flip(id)}>
+          <Text underline>{label}</Text>
+          {open ? ' ▴' : ' ▾'}
+        </Button>
+      </Box>
+    )
+    /**
+     * A list that shows only its first few items, with a link for the rest (and
+     * one to fold them away again). With `latest`, the few are the last ones and
+     * the link comes first, as for the earlier replies in a thread.
+     */
+    const folded = <T,>(id: string, list: T[], first: number, what: string, one: string, render: (x: T, i: number) => unknown, latest = false) => {
+      const hidden = list.length - first
+      if (hidden <= 0) return list.map(render)
+      const open = opened.includes(id)
+      const shown = open ? list : latest ? list.slice(-first) : list.slice(0, first)
+      const link = foldLink(id, open, open ? `Show fewer ${what}` : `${hidden} ${latest ? 'earlier' : 'more'} ${hidden === 1 ? one : what}`)
+      return latest ? [link, ...shown.map(render)] : [...shown.map(render), link]
+    }
+    /** Extra detail behind an underlined link, closed until asked for. */
+    const reveal = (id: string, label: string, hide: string, body: unknown) =>
+      opened.includes(id) ? (
+        <Box key={`reveal-${id}`} flexDirection="column" gap="xs">
+          {foldLink(id, true, hide)}
+          {body}
+        </Box>
+      ) : (
+        foldLink(id, false, label)
+      )
     const here = none ?? a?.your_contexts ?? []
     const using = a?.contexts ?? []
     const inChat = (n: string) => using.find(c => c.name === n)
+    const loadedDetails = await read($, details)
+    /** Shows one of the chat's contexts: the panel leaves the list for it. */
+    const show = (n: string) =>
+      update($, viewing, () => n)
+        .then(() => refresh($))
+        .then(() => manage($, null))
+        .then(() => update($, switching, () => false))
+    /** Opens one of the chat's contexts on its Settings tab. */
+    const settingsTab = (n: string) =>
+      show(n)
+        .then(() => update($, more, () => 0))
+        .then(() => update($, tab, () => 'settings' as Tab))
+        .then(() => {
+          askedDetails = n
+          return loadDetails($)
+        })
     /** Turns a context on or off for this chat. */
     const toggle = (n: string) =>
       void (inChat(n)
@@ -543,12 +637,9 @@ export const register: Register = on => {
     /** Starts the join-code step for one of the chat's contexts: the panel moves to it, and the code lands in its People tab. */
     const share = (n: string) => {
       inviteNote = ''
-      return update($, viewing, () => n)
-        .then(() => refresh($))
-        .then(() => manage($, null))
-        .then(() => update($, switching, () => false))
-        .then(() => update($, inviting, () => 'contributor' as Invite['role']))
+      return show(n).then(() => update($, inviting, () => 'contributor' as Invite['role']))
     }
+    const writeHere = (n: string) => void act($, 'add_context', { name: n, write_here: true }, `New items go to '${n}' unless another fits better.`)
 
     /** A context's pin: whether new chats started in this chat's folder (or below it) start with it. */
     const pin = (n: string, where: string) => {
@@ -569,6 +660,207 @@ export const register: Register = on => {
             {tail(f.folder, 32)}
           </Text>
         </Button>
+      )
+    }
+
+    /**
+     * A context's settings: how this chat uses it, its sharing, what it holds,
+     * and deleting it. The open context's Settings tab, and the page of one
+     * that's off for this chat (`inTab` false), where only some of it can be changed.
+     */
+    const settings = (n: string, inTab: boolean) => {
+      const c = inChat(n)
+      const d = loadedDetails && loadedDetails.name === n ? loadedDetails : null
+      const isAdmin = (d?.role ?? c?.role) === 'admin'
+      const severalOn = using.length > 1
+      const sharing = d?.sharing ?? (inTab ? a?.sharing : undefined)
+      const relays = inTab ? a?.relays_up : undefined
+      const row = (label: string, value: unknown) => (
+        <Box key={`detail-${label}`} flexDirection="row" gap={1}>
+          <Box width={12} flexShrink={0}>
+            <Text dimColor>{label}</Text>
+          </Box>
+          <Box flexShrink={1}>
+            <Text wrap="wrap">{value}</Text>
+          </Box>
+        </Box>
+      )
+      const count = (k: string, one: string, plural: string) => `${d?.items[k] ?? 0} ${(d?.items[k] ?? 0) === 1 ? one : plural}`
+      return (
+        <Box key={`settings-${n}`} flexDirection="column" gap="md">
+          <Box flexDirection="column" gap="xs">
+            {heading('This chat')}
+            <Box flexDirection="row" gap="xs" flexWrap="wrap" alignItems="center">
+              <Button key={`detail-toggle-${n}`} label={c ? '◉ On' : '○ Off'} variant={c ? 'primary' : 'secondary'} dimColor={!c} onPress={() => toggle(n)} />
+              {c && severalOn && !c.writes_here && <Button key={`detail-write-${n}`} label="✎ Write here" variant="secondary" onPress={() => writeHere(n)} />}
+              {c && !inTab && <Button key={`detail-open-${n}`} label="Open" variant="secondary" onPress={() => void show(n)} />}
+            </Box>
+            {meta(
+              c
+                ? severalOn
+                  ? c.writes_here
+                    ? 'Your agent reads it, and writes here when no other context clearly fits.'
+                    : 'Your agent reads it, and writes here when its description fits.'
+                  : 'Your agent reads and writes here. Turning it off leaves it on this machine.'
+                : 'Off for this chat. Turn it on to open it here, share it or change its settings.',
+            )}
+            {pin(n, 'detail-')}
+          </Box>
+          <Box flexDirection="column" gap="xs">
+            {heading('Sharing')}
+            {sharing === undefined ? (
+              <Text dimColor>Loading…</Text>
+            ) : (
+              <Text wrap="wrap">
+                <Text color={sharing ? 'success' : 'warning'}>● </Text>
+                {sharing ? 'Syncing' : 'Offline'}
+                <Text dimColor>
+                  {d ? ` · ${d.members} member${d.members === 1 ? '' : 's'}` : ''}
+                  {d && d.members > 1 ? ` · ${d.online} of the others online` : ''}
+                  {d?.open_invites ? ` · ${d.open_invites} join code${d.open_invites === 1 ? '' : 's'} waiting` : ''}
+                  {sharing && relays !== undefined ? ` · ${relays} signalling relay${relays === 1 ? '' : 's'} reachable` : ''}
+                </Text>
+              </Text>
+            )}
+            {meta(
+              sharing === false
+                ? 'Your copy keeps working. What you write is sent when you’re back online.'
+                : relays === 0
+                  ? 'No relay is reachable, so the others can’t find this machine right now.'
+                  : 'Every member keeps a full copy. Changes travel directly between your machines whenever you’re both online.',
+            )}
+            {c && (
+              <Box flexDirection="row" gap="xs" flexWrap="wrap">
+                {isAdmin && (
+                  <Button
+                    key={`detail-invite-${n}`}
+                    label="+ Invite someone"
+                    variant="primary"
+                    onPress={() => {
+                      inviteNote = ''
+                      return inTab ? update($, inviting, () => 'contributor' as Invite['role']) : share(n)
+                    }}
+                  />
+                )}
+                {sharing !== undefined &&
+                  (sharing ? (
+                    <Button key={`detail-offline-${n}`} label="Go offline" variant="secondary" dimColor onPress={() => void act($, 'stop_sharing', { context: n }, `'${n}' is offline: not syncing until you go online again.`)} />
+                  ) : (
+                    <Button key={`detail-online-${n}`} label="Go online" variant="secondary" onPress={() => void act($, 'start_sharing', { context: n }, `'${n}' is back online: syncing with the other members.`)} />
+                  ))}
+              </Box>
+            )}
+            {c && !isAdmin && meta('Only an admin can invite people.')}
+          </Box>
+          <Box flexDirection="column" gap="xs">
+            {heading('About')}
+            {d ? (
+              <Box flexDirection="column" gap="xs">
+                <Box flexDirection="column">
+                  {row('Your role', d.role ?? 'removed (you keep your copy to read)')}
+                  {row('Made by', d.yours ? 'you' : (d.created_by ?? 'unknown'))}
+                  {row('Holds', `${count('Claim', 'claim', 'claims')} · ${count('Question', 'question', 'questions')} · ${count('Reply', 'reply', 'replies')}`)}
+                  {d.held > 0 && row('Not yet sent', `${d.held} just written, still only on this machine`)}
+                </Box>
+                {reveal(
+                  `about-${n}`,
+                  'Id, storage and history',
+                  'Hide id, storage and history',
+                  <Box key={`about-more-${n}`} flexDirection="column">
+                    {row('Changes', `${d.changes} in all, withdrawn items included`)}
+                    {row('Id', d.id ?? 'none')}
+                    {row('Stored at', d.stored_at)}
+                  </Box>,
+                )}
+              </Box>
+            ) : (
+              <Text dimColor>{err ? 'Couldn’t read its details.' : 'Loading…'}</Text>
+            )}
+          </Box>
+          <Box flexDirection="column" gap="xs">
+            {heading('Delete')}
+            {meta('Deletes this machine’s copy for good. Other members keep theirs. You’ll be asked to confirm.')}
+            <Box flexDirection="row">
+              <Button
+                key={`ask-delete-${n}`}
+                label="Delete from this machine…"
+                variant="secondary"
+                dimColor
+                onPress={() => {
+                  deleteText = ''
+                  return update($, deleting, () => ({ name: n, error: null }))
+                }}
+              />
+            </Box>
+          </Box>
+        </Box>
+      )
+    }
+
+    // Confirming a deletion, from the Settings tab or an off context's page:
+    // only that. Nothing goes until the name is typed.
+    const doomed = await read($, deleting)
+    if (doomed && here.includes(doomed.name)) {
+      const n = doomed.name
+      const known = loadedDetails && loadedDetails.name === n ? loadedDetails : null
+      const close = () => {
+        deleteText = ''
+        void update($, deleting, () => null)
+      }
+      const confirm = (typed: string) => {
+        if (typed.trim() !== n) return update($, deleting, () => ({ name: n, error: `Type ${n} exactly to delete it. Nothing was deleted.` }))
+        deleteText = ''
+        return update($, deleting, () => null)
+          .then(() => manage($, null))
+          .then(() => update($, viewing, () => null))
+          .then(() => update($, tab, () => 'overview' as Tab))
+          .then(() => act($, 'delete_context', { name: n, confirm: n }, `'${n}' was deleted from this machine.`))
+      }
+      const items = known ? Object.values(known.items).reduce((x, y) => x + y, 0) : null
+      const others = known ? known.members - (known.role ? 1 : 0) : null
+      return modal(
+        'delete-step',
+        `Delete ${n}?`,
+        `This permanently deletes this machine’s copy of '${n}'${items !== null ? `: its ${items} item${items === 1 ? '' : 's'}, their history` : ': its claims, questions and replies, their history'}, the join codes made here, and every chat’s and folder’s link to it. It can’t be undone.`,
+        <Box flexDirection="column" gap="md">
+          {card(
+            'delete-effects',
+            <Box flexDirection="column" gap="xs">
+              {others === null ? (
+                <Text wrap="wrap">Other members keep their own copies. If you’re its only member, it’s gone for good.</Text>
+              ) : others > 0 ? (
+                <Text wrap="wrap">
+                  {others} other member{others === 1 ? ' keeps their' : 's keep their'} own copy, and nothing is deleted for them. To get it back you’d need a new join code from one of its admins.
+                </Text>
+              ) : (
+                <Text color="warning" wrap="wrap">
+                  You’re its only member, so this is the only copy: once deleted, it’s gone for good.
+                </Text>
+              )}
+              {known?.yours && others !== null && others > 0 && (
+                <Text color="warning" wrap="wrap">
+                  You made this context. The other members keep syncing with each other, but the join codes you made stop working.
+                </Text>
+              )}
+              {inChat(n) && meta('To only stop using it in this chat, turn it off instead: it stays on this machine.')}
+            </Box>,
+            'warning',
+          )}
+          {field(
+            `Type ${n} to confirm`,
+            <Input key={`delete-confirm-${n}`} placeholder={n} autoFocus onInput={(v: string) => (deleteText = v)} onSubmit={(v: string) => confirm(v)} />,
+          )}
+          {doomed.error && (
+            <Text color="error" wrap="wrap">
+              {doomed.error}
+            </Text>
+          )}
+          <Box flexDirection="row" gap="xs">
+            <Button key="keep-context" label="Keep it" variant="primary" onPress={close} />
+            <Button key={`delete-${n}`} label="Delete permanently" variant="secondary" onPress={() => confirm(deleteText)} />
+          </Box>
+        </Box>,
+        { label: 'Cancel', onPress: close },
       )
     }
 
@@ -640,92 +932,14 @@ export const register: Register = on => {
     if (none !== null || (await read($, switching))) {
       const many = using.length > 1
 
-      // Confirming a deletion: only that. Nothing goes until the name is typed.
-      const doomed = await read($, deleting)
-      if (doomed && here.includes(doomed.name)) {
-        const n = doomed.name
-        const d = await read($, details)
-        const known = d && d.name === n ? d : null
-        const close = () => {
-          deleteText = ''
-          void update($, deleting, () => null)
-        }
-        const confirm = (typed: string) => {
-          if (typed.trim() !== n) return update($, deleting, () => ({ name: n, error: `Type ${n} exactly to delete it. Nothing was deleted.` }))
-          deleteText = ''
-          return update($, deleting, () => null)
-            .then(() => manage($, null))
-            .then(() => update($, viewing, () => null))
-            .then(() => act($, 'delete_context', { name: n, confirm: n }, `'${n}' was deleted from this machine.`))
-        }
-        const items = known ? Object.values(known.items).reduce((x, y) => x + y, 0) : null
-        const others = known ? known.members - (known.role ? 1 : 0) : null
-        return modal(
-          'delete-step',
-          `Delete ${n}?`,
-          `This permanently deletes this machine’s copy of '${n}'${items !== null ? `: its ${items} item${items === 1 ? '' : 's'}, their history` : ': its claims, questions and replies, their history'}, the join codes made here, and every chat’s and folder’s link to it. It can’t be undone.`,
-          <Box flexDirection="column" gap="md">
-            {card(
-              'delete-effects',
-              <Box flexDirection="column" gap="xs">
-                {others === null ? (
-                  <Text wrap="wrap">Other members keep their own copies. If you’re its only member, it’s gone for good.</Text>
-                ) : others > 0 ? (
-                  <Text wrap="wrap">
-                    {others} other member{others === 1 ? ' keeps their' : 's keep their'} own copy, and nothing is deleted for them. To get it back you’d need a new join code from one of its admins.
-                  </Text>
-                ) : (
-                  <Text color="warning" wrap="wrap">
-                    You’re its only member, so this is the only copy: once deleted, it’s gone for good.
-                  </Text>
-                )}
-                {known?.yours && others !== null && others > 0 && (
-                  <Text color="warning" wrap="wrap">
-                    You made this context. The other members keep syncing with each other, but the join codes you made stop working.
-                  </Text>
-                )}
-                {inChat(n) && meta('To only stop using it in this chat, turn it off instead: it stays on this machine.')}
-              </Box>,
-              'warning',
-            )}
-            {field(
-              `Type ${n} to confirm`,
-              <Input key={`delete-confirm-${n}`} placeholder={n} autoFocus onInput={(v: string) => (deleteText = v)} onSubmit={(v: string) => confirm(v)} />,
-            )}
-            {doomed.error && (
-              <Text color="error" wrap="wrap">
-                {doomed.error}
-              </Text>
-            )}
-            <Box flexDirection="row" gap="xs">
-              <Button key="keep-context" label="Keep it" variant="primary" onPress={close} />
-              <Button key={`delete-${n}`} label="Delete permanently" variant="secondary" onPress={() => confirm(deleteText)} />
-            </Box>
-          </Box>,
-          { label: 'Cancel', onPress: close },
-        )
-      }
-
-      // One context's details and settings.
+      // A context that's off for this chat: what it's for and its settings. One
+      // that's on opens instead, with these on its Settings tab.
       const managed = await read($, managing)
       if (managed && here.includes(managed)) {
         const n = managed
         const c = inChat(n)
-        const loadedDetails = await read($, details)
         const d = loadedDetails && loadedDetails.name === n ? loadedDetails : null
-        const isAdmin = (d?.role ?? c?.role) === 'admin'
         const description = d ? d.description : (c?.description ?? null)
-        const row = (label: string, value: unknown) => (
-          <Box key={`detail-${label}`} flexDirection="row" gap={1}>
-            <Box width={12} flexShrink={0}>
-              <Text dimColor>{label}</Text>
-            </Box>
-            <Box flexShrink={1}>
-              <Text wrap="wrap">{value}</Text>
-            </Box>
-          </Box>
-        )
-        const count = (k: string, one: string, many: string) => `${d?.items[k] ?? 0} ${(d?.items[k] ?? 0) === 1 ? one : many}`
         return modal(
           'context-details',
           n,
@@ -740,115 +954,8 @@ export const register: Register = on => {
                   No description yet, so agents won’t know what belongs here.
                 </Text>
               )}
-              {isAdmin && c && (
-                <Box flexDirection="row">
-                  <Button
-                    key={`describe-${n}`}
-                    label="✎ Edit description"
-                    variant="secondary"
-                    onPress={() =>
-                      update($, viewing, () => n)
-                        .then(() => refresh($))
-                        .then(() => manage($, null))
-                        .then(() => update($, switching, () => false))
-                        .then(() => update($, editing, () => true))
-                    }
-                  />
-                </Box>
-              )}
             </Box>
-            <Box flexDirection="column" gap="xs">
-              {heading('This chat')}
-              <Box flexDirection="row" gap="xs" flexWrap="wrap" alignItems="center">
-                <Button key={`detail-toggle-${n}`} label={c ? '◉ On' : '○ Off'} variant={c ? 'primary' : 'secondary'} dimColor={!c} onPress={() => toggle(n)} />
-                {c && many && !c.writes_here && (
-                  <Button key={`detail-write-${n}`} label="✎ Write here" variant="secondary" onPress={() => void act($, 'add_context', { name: n, write_here: true }, `New items go to '${n}' unless another fits better.`)} />
-                )}
-                {c && (
-                  <Button
-                    key={`detail-open-${n}`}
-                    label="Open"
-                    variant="secondary"
-                    onPress={() =>
-                      update($, viewing, () => n)
-                        .then(() => refresh($))
-                        .then(() => manage($, null))
-                        .then(() => update($, switching, () => false))
-                    }
-                  />
-                )}
-              </Box>
-              {meta(
-                c
-                  ? many
-                    ? c.writes_here
-                      ? 'Your agent reads it, and writes here when no other context clearly fits.'
-                      : 'Your agent reads it, and writes here when its description fits.'
-                    : 'Your agent reads and writes here.'
-                  : 'Off for this chat. Turn it on to use it here, and to share it or change its settings.',
-              )}
-              {pin(n, 'detail-')}
-            </Box>
-            <Box flexDirection="column" gap="xs">
-              {heading('Sharing')}
-              {d ? (
-                <Text wrap="wrap">
-                  <Text color={d.sharing ? 'success' : 'warning'}>● </Text>
-                  {d.sharing ? 'Syncing' : 'Offline'}
-                  <Text dimColor>
-                    {' '}
-                    · {d.members} member{d.members === 1 ? '' : 's'}
-                    {d.members > 1 ? ` · ${d.online} of the others online` : ''}
-                    {d.open_invites ? ` · ${d.open_invites} join code${d.open_invites === 1 ? '' : 's'} waiting` : ''}
-                  </Text>
-                </Text>
-              ) : (
-                <Text dimColor>Loading…</Text>
-              )}
-              {c && (
-                <Box flexDirection="row" gap="xs" flexWrap="wrap">
-                  {isAdmin && <Button key={`detail-share-${n}`} label="+ Share" variant="primary" onPress={() => share(n)} />}
-                  {d &&
-                    (d.sharing ? (
-                      <Button key={`detail-offline-${n}`} label="Go offline" variant="secondary" dimColor onPress={() => void act($, 'stop_sharing', { context: n }, `'${n}' is offline: not syncing until you go online again.`)} />
-                    ) : (
-                      <Button key={`detail-online-${n}`} label="Go online" variant="secondary" onPress={() => void act($, 'start_sharing', { context: n }, `'${n}' is back online: syncing with the other members.`)} />
-                    ))}
-                </Box>
-              )}
-              {c && !isAdmin && meta('Only an admin can invite people.')}
-            </Box>
-            <Box flexDirection="column" gap="xs">
-              {heading('About')}
-              {d ? (
-                <Box flexDirection="column">
-                  {row('Your role', d.role ?? 'removed (you keep your copy to read)')}
-                  {row('Made by', d.yours ? 'you' : (d.created_by ?? 'unknown'))}
-                  {row('Holds', `${count('Claim', 'claim', 'claims')} · ${count('Question', 'question', 'questions')} · ${count('Reply', 'reply', 'replies')} · ${d.changes} change${d.changes === 1 ? '' : 's'} in all`)}
-                  {d.held > 0 && row('Not yet sent', `${d.held} just written, still only on this machine`)}
-                  {row('Id', d.id ?? 'none')}
-                  {row('Stored at', d.stored_at)}
-                </Box>
-              ) : (
-                <Text dimColor>{err ? 'Couldn’t read its details.' : 'Loading…'}</Text>
-              )}
-            </Box>
-            <Box flexDirection="column" gap="xs">
-              {heading('Delete')}
-              {meta('Deletes this machine’s copy for good. Other members keep theirs. You’ll be asked to confirm.')}
-              <Box flexDirection="row">
-                <Button
-                  key={`ask-delete-${n}`}
-                  label="Delete from this machine…"
-                  variant="secondary"
-                  dimColor
-                  onPress={() => {
-                    deleteText = ''
-                    return update($, deleting, () => ({ name: n, error: null }))
-                  }}
-                />
-              </Box>
-            </Box>
+            {settings(n, false)}
           </Box>,
           { label: '‹ Contexts', onPress: () => void manage($, null) },
         )
@@ -887,7 +994,7 @@ export const register: Register = on => {
               <Box flexDirection="column" gap="xs">
                 <Box flexDirection="row" gap={1} justifyContent="space-between" alignItems="center">
                   <Box flexDirection="row" gap="xs" alignItems="center" flexShrink={1} flexWrap="wrap">
-                    <Button key={`name-${n}`} label={n} plain onPress={() => manage($, n)} />
+                    <Button key={`name-${n}`} label={n} plain onPress={() => (c ? show(n) : manage($, n))} />
                     <Text>
                       {c && <Text dimColor>· {c.role ?? 'removed'}</Text>}
                       {c && many && c.writes_here ? <Text color="suggestion"> ✎ writes here</Text> : ''}
@@ -901,11 +1008,10 @@ export const register: Register = on => {
                   </Text>
                 )}
                 <Box flexDirection="row" gap="xs" flexWrap="wrap" alignItems="center">
-                  <Button key={`details-${n}`} label="Details" variant="secondary" dimColor onPress={() => manage($, n)} />
+                  {c && <Button key={`open-${n}`} label="Open" variant="secondary" onPress={() => show(n)} />}
+                  <Button key={`settings-${n}`} label="Settings" variant="secondary" dimColor onPress={() => (c ? settingsTab(n) : manage($, n))} />
                   {c?.role === 'admin' && <Button key={`share-${n}`} label="Share" variant="secondary" dimColor onPress={() => share(n)} />}
-                  {c && many && !c.writes_here && (
-                    <Button key={`write-${n}`} label="✎ Write here" variant="secondary" dimColor onPress={() => void act($, 'add_context', { name: n, write_here: true }, `New items go to '${n}' unless another fits better.`)} />
-                  )}
+                  {c && many && !c.writes_here && <Button key={`write-${n}`} label="✎ Write here" variant="secondary" dimColor onPress={() => writeHere(n)} />}
                 </Box>
                 {pin(n, '')}
               </Box>,
@@ -1005,41 +1111,6 @@ export const register: Register = on => {
         />,
         { label: 'Cancel', onPress: () => void update($, renaming, () => false) },
       )
-
-    // Correcting a claim: only the claim and what's right instead. The agent records it.
-    const compose = await read($, composing)
-    const composeOn = compose && rel ? rel.byKey.get(compose.key) : undefined
-    if (compose && composeOn) {
-      const close = () => void update($, composing, () => null)
-      const send = (v: string) => {
-        composeText = ''
-        if (v.trim()) void ask($, prompts.correct(composeOn, v.trim(), named))
-      }
-      return modal(
-        'correct-step',
-        'Correct this claim',
-        composeOn.title,
-        <Box flexDirection="column" gap="sm">
-          {meta(`${byline(composeOn)} · ${composeOn.key}`)}
-          {field(
-            'What’s right instead?',
-            <Input
-              key={`correct-input-${composeOn.key}`}
-              placeholder="In your own words: your agent records it as a claim that replaces this one"
-              rows={4}
-              autoFocus
-              onInput={(v: string) => (composeText = v)}
-              onSubmit={send}
-            />,
-          )}
-          <Box flexDirection="row">
-            <Button key="send-correction" label="Send to agent" variant="primary" onPress={() => send(composeText)} />
-          </Box>
-          {meta('The old claim stays in the history, marked as replaced, so anyone can see what was believed before.')}
-        </Box>,
-        { label: 'Cancel', onPress: close },
-      )
-    }
 
     // Making a join code: who it's for and their role, then back to the list, where it waits to be sent.
     const invitingRole = admin ? await read($, inviting) : null
@@ -1181,26 +1252,14 @@ export const register: Register = on => {
             )}
             {th && group('Answer', '✓', 'success', th.answers)}
             {group('Questions about this one', '?', 'warning', asked)}
-            {!answered && !item.ended && canWrite && (
-              field(
-                'Your answer',
-                <Input
-                  key={`answer-input-${item.key}`}
-                  placeholder="In your own words: your agent records it as a claim that answers this"
-                  submitLabel="Send to agent"
-                  rows={4}
-                  autoFocus
-                  onSubmit={(v: string) => v.trim() && void ask($, answerPrompt(item, { text: v.trim() }, named))}
-                />,
-              )
-            )}
             <Box flexDirection="row" gap="xs" flexWrap="wrap">
+              {!answered && !item.ended && canWrite && <Button key={`answer-in-chat-${item.key}`} label="✎ Answer in the chat" variant="primary" onPress={() => draft($, drafts.answer(item, named), 'answer')} />}
               {!answered && !item.ended && canWrite && <Button key={`investigate-${item.key}`} label="Ask my agent to look into it" variant="secondary" onPress={() => void ask($, prompts.investigate(item, named))} />}
               <Button key={`copy-${item.key}`} label="Copy" variant="secondary" dimColor onPress={copy(`${item.title} (${item.key})`)} />
               {undo(item)}
               {withdraw(item)}
             </Box>
-            {!answered && !item.ended && meta('Agents reply on the thread. Your answer goes to your agent, which records it as a claim that answers the question.')}
+            {!answered && !item.ended && meta('Agents reply on the thread. Answer in the chat starts your answer in the prompt box: finish it and send it, and your agent records it as a claim that answers the question.')}
           </Box>,
           back,
         )
@@ -1243,13 +1302,13 @@ export const register: Register = on => {
           {group('Questions about it', '?', 'warning', rel.linked(item.id, 'ABOUT', 'in'))}
           <Box flexDirection="row" gap="xs" flexWrap="wrap">
             {rel.current(item) && canWrite && !heldByNode.has(item.key) && (
-              <Button key={`correct-${item.key}`} label="Correct it" variant="primary" onPress={() => ((composeText = ''), void update($, composing, (): Compose => ({ kind: 'correct', key: item.key })))} />
+              <Button key={`correct-${item.key}`} label="✎ Correct it in the chat" variant="primary" onPress={() => draft($, drafts.correct(item, named), 'correction')} />
             )}
             <Button key={`copy-${item.key}`} label="Copy" variant="secondary" dimColor onPress={copy(`${item.title} (${item.key})`)} />
             {undo(item)}
             {withdraw(item)}
           </Box>
-          {rel.current(item) && canWrite && meta('Correct it when it’s wrong or out of date: the new claim replaces this one, which stays in the history. Withdraw it when it should never have been recorded.')}
+          {rel.current(item) && canWrite && meta('Correct it when it’s wrong or out of date: it starts in the prompt box, and once you send it the new claim replaces this one, which stays in the history. Withdraw it when it should never have been recorded.')}
         </Box>,
         back,
       )
@@ -1262,24 +1321,38 @@ export const register: Register = on => {
     /** Another tab starts from the top, without the last tab's filter words. */
     const setTab = (x: Tab) =>
       void update($, more, () => 0)
+        .then(() => {
+          if (x === 'settings') askedDetails = undefined
+        })
         .then(() => (x === current ? undefined : update($, filters, (v: Filters): Filters => ({ ...v, text: '' }))))
         .then(() => update($, tab, () => x))
     const setFilter = (patch: Partial<Filters>) => void update($, more, () => 0).then(() => update($, filters, (v: Filters): Filters => ({ ...v, ...patch })))
     const members = a.people.filter((p: Person) => p.role)
-    const counts: Record<Tab, number | undefined> = { overview: undefined, questions: t?.open.length, claims: t?.claims.length, people: members.length }
+    const counts: Record<Tab, number | undefined> = { overview: undefined, questions: t?.open.length, claims: t?.claims.length, people: members.length, settings: undefined }
     const goOnline = <Button key="go-online" label="Go online" variant="primary" onPress={() => void act($, 'start_sharing', { ...ctx }, 'Back online: syncing with the other members.')} />
 
     const header = (
       <Box flexDirection="column" gap="xs">
-        <Box flexDirection="row" justifyContent="space-between" alignItems="center">
-          {/* Who's online is listed under the description: only being offline is said up here. */}
-          {a.sharing ? (
-            <Text> </Text>
-          ) : (
-            <Text size="footnote" color="warning">
-              ● offline
+        <Box flexDirection="row" justifyContent="space-between" alignItems="center" gap={1}>
+          {/* Whether it's syncing, with the way to change it: who's online is listed under the description. */}
+          <Box flexDirection="row" gap={1} alignItems="center" flexShrink={1} flexWrap="wrap">
+            <Text size="footnote" color={a.sharing ? 'success' : 'warning'}>
+              {a.sharing ? '⇅ Syncing' : '● Offline'}
+              {a.sharing && a.relays_up === 0 ? <Text color="warning"> · no relay reachable</Text> : ''}
             </Text>
-          )}
+            <Button
+              key="sync-toggle"
+              plain
+              dimColor
+              onPress={() =>
+                void act($, a.sharing ? 'stop_sharing' : 'start_sharing', { ...ctx }, a.sharing ? 'Offline: not syncing until you go online again.' : 'Back online: syncing with the other members.')
+              }
+            >
+              <Text size="footnote" underline>
+                {a.sharing ? 'Go offline' : 'Go online'}
+              </Text>
+            </Button>
+          </Box>
           <Button key="switch" label={many ? `⇄ ${a.contexts.length} contexts` : '⇄ Contexts'} plain dimColor onPress={() => void update($, switching, () => true)} />
         </Box>
         <Text size="title" weight="semibold" bold wrap="wrap">
@@ -1356,10 +1429,23 @@ export const register: Register = on => {
     /** The first page of a list, and a button for the rest. */
     const paged = <T,>(list: T[]) => list.slice(0, PAGE + extra)
     const showMore = (total: number) =>
-      total > PAGE + extra && <Button key="show-more" label={`Show ${Math.min(PAGE, total - PAGE - extra)} more of ${total}`} variant="secondary" dimColor onPress={() => void update($, more, (n: number) => n + PAGE)} />
+      total > PAGE + extra && (
+        <Box key="show-more-row" flexDirection="row">
+          <Button key="show-more" plain dimColor onPress={() => void update($, more, (n: number) => n + PAGE)}>
+            <Text underline>{`Show ${Math.min(PAGE, total - PAGE - extra)} more of ${total}`}</Text>
+          </Button>
+        </Box>
+      )
 
     let body
-    if (!snap || !t || !rel) body = <Text dimColor>Loading…</Text>
+    if (current === 'settings') {
+      // The open context's details, read when the tab is first drawn for it (and again after each change).
+      if ((!loadedDetails || loadedDetails.name !== a.context) && askedDetails !== a.context) {
+        askedDetails = a.context
+        void loadDetails($)
+      }
+      body = settings(a.context, true)
+    } else if (!snap || !t || !rel) body = <Text dimColor>Loading…</Text>
     else if (current === 'overview') {
       const heldMine = a.recent.filter((c: Change) => c.held && c.mine)
       const waiting = t.open.filter(th => th.replies.length)
@@ -1433,14 +1519,14 @@ export const register: Register = on => {
               'warning',
             )}
           {heading('Needs you', needs.length || undefined)}
-          {needs.length ? needs : card('all-clear', <Text color="success">✓ Nothing needs you right now.</Text>, 'success')}
+          {needs.length ? folded('needs', needs, 3, 'things', 'thing', x => x) : card('all-clear', <Text color="success">✓ Nothing needs you right now.</Text>, 'success')}
           {digest && digest.lines.length > 0 && (
             <Box flexDirection="column" gap="xs">
               {heading('What changed for you')}
               {card(
                 'digest',
                 <Box flexDirection="column" gap="xs">
-                  {digest.lines.slice(0, 6).map((line, i) => (
+                  {folded('digest', digest.lines, 3, 'changes', 'change', (line, i) => (
                     <Text key={`digest-${i}`} wrap="wrap">
                       {line}
                     </Text>
@@ -1458,7 +1544,7 @@ export const register: Register = on => {
           </Box>
           {heading('Recent activity')}
           {!feed.length && meta('Nothing yet. What your agent and the other members’ agents record shows up here.')}
-          {paged(feed).map((c: Change) => (
+          {folded('recent', feed, RECENT, 'changes', 'change', (c: Change) => (
             <Box key={`act-${c.id}`} flexDirection="row" gap={1} justifyContent="space-between" alignItems="flex-start">
               <Box flexDirection="column" flexShrink={1}>
                 <Text wrap="wrap">
@@ -1476,7 +1562,6 @@ export const register: Register = on => {
               {c.node && rel.byKey.has(c.node) && <Button key={`open-change-${c.id}`} label="Open" variant="secondary" dimColor onPress={() => void openItem($, c.node)} />}
             </Box>
           ))}
-          {showMore(feed.length)}
           {meta(
             `${t.claims.length} claim${t.claims.length === 1 ? '' : 's'} · ${t.open.length} open and ${t.answered.length} answered question${t.answered.length === 1 ? '' : 's'} · ${rel.history.length} replaced or withdrawn · ${a.changes} changes in all${snap.truncated ? ' · showing the latest items only' : ''}`,
           )}
@@ -1493,7 +1578,6 @@ export const register: Register = on => {
       const question = (th: Thread) => {
         const q = th.q
         const answered = th.answers.length > 0
-        const shown = th.replies.slice(-2)
         return card(
           `q-${q.key}`,
           <Box flexDirection="column" gap="xs">
@@ -1518,25 +1602,26 @@ export const register: Register = on => {
                 )}
               </Box>
             </Box>
-            {th.replies.length > shown.length && (
-              <Box paddingLeft={2}>
-                <Text size="footnote" dimColor>
-                  ↳ {th.replies.length - shown.length} earlier repl{th.replies.length - shown.length === 1 ? 'y' : 'ies'}
-                </Text>
-              </Box>
+            {folded(
+              `replies-${q.key}`,
+              th.replies,
+              2,
+              'replies',
+              'reply',
+              r => (
+                <Box key={`r-${r.key}`} flexDirection="column" paddingLeft={2}>
+                  <Text wrap="wrap">
+                    <Text dimColor>↳ </Text>
+                    {short(r.title, 240)}
+                  </Text>
+                  <Text size="footnote" dimColor>
+                    {byline(r)}
+                    {held(r)}
+                  </Text>
+                </Box>
+              ),
+              true,
             )}
-            {shown.map(r => (
-              <Box key={`r-${r.key}`} flexDirection="column" paddingLeft={2}>
-                <Text wrap="wrap">
-                  <Text dimColor>↳ </Text>
-                  {short(r.title, 240)}
-                </Text>
-                <Text size="footnote" dimColor>
-                  {byline(r)}
-                  {held(r)}
-                </Text>
-              </Box>
-            ))}
             {th.answers.map(c => (
               <Box key={`a-${c.key}`} flexDirection="column" paddingLeft={2}>
                 <Text wrap="wrap">
@@ -1693,7 +1778,6 @@ export const register: Register = on => {
         </Box>
       )
     } else {
-      const online = a.people.filter((p: Person) => p.online).length
       const gone = a.people.filter((p: Person) => !p.role)
       const wrote = (p: Person) => {
         const mine = snap.nodes.filter(n => !n.ended && prop(n, 'recorded_by') === p.name)
@@ -1727,11 +1811,16 @@ export const register: Register = on => {
                 </Text>
               </Text>
               {meta(wrote(p))}
-              <Text size="footnote" dimColor mono>
-                {p.fingerprint}
-                {p.agent ? ` · ${p.agent}` : ''}
-                {p.platform ? ` · ${p.platform}` : ''}
-              </Text>
+              {reveal(
+                `key-${p.fingerprint}`,
+                'Key and agent',
+                'Hide key and agent',
+                <Text key={`key-text-${p.fingerprint}`} size="footnote" dimColor mono wrap="wrap">
+                  {p.fingerprint}
+                  {p.agent ? ` · ${p.agent}` : ''}
+                  {p.platform ? ` · ${p.platform}` : ''}
+                </Text>,
+              )}
             </Box>
             <Box flexDirection="row" gap="xs" alignItems="center">
               {p.you && <Button key="rename" label="✎ Rename" variant="secondary" dimColor onPress={() => void update($, renaming, () => true)} />}
@@ -1810,32 +1899,6 @@ export const register: Register = on => {
               </Box>,
               'suggestion',
             )}
-          {card(
-            'sync-card',
-            <Box flexDirection="row" gap={1} justifyContent="space-between" alignItems="center">
-              <Box flexDirection="column" flexShrink={1}>
-                <Text>
-                  <Text weight="semibold" bold>
-                    {a.sharing ? 'Syncing' : 'Offline'}
-                  </Text>
-                  <Text dimColor>{a.sharing ? ` · ${online} online · ${a.relays_up} signalling relay${a.relays_up === 1 ? '' : 's'} reachable` : ' · not syncing with the other members'}</Text>
-                </Text>
-                {meta(
-                  a.sharing
-                    ? a.relays_up === 0
-                      ? 'No relay is reachable, so the others can’t find this machine right now.'
-                      : 'Every member keeps a full copy. Changes travel directly between your machines whenever you’re both online.'
-                    : 'Your copy keeps working. What you write is sent when you’re back online.',
-                )}
-              </Box>
-              {a.sharing ? (
-                <Button key="go-offline" label="Go offline" variant="secondary" dimColor onPress={() => void act($, 'stop_sharing', { ...ctx }, 'Offline: not syncing until you go online again.')} />
-              ) : (
-                goOnline
-              )}
-            </Box>,
-            a.sharing ? undefined : 'warning',
-          )}
           {gone.length > 0 && heading('Removed', gone.length)}
           {gone.map(person)}
         </Box>
