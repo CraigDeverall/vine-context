@@ -5,6 +5,7 @@ import type { Panel } from "./panel";
 import "./styles.css";
 import { Conflicts } from "./views/Conflicts";
 import { Console } from "./views/Console";
+import { Contexts } from "./views/Contexts";
 import { Explorer } from "./views/Explorer";
 import { Receipt } from "./views/Receipt";
 
@@ -16,6 +17,7 @@ declare global {
 
 const VIEWS: Record<string, (p: { b: Bridge; open?: (p: Panel) => void }) => React.ReactNode> = {
   console: Console,
+  contexts: Contexts,
   explorer: Explorer,
   receipt: Receipt,
   conflicts: Conflicts,

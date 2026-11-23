@@ -1,0 +1,4 @@
+{
+  "description": "Vine Context has no Codex hooks. This file is here so Codex does not read hooks/hooks.json, which is the Claude Code mod's.",
+  "hooks": {}
+}

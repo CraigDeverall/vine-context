@@ -142,3 +142,32 @@ export const when = (iso: unknown): string => {
   if (secs < 86400) return `${Math.round(secs / 3600)} h ago`;
   return d.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
 };
+
+/**
+ * Copies text to the clipboard, and says whether it did. A host's frame often
+ * refuses the clipboard API (no `clipboard-write` permission), so this falls
+ * back to the old selection copy, which a click is enough to allow.
+ */
+export async function copyText(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    // Fall through to the selection copy.
+  }
+  const el = document.createElement("textarea");
+  el.value = text;
+  el.setAttribute("readonly", "");
+  el.style.cssText = "position:fixed;top:0;left:0;opacity:0";
+  document.body.appendChild(el);
+  const focused = document.activeElement as HTMLElement | null;
+  try {
+    el.select();
+    return document.execCommand("copy");
+  } catch {
+    return false;
+  } finally {
+    el.remove();
+    focused?.focus?.();
+  }
+}

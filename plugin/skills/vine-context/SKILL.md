@@ -112,6 +112,10 @@ and don't record secrets, credentials or personal data about other people.
 
 Where the agent supports MCP Apps:
 
+- `open_contexts`: the contexts panel, for the person: what needs them, the
+  questions with their threads, the claims (with conflicts and history), the
+  people and join codes, and the chat's contexts to turn on and off. Open it
+  when they ask to see the context or its panel. You get only a summary.
 - `open_console`: the context's people (fingerprints, agents, roles, who is
   online), whether it's syncing, and the join codes.
 - `explore_context`: the context as a picture, at any moment in its history. You

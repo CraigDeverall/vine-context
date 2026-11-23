@@ -548,6 +548,28 @@ export class Session {
     return { folder: f?.folder ?? this.o.cwd, linked: !!f && !!mine && mine === theirs, pinned };
   }
 
+  /** One of this chat's contexts as the panels show it: recent changes, people, join codes and (with snapshot) its items. */
+  private async activity(a: { limit?: number; snapshot?: boolean; context?: string }): Promise<Record<string, unknown>> {
+    // A context the chat no longer uses falls back to the write context (the panel may ask for one just removed).
+    const c = await this.target(a.context && this.contexts.has(a.context) ? a.context : undefined);
+    const activity = await this.request<Record<string, unknown>>("activity", { limit: a.limit }, c.name);
+    const out: Record<string, unknown> = {
+      using: this.where(c.name),
+      context: c.name,
+      contexts: this.list(),
+      your_contexts: this.localNames(),
+      folder: this.folderState(),
+      ...activity,
+    };
+    // An admin's open join codes (who each is for, its role, when it expires): the panel lists them, to send or cancel.
+    if ((activity.you as { role?: string } | undefined)?.role === "admin") {
+      const s = await this.request<{ invites?: { state: string }[] }>("status", undefined, c.name);
+      out.invites = (s.invites ?? []).filter((i) => i.state === "open");
+    }
+    if (a.snapshot) out.snapshot = await this.request<Snapshot>("snapshot", { limit: 300 }, c.name);
+    return out;
+  }
+
   private registerSessionTools(): void {
     const ro = { readOnlyHint: true, idempotentHint: true, openWorldHint: false };
     const wrap = (fn: (args: any) => Promise<unknown>) => async (args: any) => {
@@ -611,23 +633,7 @@ export class Session {
             const none = { using: "no context", context: null, contexts: [], your_contexts: this.localNames(), next: this.noContext() };
             return { ...text(none), structuredContent: none };
           }
-          // A context the chat no longer uses falls back to the write context (the panel may ask for one just removed).
-          const c = await this.target(a.context && this.contexts.has(a.context) ? a.context : undefined);
-          const activity = await this.request<Record<string, unknown>>("activity", { limit: a.limit }, c.name);
-          const out: Record<string, unknown> = {
-            using: this.where(c.name),
-            context: c.name,
-            contexts: this.list(),
-            your_contexts: this.localNames(),
-            folder: this.folderState(),
-            ...activity,
-          };
-          // An admin's open join codes (who each is for, its role, when it expires): the panel lists them, to send or cancel.
-          if ((activity.you as { role?: string } | undefined)?.role === "admin") {
-            const s = await this.request<{ invites?: { state: string }[] }>("status", undefined, c.name);
-            out.invites = (s.invites ?? []).filter((i) => i.state === "open");
-          }
-          if (a.snapshot) out.snapshot = await this.request<Snapshot>("snapshot", { limit: 300 }, c.name);
+          const out = await this.activity(a);
           return { ...text(out), structuredContent: out };
         } catch (e) {
           return failure((e as Error).message); // no withNews: this read never takes the agent's notices
@@ -1071,6 +1077,29 @@ export class Session {
     };
     const both = (summary: unknown, structured: Record<string, unknown>): Content => ({ ...text(summary), structuredContent: structured });
     const which = contextArg.describe("Which of this chat's contexts (default: the one writes go to)");
+
+    this.server.registerTool(
+      "open_contexts",
+      {
+        title: "Open the contexts panel",
+        description:
+          "Show the person this chat's context in a panel: what needs them, its questions with their threads, its claims (with conflicts and history), its people and join codes, and the chat's contexts to turn on and off. " +
+          "For the person to look at and steer from; to read the context yourself, use context_info and the model's search and read tools.",
+        inputSchema: {},
+        annotations: ro,
+        _meta: uiMeta("contexts", { beside: true }),
+      },
+      run(async () => {
+        if (!this.contexts.size) {
+          const none = { using: "no context", context: null, contexts: [], your_contexts: this.localNames(), next: this.noContext() };
+          return both(none, none);
+        }
+        const state = await this.activity({ limit: 40, snapshot: true });
+        const snap = state.snapshot as Snapshot;
+        // The agent gets a line about what the person now sees, not the whole context.
+        return both({ showing: state.using, context: state.context, items: snap.nodes.length, note: "The person is looking at the contexts panel." }, state);
+      }),
+    );
 
     this.server.registerTool(
       "open_console",

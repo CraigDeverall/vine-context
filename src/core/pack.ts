@@ -150,6 +150,7 @@ export const RESERVED_TOOL_NAMES = [
   "link_folder",
   "take_back",
   "open_console",
+  "open_contexts",
   "explore_context",
   "browser_view",
 ] as const;

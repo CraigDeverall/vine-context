@@ -143,3 +143,41 @@ th { font-weight: 500; color: var(--fg2); }
 .you .row { gap: 8px; align-items: center; }
 .you input { min-width: 14em; }
 button.link { background: none; border: 0; padding: 0; color: var(--accent); cursor: pointer; font: inherit; text-decoration: underline; }
+
+/* Contexts */
+.stack { display: flex; flex-direction: column; gap: 8px; }
+.stack.sm { gap: 4px; }
+.stack.lg { gap: 14px; }
+.stack > h2 { margin: 8px 0 0; }
+h1.title { font-size: 17px; }
+.wrap { overflow-wrap: anywhere; }
+.item { display: flex; gap: 10px; align-items: flex-start; justify-content: space-between; }
+.item.center { align-items: center; }
+.item > .row { flex: none; flex-wrap: nowrap; }
+.item p { margin: 0; }
+.card.warn { border-color: var(--warn); }
+.card.ok { border-color: var(--ok); }
+.card.bad { border-color: var(--bad); }
+.card.accent { border-color: var(--accent); }
+.t-warn { color: var(--warn); }
+.t-ok { color: var(--ok); }
+.t-bad { color: var(--bad); }
+.t-accent { color: var(--accent); }
+.chip { border-radius: 999px; color: var(--fg2); }
+.chip.on { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); font-weight: 500; }
+.chip.on:hover:not(:disabled) { background: var(--accent); filter: brightness(1.07); }
+button.link.name { font-weight: 600; font-size: 14px; }
+button.link.pin { align-self: flex-start; color: var(--fg2); font-size: 12px; }
+button.link.pin[aria-pressed="true"] { color: var(--accent); }
+.reply { padding-left: 16px; }
+.who { gap: 4px 12px; font-size: 12px; color: var(--fg3); }
+.who .on { color: var(--fg2); }
+.field { display: flex; flex-direction: column; gap: 4px; }
+.field label { font-weight: 600; }
+.field .linkbox { align-items: flex-start; }
+.field .linkbox input, .field .linkbox textarea { flex: 1; font-family: inherit; font-size: inherit; background: var(--bg); }
+.field select { align-self: flex-start; }
+textarea {
+  font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line);
+  border-radius: 6px; padding: 6px 10px; min-width: 0; resize: vertical;
+}

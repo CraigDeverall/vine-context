@@ -12,6 +12,7 @@ import { packageRoot } from "../core/package-root.js";
 export const APP_MIME = "text/html;profile=mcp-app";
 
 export const VIEWS = {
+  contexts: "Contexts panel: what needs you in this chat's context, its questions, claims and people, and the chat's contexts",
   console: "Sharing console: join codes, everyone in the graph, who is online, and their roles",
   explorer: "Graph explorer: the graph as it stood at any moment, with search",
   receipt: "Receipt: what your agent just wrote, with Undo while it is still on this machine",
@@ -53,5 +54,12 @@ export function registerViews(server: McpServer): void {
   }
 }
 
-/** Tool _meta that shows a view with the tool's result. */
-export const uiMeta = (view: ViewName) => ({ ui: { resourceUri: viewUri(view) } });
+/**
+ * Tool _meta that shows a view with the tool's result. With `beside`, hosts that
+ * have a panel beside the conversation (ChatGPT, Codex) may also open the view
+ * there by itself, calling the tool with no arguments.
+ */
+export const uiMeta = (view: ViewName, opts: { beside?: boolean } = {}) => ({
+  ui: { resourceUri: viewUri(view) },
+  ...(opts.beside ? { "openai/ui": { entrypoints: [{ type: "thread" }] } } : {}),
+});

@@ -3,7 +3,7 @@
 // (for admins) the join codes this machine answers.
 
 import { useCallback, useEffect, useState } from "react";
-import { asks, usePoll, when, type Bridge } from "../bridge";
+import { asks, copyText, usePoll, when, type Bridge } from "../bridge";
 
 type Role = "reader" | "contributor" | "admin";
 interface Invite {
@@ -108,11 +108,10 @@ export function Console({ b }: { b: Bridge }) {
   const sendLine = (code: string) => `Join my context graph: /vine-context:join ${code}`;
   const copy = async (inv: Invite) => {
     if (!inv.code) return;
-    try {
-      await navigator.clipboard.writeText(sendLine(inv.code));
+    if (await copyText(sendLine(inv.code))) {
       setCopied(inv.id);
       setTimeout(() => setCopied(undefined), 1500);
-    } catch {
+    } else {
       (document.getElementById(`vine-code-${inv.id}`) as HTMLInputElement | null)?.select();
     }
   };
