@@ -37,7 +37,8 @@ interface State {
   sharing: boolean;
   can_invite: boolean;
   invites: Invite[];
-  links: { name: string; fingerprint: string; state: string; since: string }[];
+  links: { name: string; fingerprint: string; state: string; since: string; route?: "direct" | "relayed" }[];
+  ice?: { stun: string[]; turn: string | null; source: "default" | "setting" | "env"; problem?: string };
   relays: Record<string, string>;
   people: Person[];
   log: { changes: number; held: number; refused: number };
@@ -125,6 +126,7 @@ export function Console({ b }: { b: Bridge }) {
   const admin = state.you.role === "admin";
   const relays = Object.values(state.relays ?? {});
   const relaysUp = relays.filter((r) => r === "open").length;
+  const relayed = (state.links ?? []).filter((l) => l.route === "relayed").length;
 
   return (
     <div>
@@ -150,6 +152,7 @@ export function Console({ b }: { b: Bridge }) {
         {state.log.held ? `; ${state.log.held} still on this machine (Undo possible)` : ""}.{" "}
         {state.sharing && relays.length > 0 && `Signalling relays: ${relaysUp} of ${relays.length} connected.`}
         {state.sharing && relays.length > 0 && relaysUp === 0 && " None are reachable: other members can't find you until one is."}
+        {state.sharing && state.ice?.turn && ` TURN server: ${state.ice.turn}${state.ice.problem ? ` (not in use: ${state.ice.problem})` : relayed ? `, carrying ${relayed} of ${state.links.length} connections` : ""}.`}
       </p>
 
       <div className="you">

@@ -18,6 +18,7 @@ import { NAME_RE, verifySignature } from "../core/identity.js";
 import { cleanAbout } from "../core/members.js";
 import { inviteLink, isLive, type Invite, type InviteStore } from "../host/state.js";
 import { FramedChannel } from "./channel.js";
+import { rtcConfig, type IceSource } from "./ice.js";
 import { b64u, checkProof } from "./link.js";
 import type { SignalFactory, Signaller } from "./signal.js";
 
@@ -37,7 +38,8 @@ export interface DeskOptions {
   hostName(): string;
   invites: InviteStore;
   signal: SignalFactory;
-  ice: string[];
+  /** Read for each newcomer. */
+  ice: IceSource;
   /** Decides on someone who proved a live code: let them in (and what to send them), or not. */
   admit(n: Newcomer): Promise<Admission>;
   log?(msg: string): void;
@@ -118,7 +120,7 @@ export class InviteDesk {
       return;
     }
     if (this.pending.size >= MAX_AT_ONCE) return;
-    const pc = new nodeDataChannel.PeerConnection(`vine-desk-${m.from}`, { iceServers: this.o.ice });
+    const pc = new nodeDataChannel.PeerConnection(`vine-desk-${m.from}`, rtcConfig(this.o.ice));
     const p: Pending = { id, from: m.from, invite, pc, done: false };
     this.pending.set(id, p);
     pc.onStateChange((s) => {

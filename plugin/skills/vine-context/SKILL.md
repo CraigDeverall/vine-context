@@ -192,8 +192,14 @@ unchanged.
   <name>` shows its members, links, relays and invites; `vine host stop`
   stops it). Sessions start it as needed. `vine up` starts every sharing
   context's host, and `vine autostart on` (macOS) runs that at login.
-- If members never connect, the networks may block direct WebRTC
-  connections. A TURN server (`VINE_ICE`) fixes that.
+- If members never connect, or a join fails with "could not connect", the
+  networks may block direct WebRTC connections. A TURN server fixes that, and
+  one of the two members having it is enough. There's none by default: the
+  person needs their own. `set_turn_server` saves the server and username.
+  **Never ask for its password or take one in the chat**: it's read from
+  `VINE_TURN_PASSWORD`, or the person runs the `terminal_command` from the
+  result (`vine turn set …`) themselves, which asks for it privately.
+  `vine turn test` checks it; `remove_turn_server` forgets it.
 - Data lives in `~/.local/share/vine-context` (`VINE_DATA_DIR`):
   `graphs/<name>` (the store), `hosts/<name>/changes.jsonl` (the change log
   every copy is built from) and `hosts/<name>/host.log`.

@@ -12,6 +12,7 @@ import { loadIdentity } from "../src/core/identity.js";
 import { LocalHost } from "../src/host/client.js";
 import { Host } from "../src/host/host.js";
 import { Session } from "../src/mcp/server.js";
+import { readTurn, saveTurn } from "../src/p2p/ice.js";
 import { memorySignaller } from "../src/p2p/signal.js";
 import { tempDir } from "./helpers.js";
 
@@ -196,6 +197,33 @@ describe("pinning one context to a folder", () => {
     await c.call("link_folder", { name: "incident", off: true });
     expect((await c.call("context_info")).folder.pinned).toEqual([]);
     expect((await me.chat({ id: "chat-3", cwd: "/work/shop" }).then((x) => x.call("context_info"))).context).toBe(null);
+  });
+});
+
+describe("the TURN server tools", () => {
+  it("never take a password: the server is saved for VINE_TURN_PASSWORD, and a kept password is left alone", async () => {
+    const me = machine("alice");
+    const c = await me.chat({ id: "chat-1" });
+    const tool = (await c.tools()).find((t) => t.name === "set_turn_server")!;
+    expect(Object.keys(tool.inputSchema.properties!).sort()).toEqual(["host", "port", "transport", "username"]);
+
+    const before = process.env.VINE_TURN_PASSWORD;
+    delete process.env.VINE_TURN_PASSWORD;
+    try {
+      const r = await c.call("set_turn_server", { host: "turn.example.org", username: "sam", transport: "tls" });
+      expect(r).toMatchObject({ turn: "turn.example.org:5349 (tls)", password_store: "env", answered: false, terminal_command: "vine turn set turn.example.org:5349 --user sam --tls" });
+      expect(readFileSync(join(me.dataDir, "network.json"), "utf8")).not.toMatch(/password/);
+
+      // Set in a terminal, with the password kept by vine: the tool won't replace it.
+      saveTurn(me.dataDir, { host: "turn.example.org", username: "sam", store: "file", password: "kept-secret" });
+      await expect(c.call("set_turn_server", { host: "other.example.org", username: "sam" })).rejects.toThrow(/already set[\s\S]*vine turn set/);
+      expect(readTurn(me.dataDir)).toMatchObject({ host: "turn.example.org", store: "file", password: "kept-secret" });
+
+      expect(await c.call("remove_turn_server")).toMatchObject({ removed: true });
+      expect(readTurn(me.dataDir)).toBeUndefined();
+    } finally {
+      if (before !== undefined) process.env.VINE_TURN_PASSWORD = before;
+    }
   });
 });
 

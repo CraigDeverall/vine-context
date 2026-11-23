@@ -9,6 +9,7 @@ import nodeDataChannel from "node-datachannel";
 import type { Change } from "../core/changes.js";
 import type { Identity } from "../core/identity.js";
 import { FramedChannel } from "./channel.js";
+import { rtcConfig, type IceSource } from "./ice.js";
 import { gathered } from "./invites.js";
 import { b64u, proof, type Link } from "./link.js";
 import type { SignalFactory } from "./signal.js";
@@ -22,7 +23,7 @@ export interface Welcome {
 
 export interface JoinOptions {
   signal: SignalFactory;
-  ice: string[];
+  ice: IceSource;
   about?: Record<string, string | undefined>;
   /** Give up if no one answers by then. */
   timeoutMs?: number;
@@ -33,7 +34,7 @@ export class JoinRefused extends Error {}
 
 export function joinWithCode(link: Link, identity: Identity, o: JoinOptions): Promise<Welcome> {
   const me = b64u(randomBytes(6));
-  const pc = new nodeDataChannel.PeerConnection(`vine-join-${me}`, { iceServers: o.ice });
+  const pc = new nodeDataChannel.PeerConnection(`vine-join-${me}`, rtcConfig(o.ice));
   let answered = false;
   let offerTimer: NodeJS.Timeout | undefined;
   let settled = false;
@@ -73,7 +74,7 @@ export function joinWithCode(link: Link, identity: Identity, o: JoinOptions): Pr
         fail(
           new Error(
             answered
-              ? "Reached the person who invited you, but the connection didn't finish (a TURN server may be needed: VINE_ICE)."
+              ? "Reached the person who invited you, but the connection didn't finish. Your network or theirs may block direct connections: one of you can set a TURN server (run `vine turn set`, or ask your agent to set one) and try again."
               : "No answer. The person who invited you isn't online right now (their machine answers the code), or the code has expired or was cancelled. Try again later, or ask them for a new code.",
           ),
         ),
@@ -81,7 +82,7 @@ export function joinWithCode(link: Link, identity: Identity, o: JoinOptions): Pr
     );
     deadline.unref();
     pc.onStateChange((s) => {
-      if (s === "failed") fail(new Error("Could not reach the person who invited you (NAT traversal failed; a TURN server may be needed: VINE_ICE)."));
+      if (s === "failed") fail(new Error("Could not connect to the person who invited you. Your network or theirs blocks direct connections: one of you can set a TURN server (run `vine turn set`, or ask your agent to set one) and try again."));
     });
 
     const ch = new FramedChannel(pc.createDataChannel("vine-join"));

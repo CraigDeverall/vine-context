@@ -19,6 +19,9 @@ Commands:
   ui [--context NAME] [--port N] [--open]
                                       Show the console and explorer in a browser
   status [--context NAME]             Show a context's host: sharing, members, links, relays, invites
+  turn set HOST[:PORT] --user NAME [--tcp | --tls] [--store file|keychain|env]
+                                      Set a TURN server, for members whose networks block direct connections (asks for the password)
+  turn show | test | clear            Show, check or remove the TURN server
   whoami                              Show your name and key fingerprint
   doctor                              Check that this machine can run vine
   --version                           Print the version
@@ -32,7 +35,8 @@ Environment:
   VINE_AUTO_SHARE  off: new contexts don't sync until you share them
   VINE_HOLD_MS     How long a write stays on this machine (Undo) before it is sent (default 10000)
   VINE_RELAYS      Nostr relays for signalling, comma-separated
-  VINE_ICE         STUN/TURN servers, comma-separated (turn:user:pass@host:port)`;
+  VINE_ICE         STUN/TURN servers, comma-separated; replaces the defaults and the \`vine turn\` setting
+  VINE_TURN_PASSWORD  The TURN server's password, when it was set with --store env`;
 
 const graphOpts = { graph: { type: "string" }, context: { type: "string" } } as const;
 const graphName = (v?: string): string => {
@@ -51,6 +55,7 @@ async function sessionFactory(values: { graph?: string; context?: string }) {
     import("../core/identity.js"),
     import("../p2p/signal.js"),
   ]);
+  const { storedIce } = await import("../p2p/ice.js");
   const dataDir = defaultDataDir();
   // A chat keeps the context it chose (by its id); a new one starts with its folder's linked context, or one named here; there's no default.
   const graph = values.context ?? values.graph ?? process.env.VINE_CONTEXT ?? process.env.VINE_GRAPH;
@@ -65,7 +70,7 @@ async function sessionFactory(values: { graph?: string; context?: string }) {
       dataDir,
       identity: () => loadIdentity(dataDir, defaultName(dataDir)),
       signal: signal.nostrSignaller,
-      ice: signal.iceServers(),
+      ice: storedIce(dataDir),
       log,
       browserView: withBrowserView
         ? async () => {
@@ -240,6 +245,97 @@ async function whoami(): Promise<number> {
   return 0;
 }
 
+/** Reads a password: typed unseen at a terminal, or the first line of piped input. */
+async function readPassword(prompt: string): Promise<string> {
+  const stdin = process.stdin;
+  if (!stdin.isTTY) {
+    let all = "";
+    for await (const chunk of stdin) all += chunk;
+    return all.split(/\r?\n/)[0] ?? "";
+  }
+  process.stderr.write(prompt);
+  stdin.setRawMode(true);
+  stdin.resume();
+  return new Promise((resolve, reject) => {
+    let typed = "";
+    const done = (fn: () => void) => {
+      stdin.setRawMode(false);
+      stdin.pause();
+      stdin.off("data", onData);
+      process.stderr.write("\n");
+      fn();
+    };
+    const onData = (buf: Buffer) => {
+      for (const ch of buf.toString("utf8")) {
+        if (ch === "\r" || ch === "\n") return done(() => resolve(typed));
+        if (ch === "\u0003") return done(() => reject(new Error("Cancelled.")));
+        if (ch === "\u007f" || ch === "\b") typed = typed.slice(0, -1);
+        else typed += ch;
+      }
+    };
+    stdin.on("data", onData);
+  });
+}
+
+const TURN_USAGE = `Usage:
+  vine turn set HOST[:PORT] --user NAME [--tcp | --tls] [--store file|keychain|env]
+  vine turn show
+  vine turn test
+  vine turn clear`;
+
+/** The TURN server this machine's links may go through when a direct connection isn't possible. */
+async function turn(args: string[]): Promise<number> {
+  const [ice, { SECRET_STORES }, { defaultDataDir }] = await Promise.all([import("../p2p/ice.js"), import("../core/secret.js"), import("../core/graph.js")]);
+  const dataDir = defaultDataDir();
+  const report = async (): Promise<number> => {
+    const r = await ice.checkStoredTurn(dataDir);
+    console.log(r.ok ? `ok    The server answered and lent a relay address (${r.relay}).` : `FAIL  ${r.error}`);
+    return r.ok ? 0 : 1;
+  };
+  switch (args[0]) {
+    case "set": {
+      const { values, positionals } = parseArgs({
+        args: args.slice(1),
+        allowPositionals: true,
+        options: { user: { type: "string" }, tcp: { type: "boolean" }, tls: { type: "boolean" }, store: { type: "string" } },
+      });
+      const store = (values.store ?? "file") as (typeof SECRET_STORES)[number];
+      if (positionals.length !== 1 || !values.user || (values.tcp && values.tls) || !SECRET_STORES.includes(store)) {
+        console.error(TURN_USAGE);
+        return 2;
+      }
+      try {
+        const { host, port } = ice.parseHostPort(positionals[0]!);
+        const password = store === "env" ? undefined : await readPassword(`Password for ${values.user} on ${host}: `);
+        const t = ice.saveTurn(dataDir, { host, port, username: values.user, transport: values.tls ? "tls" : values.tcp ? "tcp" : "udp", store, password });
+        const kept = { file: "in a file only you can read", keychain: "in your keychain", env: `nowhere: set ${ice.TURN_PASSWORD_ENV} where vine runs` }[t.store];
+        console.log(`TURN server set: ${t.host}:${t.port} (${t.transport}), user ${t.username}. Password kept ${kept}.`);
+        console.log("New connections use it from now on; nothing needs restarting.");
+      } catch (e) {
+        console.error((e as Error).message);
+        return 1;
+      }
+      return report();
+    }
+    case "show": {
+      const s = ice.resolveIce(dataDir).summary;
+      const t = ice.readTurn(dataDir);
+      if (s.source === "env") console.log(`VINE_ICE is set, and replaces the setting here: ${[...s.stun, ...(s.turn ? [s.turn] : [])].join(", ") || "no servers"}`);
+      else if (!t) console.log("No TURN server is set. Members connect directly. Set one with `vine turn set` if a member can't connect.");
+      else console.log(`TURN server: ${s.turn}, user ${t.username}, password store: ${t.store}${s.problem ? `\nNot in use: ${s.problem}.` : ""}`);
+      return 0;
+    }
+    case "test":
+      return report();
+    case "clear":
+      console.log(ice.clearTurn(dataDir) ? "TURN server removed. New connections are direct only." : "No TURN server was set.");
+      return 0;
+    default:
+      console.log(TURN_USAGE);
+      return args[0] ? 2 : 0;
+  }
+}
+
 async function doctor(): Promise<number> {
   let failed = 0;
   const check = async (name: string, fn: () => Promise<string> | string) => {
@@ -298,6 +394,16 @@ async function doctor(): Promise<number> {
     mkdirSync(dir, { recursive: true });
     accessSync(dir, constants.W_OK);
     return dir;
+  });
+  await check("turn server", async () => {
+    const { defaultDataDir } = await import("../core/graph.js");
+    const ice = await import("../p2p/ice.js");
+    const s = ice.resolveIce(defaultDataDir()).summary;
+    if (s.source === "env") return `VINE_ICE is set (${s.turn ?? "no TURN server"})`;
+    if (!s.turn) return "none set: members connect directly (`vine turn set` adds one)";
+    const r = await ice.checkStoredTurn(defaultDataDir());
+    if (!r.ok) throw new Error(`${s.turn}: ${r.error}`);
+    return `${s.turn} answered`;
   });
   console.log(failed ? `\n${failed} check(s) failed.` : "\nAll checks passed.");
   return failed ? 1 : 0;
@@ -407,6 +513,9 @@ switch (command) {
     break;
   case "doctor":
     process.exitCode = await doctor();
+    break;
+  case "turn":
+    process.exitCode = await turn(rest);
     break;
   case "up":
     process.exitCode = await up();
