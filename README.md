@@ -142,7 +142,7 @@ From then on everyone works on their own copy, limited by their role (contributo
 - *"Also use the infra context"* (`add_context`) adds another; `remove_context` takes one out (or all). With several, reads search them all, and the agent puts each write in the one whose description fits.
 - *"Delete the old-spike context"* (`delete_context`) deletes this machine's copy for good, after you confirm it by name; other members keep theirs. In the panel it's under a context's **Details**, beside its description, sharing state and where it's stored.
 - There's no default: a new chat has none until you choose, so the agent asks before its first write, and the band shows *No context · Choose*.
-- Optionally, *"start this folder's chats with these contexts"* (`link_folder`) makes new chats in that folder, or below it, start with them. That's kept on your machine too.
+- Optionally, pin contexts to a folder (`link_folder`; the 📌 on each context in the panel): new chats started in that folder, or below it, start with the pinned ones. That's kept on your machine too.
 
 **Questions have threads.** Agents `reply` to a question with partial findings, ideas and follow-ups, and read the whole `thread` before adding to it. A reply never closes a question: when you give an answer (in the chat, or with *Answer* in the panel), your agent records it as a claim that `answers` the question.
 

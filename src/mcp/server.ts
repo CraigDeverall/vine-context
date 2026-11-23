@@ -37,7 +37,7 @@ import { parseCode } from "../p2p/link.js";
 import type { GraphDescription } from "../p2p/protocol.js";
 import type { SignalFactory } from "../p2p/signal.js";
 import { registerViews, uiMeta } from "./apps.js";
-import { chatLink, folderLink, forgetContext, localContexts, resolveRef, setChatLink, setFolderLink, type Link } from "./links.js";
+import { chatLink, folderLink, forgetContext, localContexts, resolveRef, setChatLink, setFolderLink, type Link, type Ref } from "./links.js";
 
 type Content = { content: { type: "text"; text: string }[]; structuredContent?: Record<string, unknown>; isError?: boolean };
 const text = (value: unknown): Content => ({
@@ -537,12 +537,13 @@ export class Session {
   }
 
   /** Whether the folder this chat started in (or a parent) starts new chats with exactly this chat's contexts. */
-  private folderState(): { folder: string; linked: boolean } | null {
+  private folderState(): { folder: string; linked: boolean; pinned: string[] } | null {
     if (!this.o.cwd) return null;
     const f = folderLink(this.dataDir, this.o.cwd);
     const mine = [...this.contexts.keys()].sort().join(",");
     const theirs = f ? f.contexts.map((r) => resolveRef(this.dataDir, r) ?? "?").sort().join(",") : "";
-    return { folder: f?.folder ?? this.o.cwd, linked: !!f && !!mine && mine === theirs };
+    const pinned = f ? f.contexts.map((r) => resolveRef(this.dataDir, r)).filter((n): n is string => !!n) : [];
+    return { folder: f?.folder ?? this.o.cwd, linked: !!f && !!mine && mine === theirs, pinned };
   }
 
   private registerSessionTools(): void {
@@ -927,12 +928,32 @@ export class Session {
         title: "Start this folder's chats here",
         description:
           "Make new chats started in this chat's folder (or below it) start with this chat's contexts, or with `off`, stop that. " +
+          "With `name`, pin just that one context to the folder (any on this machine), or with `off` too, unpin it, leaving the folder's others as they are. " +
           "It's kept on this machine (nothing is written into the folder). Ask the person first.",
-        inputSchema: { off: z.boolean().optional().describe("Stop linking the folder") },
+        inputSchema: {
+          off: z.boolean().optional().describe("Stop linking the folder (or, with name, unpin that context)"),
+          name: z.string().regex(GRAPH_RE).optional().describe("Pin or unpin only this context"),
+        },
         annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       },
-      wrap(async ({ off }: { off?: boolean }) => {
+      wrap(async ({ off, name }: { off?: boolean; name?: string }) => {
         if (!this.o.cwd) throw new Error("This session doesn't know which folder it started in.");
+        if (name) {
+          if (!this.localNames().includes(name)) throw new Error(`There's no context '${name}' on this machine.`);
+          // The folder's own link, or the one it gets from a parent folder.
+          const f = folderLink(this.dataDir, this.o.cwd);
+          const folder = f?.folder ?? this.o.cwd;
+          const id = readGroup(this.dataDir, name)?.id;
+          const rest: Ref[] = (f?.contexts ?? []).filter((r) => resolveRef(this.dataDir, r) !== name);
+          const contexts: Ref[] = off ? rest : [...rest, { name, ...(id ? { id } : {}) }];
+          const write_to = f?.write_to && contexts.some((r) => r.name === f.write_to) ? { write_to: f.write_to } : {};
+          setFolderLink(this.dataDir, folder, contexts.length ? { contexts, ...write_to } : null);
+          return {
+            folder,
+            pinned: contexts.map((r) => r.name),
+            note: off ? `New chats in this folder no longer start with '${name}'.` : `New chats started in this folder, or below it, start with '${name}'.`,
+          };
+        }
         if (off) {
           const f = folderLink(this.dataDir, this.o.cwd);
           if (f) setFolderLink(this.dataDir, f.folder, null);

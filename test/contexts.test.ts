@@ -173,6 +173,32 @@ describe("several contexts in one chat", () => {
   });
 });
 
+describe("pinning one context to a folder", () => {
+  it("pins and unpins contexts one at a time, in the chat or not", async () => {
+    const me = machine("alice");
+    const c = await me.chat({ id: "chat-1", cwd: "/work/shop" });
+    await c.call("use_context", { name: "incident", description: "The checkout slowdown" });
+    await c.call("add_context", { name: "infra", description: "How our infrastructure is set up" });
+    await c.call("remove_context", { name: "infra" });
+    expect((await c.call("context_info")).folder).toMatchObject({ linked: false, pinned: [] });
+
+    await c.call("link_folder", { name: "infra" }); // not in this chat
+    await c.call("link_folder", { name: "incident" });
+    await c.call("link_folder", { name: "incident" }); // again: still once
+    expect((await c.call("context_info")).folder.pinned).toEqual(["infra", "incident"]);
+    await expect(c.call("link_folder", { name: "lunch" })).rejects.toThrow(/no context 'lunch'/);
+    // A new chat in the folder, or below it, starts with both.
+    const fresh = await me.chat({ id: "chat-2", cwd: "/work/shop/api" });
+    expect((await fresh.call("context_info")).contexts.map((x: any) => x.name)).toEqual(["infra", "incident"]);
+
+    await c.call("link_folder", { name: "infra", off: true });
+    expect((await c.call("context_info")).folder).toMatchObject({ linked: true, pinned: ["incident"] });
+    await c.call("link_folder", { name: "incident", off: true });
+    expect((await c.call("context_info")).folder.pinned).toEqual([]);
+    expect((await me.chat({ id: "chat-3", cwd: "/work/shop" }).then((x) => x.call("context_info"))).context).toBe(null);
+  });
+});
+
 describe("details and deleting", () => {
   it("shows any local context's details, and deletes one only when its name is confirmed", async () => {
     const me = machine("alice");

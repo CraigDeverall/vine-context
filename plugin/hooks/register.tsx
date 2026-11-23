@@ -77,6 +77,8 @@ const TABS: { tab: Tab; icon: string; label: string }[] = [
 ]
 
 const short = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s)
+/** A path cut from the front, so its last folders (the telling part) stay. */
+export const tail = (s: string, n: number) => (s.length > n ? `…${s.slice(s.length - n + 1)}` : s)
 const ago = (iso: string, now: number) => {
   const s = Math.max(0, (now - Date.parse(iso)) / 1000)
   if (s < 60) return 'just now'
@@ -548,6 +550,28 @@ export const register: Register = on => {
         .then(() => update($, inviting, () => 'contributor' as Invite['role']))
     }
 
+    /** A context's pin: whether new chats started in this chat's folder (or below it) start with it. */
+    const pin = (n: string, where: string) => {
+      const f = a?.folder
+      if (!f) return null
+      const pinned = (f.pinned ?? []).includes(n)
+      return (
+        <Button
+          key={`pin-${where}${n}`}
+          plain
+          dimColor={!pinned}
+          onPress={() =>
+            void act($, 'link_folder', pinned ? { name: n, off: true } : { name: n }, pinned ? `New chats in this folder no longer start with '${n}'.` : `New chats in this folder start with '${n}'.`)
+          }
+        >
+          {pinned ? '📌 Pinned to ' : '📌 Pin to '}
+          <Text size="footnote" dimColor>
+            {tail(f.folder, 32)}
+          </Text>
+        </Button>
+      )
+    }
+
     // A new context: its name and what it's for, together. Only that.
     const creatingNow = await read($, creating)
     if (creatingNow) {
@@ -763,6 +787,7 @@ export const register: Register = on => {
                     : 'Your agent reads and writes here.'
                   : 'Off for this chat. Turn it on to use it here, and to share it or change its settings.',
               )}
+              {pin(n, 'detail-')}
             </Box>
             <Box flexDirection="column" gap="xs">
               {heading('Sharing')}
@@ -882,24 +907,12 @@ export const register: Register = on => {
                     <Button key={`write-${n}`} label="✎ Write here" variant="secondary" dimColor onPress={() => void act($, 'add_context', { name: n, write_here: true }, `New items go to '${n}' unless another fits better.`)} />
                   )}
                 </Box>
+                {pin(n, '')}
               </Box>,
               c ? 'suggestion' : undefined,
             )
           })}
-          {a?.folder && (
-            <Box flexDirection="column" gap="xs">
-              <Button
-                key="link-folder"
-                label={a.folder.linked ? 'Stop starting this folder’s chats with these' : 'Start new chats in this folder with these contexts'}
-                variant="secondary"
-                dimColor={a.folder.linked}
-                onPress={() =>
-                  void act($, 'link_folder', a.folder!.linked ? { off: true } : {}, a.folder!.linked ? 'New chats in this folder start with no context.' : 'New chats in this folder start with these contexts.')
-                }
-              />
-              {meta(`${short(a.folder.folder, 70)} · kept on this machine, nothing is written there`)}
-            </Box>
-          )}
+          {a?.folder && here.length > 0 && meta('📌 A pinned context is on in every new chat started in that folder, or below it. It’s kept on this machine: nothing is written into the folder.')}
         </Box>,
         none ? undefined : { label: 'Done', onPress: () => void update($, switching, () => false) },
       )

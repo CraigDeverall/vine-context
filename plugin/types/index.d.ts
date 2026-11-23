@@ -55,7 +55,8 @@ export type Activity = {
   /** This chat's contexts: usually one. */
   contexts: { name: string; description: string | null; role: Person['role']; writes_here: boolean }[]
   /** The folder this chat started in, and whether new chats there start with this chat's contexts. */
-  folder: { folder: string; linked: boolean } | null
+  /** `pinned`: the contexts new chats in that folder start with (absent from older servers). */
+  folder: { folder: string; linked: boolean; pinned?: string[] } | null
   your_contexts: string[]
   digest: { at: string; lines: string[] }[]
   /** An admin's open join codes, newest first (absent for other roles). */
