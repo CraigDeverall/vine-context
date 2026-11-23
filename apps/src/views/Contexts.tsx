@@ -1,6 +1,7 @@
 // The Contexts view: this chat's context for the person. What needs them, its
 // questions and threads, its claims (with conflicts and history), its people
-// and join codes, and the chat's contexts to turn on and off.
+// and join codes, its settings (sharing, what it holds, deleting it), and the
+// chat's contexts to turn on and off.
 //
 // It is the Claude Code mod's panel (plugin/hooks/register.tsx) for every
 // other host: an agent app that shows MCP App views, or a browser tab from
@@ -47,7 +48,10 @@ const TABS: { tab: Tab; label: string }[] = [
   { tab: "questions", label: "Questions" },
   { tab: "claims", label: "Claims" },
   { tab: "people", label: "People" },
+  { tab: "settings", label: "Settings" },
 ];
+/** How many recent changes the Overview shows before "Show more". */
+const RECENT = 5;
 const ICON: Record<string, string> = { claim: "📌", question: "❓", reply: "↳", link: "🔗", withdraw: "✕", add_member: "👋", remove_member: "🚪", set_role: "🔑", rename: "✎", describe: "✎", create: "✦" };
 const ROLES: Role[] = ["reader", "contributor", "admin"];
 
@@ -66,6 +70,50 @@ const Chip = ({ active, onClick, children }: { active: boolean; onClick: () => v
     {children}
   </button>
 );
+
+/** An underlined link that opens and closes what it's about. */
+const Toggle = ({ open, onClick, children }: { open: boolean; onClick: () => void; children: ReactNode }) => (
+  <button className="link more" aria-expanded={open} onClick={onClick}>
+    {children} <span aria-hidden="true">{open ? "▴" : "▾"}</span>
+  </button>
+);
+
+/**
+ * A list that shows only a few of its items, with a link for the rest (and one
+ * to fold them away again). With `latest`, the few are the last ones and the
+ * link comes first, as for the earlier replies in a thread.
+ */
+function Folded<T>(p: { list: T[]; first: number; what: string; one?: string; render: (x: T) => ReactNode; latest?: boolean }) {
+  const [open, setOpen] = useState(false);
+  const hidden = p.list.length - p.first;
+  if (hidden <= 0) return <>{p.list.map(p.render)}</>;
+  const shown = open ? p.list : p.latest ? p.list.slice(-p.first) : p.list.slice(0, p.first);
+  const link = (
+    <Toggle open={open} onClick={() => setOpen(!open)}>
+      {open ? `Show fewer ${p.what}` : `${hidden} ${p.latest ? "earlier" : "more"} ${hidden === 1 && p.one ? p.one : p.what}`}
+    </Toggle>
+  );
+  return (
+    <>
+      {p.latest && link}
+      {shown.map(p.render)}
+      {!p.latest && link}
+    </>
+  );
+}
+
+/** Extra detail behind an underlined link, closed until asked for. */
+function Reveal({ label, hide = "Less", children }: { label: string; hide?: string; children: ReactNode }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <Toggle open={open} onClick={() => setOpen(!open)}>
+        {open ? hide : label}
+      </Toggle>
+      {open && children}
+    </>
+  );
+}
 
 /** A labelled text field with its own Send button. Enter sends (⌘/Ctrl+Enter in a multi-line field). */
 function Field(p: {
@@ -137,8 +185,9 @@ export function Contexts({ b }: { b: Bridge }) {
   /** The claim (by key) a correction is being written for. */
   const [composing, setComposing] = useState<string | null>(null);
   const [creating, setCreating] = useState<{ error: string | null } | null>(null);
-  /** The context (by name) whose details are shown. */
+  /** A context that's off for this chat (by name), shown on its own page: it can't be opened. */
   const [managing, setManaging] = useState<string | null>(null);
+  /** Its details (`context_details`), or those of the open context's Settings tab. */
   const [details, setDetails] = useState<ContextDetails | null>(null);
   const [deleting, setDeleting] = useState<{ name: string; error: string | null } | null>(null);
   const [editing, setEditing] = useState(false);
@@ -151,6 +200,7 @@ export function Contexts({ b }: { b: Bridge }) {
   const [made, setMade] = useState<string | null>(null);
   /** Which of the chat's contexts the view shows; null is the one writes go to. */
   const viewing = useRef<string | null>(null);
+  /** The context whose details are being loaded, so a late answer for another is dropped. */
   const managingNow = useRef<string | null>(null);
   /** The items opened one after another, so Back returns to the one before. */
   const trail = useRef<string[]>([]);
@@ -212,6 +262,14 @@ export function Contexts({ b }: { b: Bridge }) {
     const t = setTimeout(() => setNotice(null), NOTICE_MS);
     return () => clearTimeout(t);
   }, [notice]);
+
+  // The Settings tab shows the open context's details: loaded when it's shown.
+  const settingsOf = tab === "settings" && !switching && !managing ? (a?.context ?? null) : null;
+  useEffect(() => {
+    if (!settingsOf) return;
+    managingNow.current = settingsOf;
+    void loadDetails();
+  }, [settingsOf]);
 
   const openItem = (key: string | null) => {
     if (key) trail.current.push(key);
@@ -330,6 +388,12 @@ export function Contexts({ b }: { b: Bridge }) {
     await manage(null);
     setSwitching(false);
   };
+  /** Opens one of the chat's contexts on its Settings tab. */
+  const settingsTab = (n: string) =>
+    show(n).then(() => {
+      setMore(0);
+      setTabState("settings");
+    });
   /** Starts the join-code step for one of the chat's contexts. */
   const share = (n: string) => {
     draft.current.invite = "";
@@ -353,6 +417,208 @@ export function Contexts({ b }: { b: Bridge }) {
       </button>
     );
   };
+
+  /**
+   * A context's settings: how this chat uses it, its sharing, what it holds, and
+   * deleting it. The open context's Settings tab, and the page of one that's off
+   * for this chat (`inTab` false), where only some of it can be changed.
+   */
+  const settings = (n: string, inTab: boolean) => {
+    const c = inChat(n);
+    const d = details && details.name === n ? details : null;
+    const isAdmin = (d?.role ?? c?.role) === "admin";
+    const severalOn = using.length > 1;
+    const sharing = d?.sharing ?? (inTab ? a?.sharing : undefined);
+    const relays = inTab ? a?.relays_up : undefined;
+    const count = (k: string, one: string, plural: string) => `${d?.items[k] ?? 0} ${(d?.items[k] ?? 0) === 1 ? one : plural}`;
+    return (
+      <div className="stack lg">
+        <div className="stack sm">
+          <Heading>This chat</Heading>
+          <div className="row">
+            <Chip active={!!c} onClick={() => toggle(n)}>
+              {c ? "◉ On" : "○ Off"}
+            </Chip>
+            {c && severalOn && !c.writes_here && <button onClick={() => writeHere(n)}>✎ Write here</button>}
+            {c && !inTab && <button onClick={() => void show(n)}>Open</button>}
+          </div>
+          <Meta>
+            {c
+              ? severalOn
+                ? c.writes_here
+                  ? "Your agent reads it, and writes here when no other context clearly fits."
+                  : "Your agent reads it, and writes here when its description fits."
+                : "Your agent reads and writes here. Turning it off leaves it on this machine."
+              : "Off for this chat. Turn it on to open it here, share it or change its settings."}
+          </Meta>
+          {pin(n)}
+        </div>
+        <div className="stack sm">
+          <Heading>Sharing</Heading>
+          {sharing === undefined ? (
+            <p className="faint">Loading…</p>
+          ) : (
+            <p className="wrap">
+              <span className={sharing ? "t-ok" : "t-warn"}>● </span>
+              {sharing ? "Syncing" : "Offline"}
+              {d && (
+                <span className="muted">
+                  {" "}
+                  · {d.members} member{d.members === 1 ? "" : "s"}
+                  {d.members > 1 ? ` · ${d.online} of the others online` : ""}
+                  {d.open_invites ? ` · ${d.open_invites} join code${d.open_invites === 1 ? "" : "s"} waiting` : ""}
+                </span>
+              )}
+              {sharing && relays !== undefined && (
+                <span className="muted">
+                  {" "}
+                  · {relays} signalling relay{relays === 1 ? "" : "s"} reachable
+                </span>
+              )}
+            </p>
+          )}
+          <Meta>
+            {sharing === false
+              ? "Your copy keeps working. What you write is sent when you’re back online."
+              : relays === 0
+                ? "No relay is reachable, so the others can’t find this machine right now."
+                : "Every member keeps a full copy. Changes travel directly between your machines whenever you’re both online."}
+          </Meta>
+          {c && (
+            <div className="row">
+              {isAdmin && (
+                <button
+                  className="primary"
+                  onClick={() => {
+                    draft.current.invite = "";
+                    if (inTab) setInviting("contributor");
+                    else void share(n);
+                  }}
+                >
+                  + Invite someone
+                </button>
+              )}
+              {sharing !== undefined &&
+                (sharing ? (
+                  <button onClick={() => void act("stop_sharing", { context: n }, `'${n}' is offline: not syncing until you go online again.`)}>Go offline</button>
+                ) : (
+                  <button onClick={() => void act("start_sharing", { context: n }, `'${n}' is back online: syncing with the other members.`)}>Go online</button>
+                ))}
+            </div>
+          )}
+          {c && !isAdmin && <Meta>Only an admin can invite people.</Meta>}
+        </div>
+        <div className="stack sm">
+          <Heading>About</Heading>
+          {d ? (
+            <>
+              <dl className="kv">
+                <dt>Your role</dt>
+                <dd>{d.role ?? "removed (you keep your copy to read)"}</dd>
+                <dt>Made by</dt>
+                <dd>{d.yours ? "you" : (d.created_by ?? "unknown")}</dd>
+                <dt>Holds</dt>
+                <dd>
+                  {count("Claim", "claim", "claims")} · {count("Question", "question", "questions")} · {count("Reply", "reply", "replies")}
+                </dd>
+                {d.held > 0 && (
+                  <>
+                    <dt>Not yet sent</dt>
+                    <dd>{d.held} just written, still only on this machine</dd>
+                  </>
+                )}
+              </dl>
+              <Reveal label="Id, storage and history" hide="Hide id, storage and history">
+                <dl className="kv">
+                  <dt>Changes</dt>
+                  <dd>
+                    {d.changes} in all, withdrawn items included
+                  </dd>
+                  <dt>Id</dt>
+                  <dd className="mono">{d.id ?? "none"}</dd>
+                  <dt>Stored at</dt>
+                  <dd className="mono">{d.stored_at}</dd>
+                </dl>
+              </Reveal>
+            </>
+          ) : (
+            <p className="faint">{error ? "Couldn’t read its details." : "Loading…"}</p>
+          )}
+        </div>
+        <div className="stack sm">
+          <Heading>Delete</Heading>
+          <Meta>Deletes this machine’s copy for good. Other members keep theirs. You’ll be asked to confirm.</Meta>
+          <div className="row">
+            <button
+              className="danger"
+              onClick={() => {
+                draft.current.del = "";
+                setDeleting({ name: n, error: null });
+              }}
+            >
+              Delete from this machine…
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // Confirming a deletion, from the Settings tab or an off context's page: only
+  // that. Nothing goes until the name is typed.
+  if (deleting && here.includes(deleting.name)) {
+    const n = deleting.name;
+    const known = details && details.name === n ? details : null;
+    const close = () => {
+      draft.current.del = "";
+      setDeleting(null);
+    };
+    const confirm = (typed: string) => {
+      if (typed.trim() !== n) return setDeleting({ name: n, error: `Type ${n} exactly to delete it. Nothing was deleted.` });
+      draft.current.del = "";
+      setDeleting(null);
+      void manage(null);
+      viewing.current = null;
+      setTabState("overview");
+      void act("delete_context", { name: n, confirm: n }, `'${n}' was deleted from this machine.`);
+    };
+    const items = known ? Object.values(known.items).reduce((x, y) => x + y, 0) : null;
+    const others = known ? known.members - (known.role ? 1 : 0) : null;
+    return modal(
+      `Delete ${n}?`,
+      `This permanently deletes this machine’s copy of '${n}'${items !== null ? `: its ${items} item${items === 1 ? "" : "s"}, their history` : ": its claims, questions and replies, their history"}, the join codes made here, and every chat’s and folder’s link to it. It can’t be undone.`,
+      <div className="stack lg">
+        <Card tone="warn">
+          <div className="stack sm">
+            {others === null ? (
+              <p className="wrap">Other members keep their own copies. If you’re its only member, it’s gone for good.</p>
+            ) : others > 0 ? (
+              <p className="wrap">
+                {others} other member{others === 1 ? " keeps their" : "s keep their"} own copy, and nothing is deleted for them. To get it back you’d need a new join code from one of its admins.
+              </p>
+            ) : (
+              <p className="t-warn wrap">You’re its only member, so this is the only copy: once deleted, it’s gone for good.</p>
+            )}
+            {known?.yours && others !== null && others > 0 && (
+              <p className="t-warn wrap">You made this context. The other members keep syncing with each other, but the join codes you made stop working.</p>
+            )}
+            {inChat(n) && <Meta>To only stop using it in this chat, turn it off instead: it stays on this machine.</Meta>}
+          </div>
+        </Card>
+        <Field key={`delete-${n}`} label={`Type ${n} to confirm`} placeholder={n} autoFocus onInput={(v) => (draft.current.del = v)} onSubmit={confirm} />
+        {deleting.error && <p className="t-bad wrap">{deleting.error}</p>}
+        <div className="row">
+          <button className="primary" onClick={close}>
+            Keep it
+          </button>
+          <button className="danger" onClick={() => confirm(draft.current.del ?? "")}>
+            Delete permanently
+          </button>
+        </div>
+      </div>,
+      { label: "Cancel", onClick: close },
+    );
+  }
 
   // A new context: its name and what it's for, together. Only that.
   if (creating) {
@@ -398,68 +664,13 @@ export function Contexts({ b }: { b: Bridge }) {
   if (none !== null || switching) {
     const many = using.length > 1;
 
-    // Confirming a deletion: only that. Nothing goes until the name is typed.
-    if (deleting && here.includes(deleting.name)) {
-      const n = deleting.name;
-      const known = details && details.name === n ? details : null;
-      const close = () => {
-        draft.current.del = "";
-        setDeleting(null);
-      };
-      const confirm = (typed: string) => {
-        if (typed.trim() !== n) return setDeleting({ name: n, error: `Type ${n} exactly to delete it. Nothing was deleted.` });
-        draft.current.del = "";
-        setDeleting(null);
-        void manage(null);
-        viewing.current = null;
-        void act("delete_context", { name: n, confirm: n }, `'${n}' was deleted from this machine.`);
-      };
-      const items = known ? Object.values(known.items).reduce((x, y) => x + y, 0) : null;
-      const others = known ? known.members - (known.role ? 1 : 0) : null;
-      return modal(
-        `Delete ${n}?`,
-        `This permanently deletes this machine’s copy of '${n}'${items !== null ? `: its ${items} item${items === 1 ? "" : "s"}, their history` : ": its claims, questions and replies, their history"}, the join codes made here, and every chat’s and folder’s link to it. It can’t be undone.`,
-        <div className="stack lg">
-          <Card tone="warn">
-            <div className="stack sm">
-              {others === null ? (
-                <p className="wrap">Other members keep their own copies. If you’re its only member, it’s gone for good.</p>
-              ) : others > 0 ? (
-                <p className="wrap">
-                  {others} other member{others === 1 ? " keeps their" : "s keep their"} own copy, and nothing is deleted for them. To get it back you’d need a new join code from one of its admins.
-                </p>
-              ) : (
-                <p className="t-warn wrap">You’re its only member, so this is the only copy: once deleted, it’s gone for good.</p>
-              )}
-              {known?.yours && others !== null && others > 0 && (
-                <p className="t-warn wrap">You made this context. The other members keep syncing with each other, but the join codes you made stop working.</p>
-              )}
-              {inChat(n) && <Meta>To only stop using it in this chat, turn it off instead: it stays on this machine.</Meta>}
-            </div>
-          </Card>
-          <Field key={`delete-${n}`} label={`Type ${n} to confirm`} placeholder={n} autoFocus onInput={(v) => (draft.current.del = v)} onSubmit={confirm} />
-          {deleting.error && <p className="t-bad wrap">{deleting.error}</p>}
-          <div className="row">
-            <button className="primary" onClick={close}>
-              Keep it
-            </button>
-            <button className="danger" onClick={() => confirm(draft.current.del ?? "")}>
-              Delete permanently
-            </button>
-          </div>
-        </div>,
-        { label: "Cancel", onClick: close },
-      );
-    }
-
-    // One context's details and settings.
+    // A context that's off for this chat: what it's for and its settings. One
+    // that's on opens instead, with these on its Settings tab.
     if (managing && here.includes(managing)) {
       const n = managing;
       const c = inChat(n);
       const d = details && details.name === n ? details : null;
-      const isAdmin = (d?.role ?? c?.role) === "admin";
       const description = d ? d.description : (c?.description ?? null);
-      const count = (k: string, one: string, plural: string) => `${d?.items[k] ?? 0} ${(d?.items[k] ?? 0) === 1 ? one : plural}`;
       return modal(
         n,
         null,
@@ -467,107 +678,8 @@ export function Contexts({ b }: { b: Bridge }) {
           <div className="stack sm">
             <Heading>What it’s for</Heading>
             {description ? <p className="wrap">{description}</p> : <p className="faint wrap">No description yet, so agents won’t know what belongs here.</p>}
-            {isAdmin && c && (
-              <div className="row">
-                <button onClick={() => void show(n).then(() => setEditing(true))}>✎ Edit description</button>
-              </div>
-            )}
           </div>
-          <div className="stack sm">
-            <Heading>This chat</Heading>
-            <div className="row">
-              <Chip active={!!c} onClick={() => toggle(n)}>
-                {c ? "◉ On" : "○ Off"}
-              </Chip>
-              {c && many && !c.writes_here && <button onClick={() => writeHere(n)}>✎ Write here</button>}
-              {c && <button onClick={() => void show(n)}>Open</button>}
-            </div>
-            <Meta>
-              {c
-                ? many
-                  ? c.writes_here
-                    ? "Your agent reads it, and writes here when no other context clearly fits."
-                    : "Your agent reads it, and writes here when its description fits."
-                  : "Your agent reads and writes here."
-                : "Off for this chat. Turn it on to use it here, and to share it or change its settings."}
-            </Meta>
-            {pin(n)}
-          </div>
-          <div className="stack sm">
-            <Heading>Sharing</Heading>
-            {d ? (
-              <p className="wrap">
-                <span className={d.sharing ? "t-ok" : "t-warn"}>● </span>
-                {d.sharing ? "Syncing" : "Offline"}
-                <span className="muted">
-                  {" "}
-                  · {d.members} member{d.members === 1 ? "" : "s"}
-                  {d.members > 1 ? ` · ${d.online} of the others online` : ""}
-                  {d.open_invites ? ` · ${d.open_invites} join code${d.open_invites === 1 ? "" : "s"} waiting` : ""}
-                </span>
-              </p>
-            ) : (
-              <p className="faint">Loading…</p>
-            )}
-            {c && (
-              <div className="row">
-                {isAdmin && (
-                  <button className="primary" onClick={() => void share(n)}>
-                    + Share
-                  </button>
-                )}
-                {d &&
-                  (d.sharing ? (
-                    <button onClick={() => void act("stop_sharing", { context: n }, `'${n}' is offline: not syncing until you go online again.`)}>Go offline</button>
-                  ) : (
-                    <button onClick={() => void act("start_sharing", { context: n }, `'${n}' is back online: syncing with the other members.`)}>Go online</button>
-                  ))}
-              </div>
-            )}
-            {c && !isAdmin && <Meta>Only an admin can invite people.</Meta>}
-          </div>
-          <div className="stack sm">
-            <Heading>About</Heading>
-            {d ? (
-              <dl className="kv">
-                <dt>Your role</dt>
-                <dd>{d.role ?? "removed (you keep your copy to read)"}</dd>
-                <dt>Made by</dt>
-                <dd>{d.yours ? "you" : (d.created_by ?? "unknown")}</dd>
-                <dt>Holds</dt>
-                <dd>
-                  {count("Claim", "claim", "claims")} · {count("Question", "question", "questions")} · {count("Reply", "reply", "replies")} · {d.changes} change{d.changes === 1 ? "" : "s"} in all
-                </dd>
-                {d.held > 0 && (
-                  <>
-                    <dt>Not yet sent</dt>
-                    <dd>{d.held} just written, still only on this machine</dd>
-                  </>
-                )}
-                <dt>Id</dt>
-                <dd className="mono">{d.id ?? "none"}</dd>
-                <dt>Stored at</dt>
-                <dd className="mono">{d.stored_at}</dd>
-              </dl>
-            ) : (
-              <p className="faint">{error ? "Couldn’t read its details." : "Loading…"}</p>
-            )}
-          </div>
-          <div className="stack sm">
-            <Heading>Delete</Heading>
-            <Meta>Deletes this machine’s copy for good. Other members keep theirs. You’ll be asked to confirm.</Meta>
-            <div className="row">
-              <button
-                className="danger"
-                onClick={() => {
-                  draft.current.del = "";
-                  setDeleting({ name: n, error: null });
-                }}
-              >
-                Delete from this machine…
-              </button>
-            </div>
-          </div>
+          {settings(n, false)}
         </div>,
         { label: "‹ Contexts", onClick: () => void manage(null) },
       );
@@ -604,7 +716,7 @@ export function Contexts({ b }: { b: Bridge }) {
               <div className="stack sm">
                 <div className="item">
                   <div className="row grow">
-                    <button className="link name" onClick={() => void manage(n)}>
+                    <button className="link name" onClick={() => void (c ? show(n) : manage(n))}>
                       {n}
                     </button>
                     {c && <span className="muted">· {c.role ?? "removed"}</span>}
@@ -616,7 +728,14 @@ export function Contexts({ b }: { b: Bridge }) {
                 </div>
                 {c && <p className="faint wrap">{c.description ?? "No description yet"}</p>}
                 <div className="row">
-                  <button onClick={() => void manage(n)}>Details</button>
+                  {c ? (
+                    <>
+                      <button onClick={() => void show(n)}>Open</button>
+                      <button onClick={() => void settingsTab(n)}>Settings</button>
+                    </>
+                  ) : (
+                    <button onClick={() => void manage(n)}>Settings</button>
+                  )}
                   {c?.role === "admin" && <button onClick={() => void share(n)}>Share</button>}
                   {c && many && !c.writes_here && <button onClick={() => writeHere(n)}>✎ Write here</button>}
                 </div>
@@ -948,7 +1067,7 @@ export function Contexts({ b }: { b: Bridge }) {
     setFilters((v) => ({ ...v, ...patch }));
   };
   const members = a.people.filter((p) => p.role);
-  const counts: Record<Tab, number | undefined> = { overview: undefined, questions: t?.open.length, claims: t?.claims.length, people: members.length };
+  const counts: Record<Tab, number | undefined> = { overview: undefined, questions: t?.open.length, claims: t?.claims.length, people: members.length, settings: undefined };
   const goOnline = (
     <button className="primary" onClick={() => void act("start_sharing", { ...ctx }, "Back online: syncing with the other members.")}>
       Go online
@@ -984,7 +1103,15 @@ export function Contexts({ b }: { b: Bridge }) {
         )}
       </div>
       <div className="row who">
-        {!a.sharing && <span className="t-warn">● offline</span>}
+        <span className={a.sharing ? "t-ok" : "t-warn"} title={a.sharing ? `Syncing with the other members · ${a.relays_up} signalling relay${a.relays_up === 1 ? "" : "s"} reachable` : "Not syncing: what you write stays on this machine until you go online"}>
+          {a.sharing ? "⇅ Syncing" : "● Offline"}
+        </span>
+        <button className="link" onClick={() => void act(a.sharing ? "stop_sharing" : "start_sharing", { ...ctx }, a.sharing ? "Offline: not syncing until you go online again." : "Back online: syncing with the other members.")}>
+          {a.sharing ? "Go offline" : "Go online"}
+        </button>
+        <span className="faint" aria-hidden="true">
+          |
+        </span>
         {members.map((p) => (
           <span
             key={p.fingerprint}
@@ -1030,7 +1157,7 @@ export function Contexts({ b }: { b: Bridge }) {
   const paged = <T,>(list: T[]) => list.slice(0, PAGE + more);
   const showMore = (total: number) =>
     total > PAGE + more && (
-      <button onClick={() => setMore((n) => n + PAGE)}>
+      <button className="link more" onClick={() => setMore((n) => n + PAGE)}>
         Show {Math.min(PAGE, total - PAGE - more)} more of {total}
       </button>
     );
@@ -1119,7 +1246,7 @@ export function Contexts({ b }: { b: Bridge }) {
         )}
         <Heading count={needs.length || undefined}>Needs you</Heading>
         {needs.length ? (
-          needs
+          <Folded list={needs} first={3} what="things" one="thing" render={(x) => x} />
         ) : (
           <Card tone="ok">
             <span className="t-ok">✓ Nothing needs you right now.</span>
@@ -1130,11 +1257,17 @@ export function Contexts({ b }: { b: Bridge }) {
             <Heading>What changed for you</Heading>
             <Card tone="accent">
               <div className="stack sm">
-                {digest.lines.slice(0, 6).map((line, i) => (
-                  <p key={i} className="wrap">
-                    {line}
-                  </p>
-                ))}
+                <Folded
+                  list={digest.lines.map((line, i) => ({ line, i }))}
+                  first={3}
+                  what="changes"
+                  one="change"
+                  render={({ line, i }) => (
+                    <p key={i} className="wrap">
+                      {line}
+                    </p>
+                  )}
+                />
                 <Meta>{ago(digest.at, now)}</Meta>
               </div>
             </Card>
@@ -1147,22 +1280,27 @@ export function Contexts({ b }: { b: Bridge }) {
         </div>
         <Heading>Recent activity</Heading>
         {!a.recent.length && <Meta>Nothing yet. What your agent and the other members’ agents record shows up here.</Meta>}
-        {paged(a.recent).map((c: Change) => (
-          <div key={c.id} className="item">
-            <div className="grow">
-              <p className="wrap">
-                <span className="muted">{ICON[c.kind] ?? "·"} </span>
-                <strong>{c.mine ? "you" : c.by}</strong> {short(c.summary, 200)}
-              </p>
-              <Meta>
-                {ago(c.at, now)}
-                {c.held && <span className="t-warn"> · still only on this machine</span>}
-              </Meta>
+        <Folded
+          list={a.recent}
+          first={RECENT}
+          what="changes"
+          one="change"
+          render={(c: Change) => (
+            <div key={c.id} className="item">
+              <div className="grow">
+                <p className="wrap">
+                  <span className="muted">{ICON[c.kind] ?? "·"} </span>
+                  <strong>{c.mine ? "you" : c.by}</strong> {short(c.summary, 200)}
+                </p>
+                <Meta>
+                  {ago(c.at, now)}
+                  {c.held && <span className="t-warn"> · still only on this machine</span>}
+                </Meta>
+              </div>
+              {c.node && rel.byKey.has(c.node) && <button onClick={() => openItem(c.node)}>Open</button>}
             </div>
-            {c.node && rel.byKey.has(c.node) && <button onClick={() => openItem(c.node)}>Open</button>}
-          </div>
-        ))}
-        {showMore(a.recent.length)}
+          )}
+        />
         <Meta>
           {t.claims.length} claim{t.claims.length === 1 ? "" : "s"} · {t.open.length} open and {t.answered.length} answered question{t.answered.length === 1 ? "" : "s"} · {rel.history.length} replaced or withdrawn · {a.changes} changes in all
           {snap.truncated ? " · showing the latest items only" : ""}
@@ -1176,7 +1314,6 @@ export function Contexts({ b }: { b: Bridge }) {
     const question = (th: Thread) => {
       const q = th.q;
       const answered = th.answers.length > 0;
-      const shown = th.replies.slice(-2);
       return (
         <Card key={q.key} tone={heldByNode.has(q.key) ? "warn" : answered ? "ok" : undefined}>
           <div className="stack sm">
@@ -1202,23 +1339,25 @@ export function Contexts({ b }: { b: Bridge }) {
                 )}
               </div>
             </div>
-            {th.replies.length > shown.length && (
-              <p className="faint reply">
-                ↳ {th.replies.length - shown.length} earlier repl{th.replies.length - shown.length === 1 ? "y" : "ies"}
-              </p>
-            )}
-            {shown.map((r) => (
-              <div key={r.key} className="reply">
-                <p className="wrap">
-                  <span className="muted">↳ </span>
-                  {short(r.title, 240)}
-                </p>
-                <Meta>
-                  {byline(r)}
-                  {held(r)}
-                </Meta>
-              </div>
-            ))}
+            <Folded
+              list={th.replies}
+              first={2}
+              latest
+              what="replies"
+              one="reply"
+              render={(r) => (
+                <div key={r.key} className="reply">
+                  <p className="wrap">
+                    <span className="muted">↳ </span>
+                    {short(r.title, 240)}
+                  </p>
+                  <Meta>
+                    {byline(r)}
+                    {held(r)}
+                  </Meta>
+                </div>
+              )}
+            />
             {th.answers.map((c) => (
               <div key={c.key} className="reply">
                 <p className="wrap">
@@ -1375,8 +1514,9 @@ export function Contexts({ b }: { b: Bridge }) {
         {scope === "history" && <Meta>Nothing is deleted: replaced and withdrawn claims stay, so anyone can see what the group believed before.</Meta>}
       </div>
     );
+  } else if (tab === "settings") {
+    body = settings(a.context, true);
   } else {
-    const online = a.people.filter((p) => p.online).length;
     const gone = a.people.filter((p) => !p.role);
     const wrote = (p: Person) => {
       const mine = snap.nodes.filter((n) => !n.ended && prop(n, "recorded_by") === p.name);
@@ -1406,11 +1546,13 @@ export function Contexts({ b }: { b: Bridge }) {
               </span>
             </p>
             <Meta>{wrote(p)}</Meta>
-            <p className="faint mono wrap">
-              {p.fingerprint}
-              {p.agent ? ` · ${p.agent}` : ""}
-              {p.platform ? ` · ${p.platform}` : ""}
-            </p>
+            <Reveal label="Key and agent" hide="Hide key and agent">
+              <p className="faint mono wrap">
+                {p.fingerprint}
+                {p.agent ? ` · ${p.agent}` : ""}
+                {p.platform ? ` · ${p.platform}` : ""}
+              </p>
+            </Reveal>
           </div>
           <div className="row">
             {p.you && <button onClick={() => setRenaming(true)}>✎ Rename</button>}
@@ -1476,24 +1618,6 @@ export function Contexts({ b }: { b: Bridge }) {
             </div>
           </Card>
         )}
-        <Card tone={a.sharing ? undefined : "warn"}>
-          <div className="item center">
-            <div className="grow">
-              <p>
-                <strong>{a.sharing ? "Syncing" : "Offline"}</strong>
-                <span className="muted">{a.sharing ? ` · ${online} online · ${a.relays_up} signalling relay${a.relays_up === 1 ? "" : "s"} reachable` : " · not syncing with the other members"}</span>
-              </p>
-              <Meta>
-                {a.sharing
-                  ? a.relays_up === 0
-                    ? "No relay is reachable, so the others can’t find this machine right now."
-                    : "Every member keeps a full copy. Changes travel directly between your machines whenever you’re both online."
-                  : "Your copy keeps working. What you write is sent when you’re back online."}
-              </Meta>
-            </div>
-            {a.sharing ? <button onClick={() => void act("stop_sharing", { ...ctx }, "Offline: not syncing until you go online again.")}>Go offline</button> : goOnline}
-          </div>
-        </Card>
         {gone.length > 0 && <Heading count={gone.length}>Removed</Heading>}
         {gone.map(person)}
       </div>

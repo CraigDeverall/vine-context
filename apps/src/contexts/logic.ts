@@ -98,7 +98,7 @@ export type ContextDetails = {
   stored_at: string;
 };
 
-export type Tab = "overview" | "questions" | "claims" | "people";
+export type Tab = "overview" | "questions" | "claims" | "people" | "settings";
 
 /** What the Questions and Claims lists show: the words to match, and which part of each list. */
 export type Filters = {
