@@ -145,6 +145,8 @@ export const RESERVED_TOOL_NAMES = [
   "remove_context",
   "context_details",
   "delete_context",
+  "set_turn_server",
+  "remove_turn_server",
   "link_folder",
   "take_back",
   "open_console",

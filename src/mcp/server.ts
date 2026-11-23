@@ -32,6 +32,7 @@ import { autoShare, defaultDataDir } from "../core/paths.js";
 import { LocalHost } from "../host/client.js";
 import { hostAlive, placeReplica, readGroup } from "../host/host.js";
 import { socketPath } from "../host/state.js";
+import { checkStoredTurn, clearTurn, readTurn, saveTurn, type IceSource } from "../p2p/ice.js";
 import { joinWithCode } from "../p2p/join.js";
 import { parseCode } from "../p2p/link.js";
 import type { GraphDescription } from "../p2p/protocol.js";
@@ -86,7 +87,8 @@ export interface SessionOptions {
   openLocal?: (graph: string) => Promise<LocalHost>;
   identity: () => Identity;
   signal: SignalFactory;
-  ice: string[];
+  /** STUN/TURN servers for joining. Read when a join starts. */
+  ice: IceSource;
   /** How long join_context waits for the person who made the code to answer. */
   joinWaitMs?: number;
   /** Where contexts live. */
@@ -686,6 +688,61 @@ export class Session {
         for (const c of this.contexts.values()) await this.request("rename", { name: n }, c.name);
         return { name: n, fingerprint: fingerprint(this.o.identity().publicKey), note: "This chat's contexts have it now; your other contexts take it when their hosts next start." };
       }),
+    );
+
+    this.server.registerTool(
+      "set_turn_server",
+      {
+        title: "Set a TURN server",
+        description:
+          "Set the TURN server this machine's connections go through when two members' networks block a direct connection (a join that fails with 'could not connect', or members who never link). " +
+          "Most people don't need one, and there is none by default. The person must have a server and a username on it: ask for them, never invent them. " +
+          "Never ask for the server's password, and never accept one in the chat: this tool takes none. It saves the server and username only, and the password is read from the VINE_TURN_PASSWORD environment variable where vine runs. " +
+          "To have vine keep the password instead (in a file only the person can read, or the OS keychain), the person runs the `terminal_command` from the result in their own terminal: it asks for the password there, unseen. " +
+          "It applies to every context on this machine, from the next connection on, with nothing to restart. One of two members having a server is enough for that pair. The result says whether the server answered.",
+        inputSchema: {
+          host: z.string().min(1).max(255).describe("The server's host name or address, e.g. turn.example.org"),
+          port: z.number().int().min(1).max(65535).optional().describe("Default 3478 (5349 for tls)"),
+          username: z.string().min(1).max(255),
+          transport: z.enum(["udp", "tcp", "tls"]).optional().describe("How to reach the server (default udp)"),
+        },
+        annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+      },
+      wrap(async (a: { host: string; port?: number; username: string; transport?: "udp" | "tcp" | "tls" }) => {
+        if (process.env.VINE_ICE !== undefined) throw new Error("VINE_ICE is set in this agent's configuration and replaces this setting; change it there, or remove it first.");
+        // A server whose password vine keeps is left alone: saving from here would drop that password.
+        const kept = readTurn(this.dataDir);
+        if (kept && kept.store !== "env")
+          throw new Error(
+            `A TURN server is already set (${kept.host}:${kept.port}, user ${kept.username}) with its password kept by vine, and this tool can't replace it without losing that password. ` +
+              "To change it, the person runs `vine turn set` in a terminal; or remove it first with remove_turn_server.",
+          );
+        const t = saveTurn(this.dataDir, { host: a.host, port: a.port, username: a.username, transport: a.transport, store: "env" });
+        const check = await checkStoredTurn(this.dataDir);
+        const flag = t.transport === "udp" ? "" : ` --${t.transport}`;
+        return {
+          turn: `${t.host}:${t.port} (${t.transport})`,
+          username: t.username,
+          password_store: t.store,
+          answered: check.ok,
+          ...(check.ok ? {} : { problem: check.error }),
+          terminal_command: `vine turn set ${t.host}:${t.port} --user ${t.username}${flag}`,
+          note: check.ok
+            ? "Saved, and the server answered with the password from VINE_TURN_PASSWORD. New connections use it when a direct one isn't possible; if a join failed, try it again."
+            : "Saved, but the server hasn't answered yet. If VINE_TURN_PASSWORD isn't set where vine runs, give the person the terminal_command to run themselves: it asks for the password privately and keeps it. Don't ask them for the password.",
+        };
+      }),
+    );
+
+    this.server.registerTool(
+      "remove_turn_server",
+      {
+        title: "Remove the TURN server",
+        description: "Forget this machine's TURN server and its password. New connections are direct only; links already open stay as they are.",
+        inputSchema: {},
+        annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+      },
+      wrap(async () => ({ removed: clearTurn(this.dataDir), note: "Members whose networks block direct connections can no longer reach this machine directly." })),
     );
 
     this.server.registerTool(

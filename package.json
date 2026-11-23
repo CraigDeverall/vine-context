@@ -38,6 +38,7 @@
     "build": "tsup && node scripts/build-apps.mjs",
     "typecheck": "tsc --noEmit && tsc -p apps",
     "test": "vitest run",
+    "test:turn": "node scripts/turn-server.mjs test",
     "check": "npm run typecheck && npm test && npm run build",
     "pack:check": "node scripts/pack-check.mjs",
     "prepack": "npm run build",

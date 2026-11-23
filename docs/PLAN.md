@@ -457,7 +457,7 @@ Why the gaps exist:
 |---|---|---|---|
 | 1 | **One-command install on desktop.** Publish to npm; the plugin starts the server with no clone; Windows is in the CI matrix (done 21 Nov); the plugin's launch command is proven on Windows | A clean macOS and a clean Windows machine reach a first result from one command | Before 11 Dec |
 | 2 | **Desktop assistants beyond Claude Code and Codex.** A Claude desktop extension bundle; tested config snippets for Cursor, Gemini CLI and VS Code | Each is listed in the README with a setup that was run, not assumed | Before 11 Dec |
-| 3 | **Connections that just work.** A stored TURN setting, link status in `status` and the console, and a default relay | Two members on strict networks connect with no environment variables | Before 11 Dec |
+| 3 | **Connections that just work.** A stored TURN setting and link status in `status` and the console (done 23 Nov: `vine turn`, `set_turn_server`); a default relay is still open | Two members on strict networks connect with no environment variables | Before 11 Dec |
 | 4 | **A remote gateway.** An always-on member (the person's own machine, or a small hosted one) serves the same tools over public HTTPS with sign-in | A phone, ChatGPT and Grok each join a context and read and write it | After the hackathon |
 | 5 | **Autostart everywhere.** Windows and Linux equivalents of the macOS launch agent | Graphs keep syncing after a reboot on all three | After the hackathon |
 

@@ -213,7 +213,13 @@ flowchart LR
 - **MCP Apps:** four views (console, explorer, receipt with Undo, conflicts) in one bundle. They're served as `ui://` resources, and on 127.0.0.1 behind a one-time token for agents that can't show views.
 - The design and its reasoning: [`docs/REPLICATION.md`](docs/REPLICATION.md).
 
-If two machines can't reach each other directly (some networks block it), set a TURN server: `VINE_ICE=turn:user:pass@host:3478`.
+If two machines can't reach each other directly (some networks block it), one of them sets a TURN server, which then carries that pair's connection. There's none by default: you bring your own.
+
+- `vine turn set turn.example.org --user sam` asks for the password in the terminal and keeps it in a file only you can read (`--store keychain` uses the macOS Keychain or the Linux secret service; `--store env` keeps nothing and reads `VINE_TURN_PASSWORD`). `--tcp` and `--tls` pick how the server is reached.
+- `vine turn show`, `vine turn test` and `vine turn clear` show, check and remove it; `vine doctor` checks it too.
+- It applies to every context on the machine from the next connection on, with nothing to restart. `vine status` and the console say which links are direct and which are relayed.
+- An agent can set the server and username (`set_turn_server`) but never takes the password: it's read from `VINE_TURN_PASSWORD`, or you run `vine turn set` yourself.
+- `VINE_ICE` (a comma-separated list, e.g. `turn:user:pass@host:3478`) still replaces the defaults and this setting.
 
 ## Limits
 
