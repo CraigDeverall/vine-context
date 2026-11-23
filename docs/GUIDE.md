@@ -86,7 +86,7 @@ There are four views: the sharing console, the graph explorer, a receipt (with *
 
 ## Share a context
 
-1. **You:** create a context (*"start a context called incident-42"*) or say *"invite Sam to my context"*. Either gives you a join code straight away, as a line to send:
+1. **You:** create a context (*"start a context called incident-42"*) or say *"invite Sam to my context"*. Creating a context invites no one. Inviting someone asks what they may do (read and add, only read, or also invite), then gives you a join code, as a line to send:
 
    `Join my context graph: /vine-context:join vine1_…`
 

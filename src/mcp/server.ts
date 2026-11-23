@@ -548,6 +548,28 @@ export class Session {
     return { folder: f?.folder ?? this.o.cwd, linked: !!f && !!mine && mine === theirs, pinned };
   }
 
+  /** One of this chat's contexts as the panels show it: recent changes, people, join codes and (with snapshot) its items. */
+  private async activity(a: { limit?: number; snapshot?: boolean; context?: string }): Promise<Record<string, unknown>> {
+    // A context the chat no longer uses falls back to the write context (the panel may ask for one just removed).
+    const c = await this.target(a.context && this.contexts.has(a.context) ? a.context : undefined);
+    const activity = await this.request<Record<string, unknown>>("activity", { limit: a.limit }, c.name);
+    const out: Record<string, unknown> = {
+      using: this.where(c.name),
+      context: c.name,
+      contexts: this.list(),
+      your_contexts: this.localNames(),
+      folder: this.folderState(),
+      ...activity,
+    };
+    // An admin's open join codes (who each is for, its role, when it expires): the panel lists them, to send or cancel.
+    if ((activity.you as { role?: string } | undefined)?.role === "admin") {
+      const s = await this.request<{ invites?: { state: string }[] }>("status", undefined, c.name);
+      out.invites = (s.invites ?? []).filter((i) => i.state === "open");
+    }
+    if (a.snapshot) out.snapshot = await this.request<Snapshot>("snapshot", { limit: 300 }, c.name);
+    return out;
+  }
+
   private registerSessionTools(): void {
     const ro = { readOnlyHint: true, idempotentHint: true, openWorldHint: false };
     const wrap = (fn: (args: any) => Promise<unknown>) => async (args: any) => {
@@ -611,23 +633,7 @@ export class Session {
             const none = { using: "no context", context: null, contexts: [], your_contexts: this.localNames(), next: this.noContext() };
             return { ...text(none), structuredContent: none };
           }
-          // A context the chat no longer uses falls back to the write context (the panel may ask for one just removed).
-          const c = await this.target(a.context && this.contexts.has(a.context) ? a.context : undefined);
-          const activity = await this.request<Record<string, unknown>>("activity", { limit: a.limit }, c.name);
-          const out: Record<string, unknown> = {
-            using: this.where(c.name),
-            context: c.name,
-            contexts: this.list(),
-            your_contexts: this.localNames(),
-            folder: this.folderState(),
-            ...activity,
-          };
-          // An admin's open join codes (who each is for, its role, when it expires): the panel lists them, to send or cancel.
-          if ((activity.you as { role?: string } | undefined)?.role === "admin") {
-            const s = await this.request<{ invites?: { state: string }[] }>("status", undefined, c.name);
-            out.invites = (s.invites ?? []).filter((i) => i.state === "open");
-          }
-          if (a.snapshot) out.snapshot = await this.request<Snapshot>("snapshot", { limit: 300 }, c.name);
+          const out = await this.activity(a);
           return { ...text(out), structuredContent: out };
         } catch (e) {
           return failure((e as Error).message); // no withNews: this read never takes the agent's notices
@@ -753,10 +759,11 @@ export class Session {
           "Invite one person to a context (you must be an admin of it; default: the chat's context): makes a new join code (vine1_…) for that person. " +
           "Your machine answers the code, so it must be online when they use it. The first person to use it is let straight in with the code's role and gets a full copy; anyone else using it is turned away. " +
           "Everyone in the context is told when someone joins, with their name, key fingerprint and agent. remove_peer takes anyone out. " +
-          "An unused code expires (default 24 hours). Call it once per person. sharing_status lists invites; revoke_invite cancels one.",
+          "An unused code expires (default 24 hours). Call it once per person, and only when the person asks to invite someone. " +
+          "Unless they already said, ask first what the person may do: read and add (contributor), only read (reader), or read, add and invite (admin). sharing_status lists invites; revoke_invite cancels one.",
         inputSchema: {
           label: z.string().max(60).optional().describe("Who it's for, e.g. 'for Sam': shown in sharing_status and in the join notice"),
-          role: z.enum(["reader", "contributor", "admin"]).optional().describe("The role they get when they join (default contributor)"),
+          role: z.enum(["reader", "contributor", "admin"]).optional().describe("The role they get when they join: the person's choice (default contributor)"),
           expires_hours: z.number().positive().max(720).optional().describe("Hours until an unused code stops working (default 24)"),
           context: which,
         },
@@ -858,7 +865,7 @@ export class Session {
     const nameArg = z.string().regex(GRAPH_RE).describe("Context name: lower-case letters, digits and dashes");
     const descriptionArg = z.string().max(500).optional().describe("For a new context: what it's for (what goes in it), in a sentence or two");
 
-    /** Starts a context of one's own if the name is new: describes it, and shares it if sharing is on by default. */
+    /** Starts a context of one's own if the name is new: describes it, and puts it online if sharing is on by default. It makes no join code: inviting is the person's step. */
     const created = async (name: string, isNew: boolean, description?: string) => {
       const c = this.contexts.get(name)!;
       if (isNew && description) {
@@ -867,15 +874,13 @@ export class Session {
         this.offer();
       }
       if (!isNew) return {};
-      const shared = autoShare() ? this.invited(await this.request<Record<string, any>>("share", {}, name), name) : {};
+      if (autoShare()) await this.request("start_sharing", undefined, name);
       return {
         created: this.where(name),
-        ...shared,
         next:
           (c.d.description ? "" : "Ask the person what this context is for and set it with describe_context. ") +
-          (autoShare()
-            ? "Show the person this join code now, and say: send it privately to one person; whoever uses it first is let in at once and gets a full copy, and everyone is told who joined. Then call model_guide before writing."
-            : "Call model_guide before writing."),
+          "No one is invited yet and there is no join code. When the person wants someone in, ask who and what they may do (read and add, only read, or also invite), then call share_context for that one person. " +
+          "Call model_guide before writing.",
       };
     };
 
@@ -1071,6 +1076,29 @@ export class Session {
     };
     const both = (summary: unknown, structured: Record<string, unknown>): Content => ({ ...text(summary), structuredContent: structured });
     const which = contextArg.describe("Which of this chat's contexts (default: the one writes go to)");
+
+    this.server.registerTool(
+      "open_contexts",
+      {
+        title: "Open the contexts panel",
+        description:
+          "Show the person this chat's context in a panel: what needs them, its questions with their threads, its claims (with conflicts and history), its people and join codes, and the chat's contexts to turn on and off. " +
+          "For the person to look at and steer from; to read the context yourself, use context_info and the model's search and read tools.",
+        inputSchema: {},
+        annotations: ro,
+        _meta: uiMeta("contexts", { beside: true }),
+      },
+      run(async () => {
+        if (!this.contexts.size) {
+          const none = { using: "no context", context: null, contexts: [], your_contexts: this.localNames(), next: this.noContext() };
+          return both(none, none);
+        }
+        const state = await this.activity({ limit: 40, snapshot: true });
+        const snap = state.snapshot as Snapshot;
+        // The agent gets a line about what the person now sees, not the whole context.
+        return both({ showing: state.using, context: state.context, items: snap.nodes.length, note: "The person is looking at the contexts panel." }, state);
+      }),
+    );
 
     this.server.registerTool(
       "open_console",

@@ -91,6 +91,10 @@ describe("MCP App views", () => {
     const { tools } = await alice.client.listTools();
     const by = (n: string) => tools.find((t) => t.name === n)!;
     expect(uiOf(by("open_console"))).toBe("ui://vine/console");
+    expect(uiOf(by("open_contexts"))).toBe("ui://vine/contexts");
+    // The contexts panel is also offered beside the conversation, where a host has that.
+    expect((by("open_contexts")._meta as any)["openai/ui"]).toEqual({ entrypoints: [{ type: "thread" }] });
+    expect((by("open_console")._meta as any)["openai/ui"]).toBeUndefined();
     expect(uiOf(by("explore_context"))).toBe("ui://vine/explorer");
     expect(uiOf(by("add_claim"))).toBe("ui://vine/receipt");
     expect(uiOf(by("conflicts"))).toBe("ui://vine/conflicts");
@@ -136,6 +140,22 @@ describe("MCP App views", () => {
     const then = (await alice.raw("explore_context", { at: before })).structuredContent;
     expect(then.nodes.map((n: any) => [n.key, n.ended])).toEqual([[a.result.id, false]]);
     expect(then.edges).toEqual([]);
+  });
+
+  it("opens the contexts panel with everything it shows, and tells the agent only a summary", async () => {
+    const alice = await agent("alice");
+    const c = await alice.call("add_claim", { text: "Shown in the contexts panel" });
+    const r = await alice.raw("open_contexts");
+    // The view gets the same state it then polls for.
+    expect(r.structuredContent).toMatchObject({ context: "main", you: { name: "alice", role: "admin" }, your_contexts: ["main"], invites: [] });
+    expect(r.structuredContent.snapshot.nodes.map((n: any) => n.title)).toContain("Shown in the contexts panel");
+    expect(r.structuredContent.recent[0]).toMatchObject({ kind: "claim", mine: true, node: c.result?.id ?? c.id });
+    const polled = await alice.call("context_activity", { limit: 40, snapshot: true });
+    expect(Object.keys(polled).sort()).toEqual(Object.keys(r.structuredContent).sort());
+    // The agent reads a line about what the person sees, not the context's items.
+    const said = (r.content as { text: string }[]).map((x) => x.text).join("\n");
+    expect(said).toContain("contexts panel");
+    expect(said).not.toContain("Shown in the contexts panel");
   });
 
   it("opens the console with your sharing state", async () => {
@@ -241,13 +261,20 @@ describe("names, auto-share and which graph", () => {
     }
   });
 
-  it("shares a new graph straight away and returns a join code", async () => {
+  it("puts a new context online straight away, and makes no join code until asked", async () => {
     const me = await agent("alice");
     process.env.VINE_AUTO_SHARE = "on";
     try {
       const r = await me.call("use_context", { name: "planning" });
-      expect(r).toMatchObject({ created: "your context 'planning'", code: expect.stringMatching(/^vine1_/), send: expect.stringContaining(r.code), shared_as: { name: "alice" } });
+      expect(r).toMatchObject({ created: "your context 'planning'", next: expect.stringContaining("no join code") });
+      expect(r).not.toHaveProperty("code");
+      expect(r).not.toHaveProperty("send");
       expect(await me.call("context_info")).toMatchObject({ sharing: { sharing: true } });
+      expect((await me.call("sharing_status")).invites).toEqual([]);
+      // Inviting is its own step, with the role the person chose.
+      const inv = await me.call("share_context", { label: "for Sam", role: "reader" });
+      expect(inv).toMatchObject({ code: expect.stringMatching(/^vine1_/), send: expect.stringContaining(inv.code), invite: { role: "reader" }, shared_as: { name: "alice" } });
+      expect((await me.call("sharing_status")).invites).toHaveLength(1);
       // Switching back to an existing graph doesn't share it.
       const back = await me.call("use_context", { name: "main" });
       expect(back).not.toHaveProperty("code");

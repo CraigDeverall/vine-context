@@ -1,0 +1,235 @@
+// What the Contexts view works out from a context's activity and snapshot:
+// threads, how items relate, filters, and the prompts it hands to the agent.
+//
+// The Claude Code mod (plugin/hooks/register.tsx) has the same logic for its
+// panel. A mod is one module with no imports of its own, so the two are kept
+// alike by hand: a change to one belongs in the other.
+
+export type Role = "reader" | "contributor" | "admin";
+
+export type Person = {
+  name: string;
+  fingerprint: string;
+  role: Role | null;
+  you: boolean;
+  creator: boolean;
+  online: boolean;
+  joined_at?: string;
+  agent: string | null;
+  platform: string | null;
+};
+
+export type Change = {
+  id: string;
+  kind: string;
+  at: string;
+  by: string;
+  mine: boolean;
+  summary: string;
+  node: string | null;
+  held: boolean;
+  shared_at: string | null;
+};
+
+export type GraphNode = {
+  id: string;
+  key: string;
+  label: "Claim" | "Question" | "Reply";
+  title: string;
+  ended: boolean;
+  props: Record<string, unknown>;
+};
+
+export type GraphEdge = { type: string; source: string; target: string };
+
+/** A join code waiting for its one person. */
+export type Invite = { id: string; label: string | null; role: Role; code: string; created_at: string; expires_at: string };
+
+export type ChatContext = { name: string; description: string | null; role: Role | null; writes_here: boolean };
+
+/** What `context_activity` (and `open_contexts`) return for a chat that has a context. */
+export type Activity = {
+  using: string;
+  you: { name: string; role: Role | null; fingerprint: string };
+  sharing: boolean;
+  online: string[];
+  members: number;
+  people: Person[];
+  relays_up: number;
+  changes: number;
+  recent: Change[];
+  /** The context this activity is about (the one the view shows). */
+  context: string;
+  description: string | null;
+  /** This chat's contexts: usually one. */
+  contexts: ChatContext[];
+  /** The folder this chat started in, and the contexts new chats there start with. */
+  folder: { folder: string; linked: boolean; pinned?: string[] } | null;
+  your_contexts: string[];
+  digest: { at: string; lines: string[] }[];
+  /** An admin's open join codes, newest first (absent for other roles). */
+  invites?: Invite[];
+  snapshot?: { nodes: GraphNode[]; edges: GraphEdge[]; truncated: boolean };
+};
+
+/** What they return for a chat with no context yet. */
+export type NoContext = { context: null; your_contexts: string[] };
+
+/** One of this machine's contexts in full (`context_details`). */
+export type ContextDetails = {
+  name: string;
+  id: string | null;
+  description: string | null;
+  role: Role | null;
+  yours: boolean;
+  created_by: string | null;
+  in_chat: boolean;
+  writes_here: boolean;
+  sharing: boolean;
+  members: number;
+  /** How many of the other members are online. */
+  online: number;
+  /** How many items of each kind it holds, withdrawn ones included. */
+  items: Record<string, number>;
+  changes: number;
+  held: number;
+  /** Join codes waiting to be used; null unless you're an admin. */
+  open_invites: number | null;
+  stored_at: string;
+};
+
+export type Tab = "overview" | "questions" | "claims" | "people";
+
+/** What the Questions and Claims lists show: the words to match, and which part of each list. */
+export type Filters = {
+  text: string;
+  claims: "current" | "mine" | "conflicts" | "history";
+  questions: "open" | "answered" | "mine";
+};
+
+const NAME_RE = /^[a-z0-9][a-z0-9-]{0,62}$/;
+
+export const short = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
+/** A path cut from the front, so its last folders (the telling part) stay. */
+export const tail = (s: string, n: number) => (s.length > n ? `…${s.slice(s.length - n + 1)}` : s);
+export const ago = (iso: string, now: number) => {
+  const s = Math.max(0, (now - Date.parse(iso)) / 1000);
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.round(s / 60)}m ago`;
+  if (s < 86400) return `${Math.round(s / 3600)}h ago`;
+  return `${Math.round(s / 86400)}d ago`;
+};
+export const prop = (n: GraphNode, k: string) => (typeof n.props[k] === "string" ? (n.props[k] as string) : "");
+
+/** A question with its thread and the claims that answer it. */
+export type Thread = { q: GraphNode; replies: GraphNode[]; answers: GraphNode[] };
+
+/** Builds the questions' threads and the current claims from a snapshot. */
+export function threads(nodes: GraphNode[], edges: GraphEdge[]): { open: Thread[]; answered: Thread[]; claims: GraphNode[]; withdrawn: number } {
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const live = (n: GraphNode | undefined): n is GraphNode => !!n && !n.ended;
+  // A claim is current unless withdrawn or replaced by a current claim.
+  const replaced = new Set(edges.filter((e) => e.type === "REPLACES" && live(byId.get(e.source))).map((e) => e.target));
+  const current = (n: GraphNode | undefined): n is GraphNode => live(n) && n.label === "Claim" && !replaced.has(n.id);
+  const all: Thread[] = nodes
+    .filter((n) => n.label === "Question" && !n.ended)
+    .map((q) => ({
+      q,
+      replies: edges
+        .filter((e) => e.type === "REPLIES_TO" && e.target === q.id)
+        .map((e) => byId.get(e.source))
+        .filter(live)
+        .sort((a, b) => Date.parse(prop(a, "recorded_at")) - Date.parse(prop(b, "recorded_at"))),
+      answers: edges
+        .filter((e) => e.type === "ANSWERS" && e.target === q.id)
+        .map((e) => byId.get(e.source))
+        .filter(current),
+    }));
+  return {
+    open: all.filter((t) => !t.answers.length),
+    answered: all.filter((t) => t.answers.length),
+    claims: nodes.filter(current),
+    withdrawn: nodes.filter((n) => n.ended).length,
+  };
+}
+
+/** How a snapshot's items relate: what replaced what, what contradicts what, and each item's links. */
+export function relations(nodes: GraphNode[], edges: GraphEdge[]) {
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const byKey = new Map(nodes.map((n) => [n.key, n]));
+  const live = (n: GraphNode | undefined): n is GraphNode => !!n && !n.ended;
+  /** A claim's newer version, where a claim that still stands replaced it. */
+  const replacedBy = new Map<string, GraphNode>();
+  for (const e of edges) {
+    const by = byId.get(e.source);
+    if (e.type === "REPLACES" && live(by)) replacedBy.set(e.target, by);
+  }
+  const current = (n: GraphNode | undefined): n is GraphNode => live(n) && n.label === "Claim" && !replacedBy.has(n.id);
+  const linked = (id: string, type: string, dir: "out" | "in") =>
+    edges
+      .filter((e) => e.type === type && (dir === "out" ? e.source : e.target) === id)
+      .map((e) => byId.get(dir === "out" ? e.target : e.source))
+      .filter((n): n is GraphNode => !!n);
+  // Pairs of claims that both still stand and can't both be true, each pair once.
+  const pairs = new Map<string, [GraphNode, GraphNode]>();
+  for (const e of edges) {
+    if (e.type !== "CONTRADICTS") continue;
+    const a = byId.get(e.source);
+    const b = byId.get(e.target);
+    if (current(a) && current(b)) pairs.set([a.id, b.id].sort().join("|"), [a, b]);
+  }
+  const conflicts = [...pairs.values()];
+  const inConflict = new Set(conflicts.flatMap(([a, b]) => [a.id, b.id]));
+  /** Claims that no longer stand: replaced or withdrawn. */
+  const history = nodes.filter((n) => n.label === "Claim" && !current(n));
+  return { byId, byKey, replacedBy, current, linked, conflicts, inConflict, history };
+}
+
+/** Whether an item matches the filter's words: all of them, anywhere in its text, author, source or id. */
+export function matches(n: GraphNode, text: string): boolean {
+  const words = text.toLowerCase().split(/\s+/).filter(Boolean);
+  if (!words.length) return true;
+  const hay = `${n.title} ${prop(n, "recorded_by")} ${prop(n, "source")} ${n.key}`.toLowerCase();
+  return words.every((w) => hay.includes(w));
+}
+
+/** What the agent is asked from the view's buttons: the person steers, the agent records. */
+export const prompts = {
+  catchUp: (context: string) =>
+    `Catch me up on the context '${context}': what changed lately and who changed it, which questions are still open, and any claims that contradict each other. Keep it short, and end with what needs me.`,
+  saveChat: (context: string) =>
+    `Record what we've learned in this chat in the context '${context}'. Search it first, so you link to what's already there instead of repeating it. Add a claim for each finding and a question for each thing we still don't know, then tell me what you recorded, with the ids.`,
+  investigate: (q: GraphNode, context?: string) =>
+    `Look into the open question ${q.key} ("${short(q.title, 200)}")${context ? ` in the context '${context}'` : ""}. Search the context for what's already known about it, find out what you can, and reply on its thread with what you find. If that settles it, record a claim that answers it.`,
+  correct: (claim: GraphNode, text: string, context?: string) =>
+    `The claim ${claim.key} ("${short(claim.title, 200)}")${context ? ` in the context '${context}'` : ""} is wrong or out of date. What's right: ${text}\n\n` +
+    `Record it: paraphrase it as a claim that stands alone, and add it with replaces: [${claim.key}]${context ? ` (context: ${context})` : ""}.`,
+  settle: (keep: GraphNode, drop: GraphNode, context?: string) =>
+    `The claims ${keep.key} ("${short(keep.title, 200)}") and ${drop.key} ("${short(drop.title, 200)}") contradict each other${context ? ` in the context '${context}'` : ""}. ${keep.key} is the one that's right.\n\n` +
+    `Settle it so only one stands: withdraw ${drop.key} with that as the reason if you may, otherwise record a claim that replaces it (replaces: [${drop.key}])${context ? ` (context: ${context})` : ""}. Then tell me what you did.`,
+};
+
+/** What the agent is asked when the person answers a question, or picks a reply as the answer. */
+export function answerPrompt(q: GraphNode, answer: { text: string } | { reply: GraphNode }, context?: string): string {
+  const question = `the open question ${q.key} ("${short(q.title, 200)}")${context ? ` in the context '${context}'` : ""}`;
+  const where = context ? ` (context: ${context})` : "";
+  if ("text" in answer)
+    return `My answer to ${question}: ${answer.text}\n\nRecord it: paraphrase it as a claim that stands alone, and add it with answers: [${q.key}]${where}.`;
+  const r = answer.reply;
+  return (
+    `Answer ${question} with ${prop(r, "recorded_by") || "its"}'s reply ${r.key}: "${short(r.title, 400)}"\n\n` +
+    `Paraphrase it as a claim that stands alone and record it with answers: [${q.key}], with source "reply ${r.key}"${where}.`
+  );
+}
+
+/** What's wrong with a new context's name and description, or null. */
+export function newContextProblem(name: string, description: string, existing: string[]): string | null {
+  if (!name) return "Give it a name.";
+  if (!NAME_RE.test(name)) return 'A context name is lower-case letters, digits and dashes, such as "checkout-incident".';
+  if (existing.includes(name)) return `There's already a context '${name}' on this machine: turn it on in the list.`;
+  if (!description.trim()) return "Say what it’s for: every member’s agent reads that to decide what belongs there.";
+  return null;
+}
+
+/** The message to send someone with their join code. */
+export const sendLine = (code: string) => `Join my context graph: /vine-context:join ${code}`;

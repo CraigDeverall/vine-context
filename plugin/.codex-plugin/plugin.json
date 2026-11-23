@@ -6,6 +6,7 @@
   "keywords": ["relate", "neo4j", "context-graph", "mcp", "p2p"],
   "skills": "./skills/",
   "mcpServers": "./.mcp.json",
+  "hooks": "./codex/hooks.json",
   "interface": {
     "displayName": "Vine Context",
     "shortDescription": "Share a context graph between people's agents",
