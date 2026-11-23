@@ -245,6 +245,25 @@ async function call($: Engine, tool: string, args: Record<string, unknown> = {})
   throw last instanceof Error ? last : new Error('The vine-context MCP server is not connected.')
 }
 
+/**
+ * Whether the error showing came from the poll (the server not answering). The
+ * next answer clears only that kind: an error from something the person did
+ * stays until they dismiss it or their next action works.
+ */
+let errorFromPoll = false
+
+/** Shows an error in the panel (and, from the poll while nothing has loaded, the band). */
+async function fail($: Engine, message: string, fromPoll = false) {
+  errorFromPoll = fromPoll
+  await update($, error, () => message)
+}
+
+/** Clears the error showing. */
+async function clearError($: Engine) {
+  errorFromPoll = false
+  await update($, error, () => null)
+}
+
 /** Why the server didn't answer, in words that say what to do about it. */
 export function trouble(message: string): string {
   if (/context_activity|context_details|delete_context|unknown tool|not found|no such tool/i.test(message))
@@ -265,7 +284,7 @@ async function refresh($: Engine) {
     const r = (await call($, 'context_activity', { limit: 40, snapshot: wantSnapshot, ...(which ? { context: which } : {}) })) as Activity | { context: null; your_contexts: string[] }
     loaded()
     failures = 0
-    await update($, error, () => null)
+    if (errorFromPoll) await clearError($)
     if (r.context === null) {
       // No context in this chat (there's no default): the band and panel offer to choose one.
       await update($, unattached, () => r.your_contexts)
@@ -297,7 +316,7 @@ async function refresh($: Engine) {
   } catch (e) {
     // A new chat's server takes a moment to connect, so the first failures still read as loading.
     if (++failures >= GIVE_UP_AFTER) loaded()
-    await update($, error, () => trouble((e as Error).message))
+    await fail($, trouble((e as Error).message), true)
   }
 }
 
@@ -326,12 +345,13 @@ async function backItem($: Engine) {
 async function act($: Engine, tool: string, args: Record<string, unknown>, done?: string) {
   try {
     const r = await call($, tool, args)
+    await clearError($)
     await say($, done ?? null)
     // A new join code (from Invite): marked in the People tab's list.
     const made = r && typeof r === 'object' ? (r as { invite?: { id?: string } }).invite?.id : undefined
     if (made) await update($, code, () => made)
   } catch (e) {
-    await update($, error, () => (e as Error).message)
+    await fail($, (e as Error).message)
   }
   await refresh($)
   await loadDetails($)
@@ -356,7 +376,7 @@ async function loadDetails($: Engine) {
     const d = (await call($, 'context_details', { name })) as ContextDetails
     if ((await detailsOf($)) === name) await update($, details, () => d)
   } catch (e) {
-    await update($, error, () => trouble((e as Error).message))
+    await fail($, trouble((e as Error).message))
   }
 }
 
@@ -385,10 +405,10 @@ async function draft($: Engine, text: string, what: string) {
     const box = await $.prompt.read()
     const kept = box.text.replace(/\s+$/, '')
     const r = await $.prompt.fill({ text: kept ? `${kept}\n\n${text}` : text })
-    if (r.isFilled) await say($, `Your ${what} is started in the prompt box: finish its last line, then press Enter to send it to your agent.`)
-    else await update($, error, () => (r.refusal === 'dialog' ? 'Close the open dialog first: the prompt box can’t take text while it’s up.' : 'The prompt box couldn’t take the text here.'))
+    if (r.isFilled) await clearError($).then(() => say($, `Your ${what} is started in the prompt box: finish its last line, then press Enter to send it to your agent.`))
+    else await fail($, r.refusal === 'dialog' ? 'Close the open dialog first: the prompt box can’t take text while it’s up.' : 'The prompt box couldn’t take the text here.')
   } catch (e) {
-    await update($, error, () => (e as Error).message)
+    await fail($, (e as Error).message)
   }
 }
 
@@ -399,7 +419,7 @@ async function ask($: Engine, text: string) {
   try {
     await $.prompt.submit({ text, asUser: true })
   } catch (e) {
-    await update($, error, () => (e as Error).message)
+    await fail($, (e as Error).message)
   }
 }
 
@@ -425,6 +445,7 @@ export const register: Register = on => {
     loading?.cancel()
     seen = undefined
     failures = 0
+    await clearError($) // a reload forgets where the last error came from, so it starts clear
     await update($, tick, () => 0)
     // "loading." "loading.." "loading..." until the server first answers.
     loading = $.clock.every(TICK_MS, () => void update($, tick, n => (n + 1) % 3))
@@ -533,7 +554,7 @@ export const register: Register = on => {
     const note = await read($, notice)
     const made = await read($, code)
     const none = await read($, unattached)
-    const dismiss = () => void update($, error, () => null).then(() => say($, null))
+    const dismiss = () => void clearError($).then(() => say($, null))
     const messages =
       err || note
         ? card(

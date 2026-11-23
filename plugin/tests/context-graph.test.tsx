@@ -92,7 +92,8 @@ const START = { cwd: '/', surface: 'desktop', isInteractive: true } as const
 
 type Calls = { tool: string; args: any }[]
 
-function engine(on: any, calls: Calls, prompts: string[] = [], state: unknown = ACTIVITY) {
+/** Mocks the engine and the vine-context server; a tool named in `failing` answers with that error. */
+function engine(on: any, calls: Calls, prompts: string[] = [], state: unknown = ACTIVITY, failing: Record<string, string> = {}) {
   on('command.register', () => ({ value: { command: 'contexts' } }))
   on('clock.every', () => ({ value: undefined }))
   on('clock.after', () => ({ value: undefined }))
@@ -119,6 +120,7 @@ function engine(on: any, calls: Calls, prompts: string[] = [], state: unknown = 
   on('session.start', (_: unknown, e: any) => ({ cwd: e.cwd }))
   on('mcp.call', (_: unknown, e: any) => {
     calls.push({ tool: e.tool, args: e.args })
+    if (failing[e.tool]) return { value: { content: [{ type: 'text', text: failing[e.tool] }], isError: true } }
     if (e.tool === 'context_activity') return { value: { content: [{ type: 'text', text: JSON.stringify(state) }], isError: false, structuredContent: state } }
     if (e.tool === 'context_details') {
       const d = { ...DETAILS, name: e.args.name, in_chat: e.args.name === 'team', writes_here: e.args.name === 'team' }
@@ -488,6 +490,23 @@ test('a context opens from the list on its tabs or its Settings tab, an off one 
   await desk.press({ key: 'delete-team' })
   expect(calls).toContainEqual({ tool: 'delete_context', args: { name: 'team', confirm: 'team' } })
   expect((await desk.find({ key: 'tab-overview' }))?.text).toMatch(/^▸ /)
+  await desk.unmount()
+})
+
+test('an action that fails says why, and the next poll doesn\'t clear it', async ($, on) => {
+  const calls: Calls = []
+  engine(on, calls, [], ACTIVITY, { stop_sharing: 'The graph host failed to start', context_details: 'The embedder is not installed' })
+  await $.session.start(START)
+  await $.command.run(RUN)
+  const desk = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await desk.press({ key: 'sync-toggle' }) // fails, then polls again
+  expect(await desk.find({ type: 'Text', text: /The graph host failed to start/ })).toBeDefined()
+  await desk.press({ key: 'dismiss-message' })
+  expect(await desk.find({ type: 'Text', text: /The graph host failed to start/ })).toBeUndefined()
+  // The Settings tab says its details couldn't be read, and why, instead of loading forever.
+  await desk.press({ key: 'tab-settings' })
+  expect(await desk.find({ type: 'Text', text: /The embedder is not installed/ })).toBeDefined()
+  expect(await desk.find({ type: 'Text', text: /Couldn’t read its details/ })).toBeDefined()
   await desk.unmount()
 })
 
