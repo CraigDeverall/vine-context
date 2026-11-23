@@ -42,6 +42,13 @@ is written into the folder.
   model's tools answer with how to choose one. Before the first write, ask the
   person which context this chat is for: one in `your_contexts`, a new one
   (with what it's for), or someone else's (`join_context` with their code).
+- **Deleting is not removing.** `remove_context` only takes a context out of
+  this chat. `delete_context` permanently deletes this machine's copy (items,
+  history, join codes made here, every chat's link to it). Only when the
+  person asks for exactly that: say what it removes, that other members keep
+  their copies (and that with no other member it's gone for good), ask them
+  to confirm by name, then pass that name as `confirm`. `context_details`
+  shows what a context holds first.
 - **Sometimes several.** `add_context` adds another alongside, and
   `remove_context` takes one out (with no name, all of them, which leaves the
   chat with none). With several, reads search all of them and each row says

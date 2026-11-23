@@ -25,7 +25,7 @@ const ACTIVITY = {
   context: 'team',
   description: 'What the team knows about the checkout slowdown',
   contexts: [{ name: 'team', description: 'What the team knows about the checkout slowdown', role: 'admin', writes_here: true }],
-  folder: { folder: '/work/checkout', linked: false },
+  folder: { folder: '/Users/alice/work/shop/services/checkout', linked: false, pinned: ['own'] },
   your_contexts: ['infra', 'own', 'team'],
   invites: [
     { id: 'inv_1', label: 'for Sam', role: 'contributor', code: 'vine1_room.secret', created_at: iso(60_000), expires_at: iso(-23 * 3600_000) },
@@ -55,6 +55,25 @@ const ACTIVITY = {
     ],
     truncated: false,
   },
+}
+
+const DETAILS = {
+  name: 'team',
+  id: '0193-aaaa',
+  description: 'What the team knows about the checkout slowdown',
+  role: 'admin',
+  yours: true,
+  created_by: 'alice',
+  in_chat: true,
+  writes_here: true,
+  sharing: true,
+  members: 3,
+  online: 1,
+  items: { Claim: 6, Question: 2, Reply: 2 },
+  changes: 7,
+  held: 1,
+  open_invites: 2,
+  stored_at: '/data/graphs/team',
 }
 
 const BAND = {
@@ -93,6 +112,10 @@ function engine(on: any, calls: Calls, prompts: string[] = [], state: unknown = 
   on('mcp.call', (_: unknown, e: any) => {
     calls.push({ tool: e.tool, args: e.args })
     if (e.tool === 'context_activity') return { value: { content: [{ type: 'text', text: JSON.stringify(state) }], isError: false, structuredContent: state } }
+    if (e.tool === 'context_details') {
+      const d = { ...DETAILS, name: e.args.name, in_chat: e.args.name === 'team', writes_here: e.args.name === 'team' }
+      return { value: { content: [{ type: 'text', text: JSON.stringify(d) }], isError: false, structuredContent: d } }
+    }
     if (e.tool === 'share_context') return { value: { content: [{ type: 'text', text: '{}' }], isError: false, structuredContent: { send: 'Join my context graph: /vine-context:join vine1_x.y', invite: { id: 'inv_1' } } } }
     return { value: { content: [{ type: 'text', text: '{}' }], isError: false } }
   })
@@ -308,7 +331,7 @@ test('the people tab confirms a removal on its own, and invites to this context'
   await desk.unmount()
 })
 
-test('the Contexts view turns contexts on and off, starts one in its own step, and links the folder', async ($, on) => {
+test('the Contexts view turns contexts on and off, creates one in its own step, and pins each to the folder', async ($, on) => {
   const calls: Calls = []
   engine(on, calls)
   await $.session.start(START)
@@ -322,15 +345,95 @@ test('the Contexts view turns contexts on and off, starts one in its own step, a
   expect(calls).toContainEqual({ tool: 'add_context', args: { name: 'own' } })
   await desk.press({ key: 'toggle-team' })
   expect(calls).toContainEqual({ tool: 'remove_context', args: { name: 'team' } })
-  await desk.press({ key: 'link-folder' })
-  expect(calls).toContainEqual({ tool: 'link_folder', args: {} })
+  // Each context has its own pin for the chat's folder, whose path keeps its end.
+  expect((await desk.find({ key: 'pin-team' }))?.text).toBe('📌 Pin to …ice/work/shop/services/checkout')
+  expect((await desk.find({ key: 'pin-own' }))?.text).toBe('📌 Pinned to …ice/work/shop/services/checkout')
+  expect(await desk.find({ key: 'link-folder' })).toBeUndefined()
+  await desk.press({ key: 'pin-team' })
+  expect(calls).toContainEqual({ tool: 'link_folder', args: { name: 'team' } })
+  await desk.press({ key: 'pin-own' })
+  expect(calls).toContainEqual({ tool: 'link_folder', args: { name: 'own', off: true } })
 
-  await desk.input({ key: 'new-name', text: 'Bad Name!', kind: 'submit' })
-  expect(await desk.find({ type: 'Text', text: /lower-case letters/ })).toBeDefined()
-  await desk.input({ key: 'new-name', text: 'ops-notes', kind: 'submit' })
-  expect(await desk.find({ key: 'toggle-team' })).toBeUndefined() // the description step stands alone
-  await desk.input({ key: 'new-description', text: 'Runbooks and on-call notes', kind: 'submit' })
+  // Creating is a step of its own, opened from above the list: name and description together.
+  expect(await desk.find({ key: 'new-name' })).toBeUndefined()
+  expect(await desk.find({ type: 'Text', text: /Got a join code/ })).toBeDefined()
+  await desk.press({ key: 'create-new-context' })
+  expect(await desk.find({ key: 'toggle-team' })).toBeUndefined()
+  await desk.press({ key: 'create-context' })
+  expect(await desk.find({ type: 'Text', text: /Give it a name/ })).toBeDefined()
+  await desk.input({ key: 'new-name', text: 'Bad Name!', kind: 'change' })
+  await desk.press({ key: 'create-context' })
+  expect(await desk.find({ type: 'Text', text: /lower-case letters, digits and dashes, such as/ })).toBeDefined()
+  await desk.input({ key: 'new-name', text: 'team', kind: 'change' })
+  await desk.input({ key: 'new-description', text: 'x', kind: 'change' })
+  await desk.press({ key: 'create-context' })
+  expect(await desk.find({ type: 'Text', text: /already a context 'team'/ })).toBeDefined()
+  await desk.input({ key: 'new-name', text: 'ops-notes', kind: 'change' })
+  await desk.input({ key: 'new-description', text: '  ', kind: 'change' })
+  await desk.press({ key: 'create-context' })
+  expect(await desk.find({ type: 'Text', text: /Say what it’s for/ })).toBeDefined()
+  expect(calls.some(c => c.args.name === 'ops-notes')).toBe(false)
+  await desk.input({ key: 'new-description', text: 'Runbooks and on-call notes', kind: 'change' })
+  await desk.press({ key: 'create-context' })
   expect(calls).toContainEqual({ tool: 'add_context', args: { name: 'ops-notes', description: 'Runbooks and on-call notes' } })
+  expect(await desk.find({ key: 'new-name' })).toBeUndefined()
+
+  // Cancel leaves the list as it was.
+  await desk.press({ key: 'switch' })
+  await desk.press({ key: 'create-new-context' })
+  await desk.press({ key: 'cancel-create' })
+  expect(await desk.find({ key: 'toggle-team' })).toBeDefined()
+  await desk.unmount()
+})
+
+test('a context opens its details, shares from the list, and is deleted only once its name is typed', async ($, on) => {
+  const calls: Calls = []
+  engine(on, calls)
+  await $.session.start(START)
+  await $.command.run(RUN)
+  const desk = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await desk.press({ key: 'switch' })
+
+  // Share, on a context you're an admin of: the join-code step.
+  expect(await desk.find({ key: 'share-own' })).toBeUndefined() // off for this chat
+  await desk.press({ key: 'share-team' })
+  expect(await desk.find({ type: 'Text', text: /Invite someone to team/ })).toBeDefined()
+  await desk.press({ key: 'make-code' })
+  expect(calls).toContainEqual({ tool: 'share_context', args: {} })
+
+  // Details: by the name or the Details button.
+  await desk.press({ key: 'switch' })
+  await desk.press({ key: 'name-team' })
+  expect(calls).toContainEqual({ tool: 'context_details', args: { name: 'team' } })
+  expect(await desk.find({ key: 'toggle-own' })).toBeUndefined()
+  expect(await desk.find({ type: 'Text', text: /6 claims · 2 questions · 2 replies · 7 changes in all/ })).toBeDefined()
+  expect(await desk.find({ type: 'Text', text: /3 members · 1 of the others online · 2 join codes waiting/ })).toBeDefined()
+  expect(await desk.find({ type: 'Text', text: '/data/graphs/team' })).toBeDefined()
+  await desk.press({ key: 'detail-offline-team' })
+  expect(calls).toContainEqual({ tool: 'stop_sharing', args: { context: 'team' } })
+  await desk.press({ key: 'close-context-details' })
+  await desk.press({ key: 'details-own' })
+  expect(calls).toContainEqual({ tool: 'context_details', args: { name: 'own' } })
+  expect(await desk.find({ key: 'detail-share-own' })).toBeUndefined()
+
+  // Deleting: says what goes, and does nothing until the name is typed exactly.
+  await desk.press({ key: 'ask-delete-own' })
+  expect(await desk.find({ type: 'Text', text: /can’t be undone/ })).toBeDefined()
+  expect(await desk.find({ key: 'ask-delete-own' })).toBeUndefined()
+  await desk.press({ key: 'delete-own' })
+  expect(await desk.find({ type: 'Text', text: /Type own exactly/ })).toBeDefined()
+  await desk.input({ key: 'delete-confirm-own', text: 'owm', kind: 'change' })
+  await desk.press({ key: 'delete-own' })
+  expect(calls.some(c => c.tool === 'delete_context')).toBe(false)
+  await desk.press({ key: 'keep-context' })
+  expect(await desk.find({ key: 'ask-delete-own' })).toBeDefined() // back on its details
+  await desk.press({ key: 'ask-delete-own' })
+  await desk.press({ key: 'delete-own' }) // what was typed before is forgotten
+  expect(calls.some(c => c.tool === 'delete_context')).toBe(false)
+  await desk.input({ key: 'delete-confirm-own', text: 'own', kind: 'change' })
+  await desk.press({ key: 'delete-own' })
+  expect(calls).toContainEqual({ tool: 'delete_context', args: { name: 'own', confirm: 'own' } })
+  expect(await desk.find({ key: 'toggle-team' })).toBeDefined() // back on the list
   await desk.unmount()
 })
 
@@ -414,4 +517,25 @@ test('the band says what is wrong, instead of loading forever, when the server k
   expect(await band.find({ type: 'Text', text: /older vine-context server\. Start a new chat/ })).toBeDefined()
   expect(await band.find({ key: 'retry' })).toBeDefined()
   await band.unmount()
+})
+
+test('the create, details and delete steps draw in the terminal too', async ($, on) => {
+  const calls: Calls = []
+  engine(on, calls)
+  await $.session.start(START)
+  await $.command.run(RUN)
+  const term = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await term.press({ key: 'switch' })
+  await term.press({ key: 'create-new-context' })
+  expect(await term.find({ key: 'new-description' })).toBeDefined()
+  await term.press({ key: 'cancel-create' })
+  await term.press({ key: 'details-team' })
+  expect(await term.find({ type: 'Text', text: /6 claims/ })).toBeDefined()
+  await term.press({ key: 'ask-delete-team' })
+  expect(await term.find({ type: 'Text', text: /2 other members keep their own copy/ })).toBeDefined()
+  expect(await term.find({ type: 'Text', text: /You made this context/ })).toBeDefined()
+  await term.press({ key: 'keep-context' })
+  expect(await term.find({ key: 'ask-delete-team' })).toBeDefined()
+  expect(acts(calls).some(c => c.tool === 'delete_context')).toBe(false)
+  await term.unmount()
 })

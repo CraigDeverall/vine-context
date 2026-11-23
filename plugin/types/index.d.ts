@@ -55,7 +55,8 @@ export type Activity = {
   /** This chat's contexts: usually one. */
   contexts: { name: string; description: string | null; role: Person['role']; writes_here: boolean }[]
   /** The folder this chat started in, and whether new chats there start with this chat's contexts. */
-  folder: { folder: string; linked: boolean } | null
+  /** `pinned`: the contexts new chats in that folder start with (absent from older servers). */
+  folder: { folder: string; linked: boolean; pinned?: string[] } | null
   your_contexts: string[]
   digest: { at: string; lines: string[] }[]
   /** An admin's open join codes, newest first (absent for other roles). */
@@ -71,6 +72,30 @@ export type Invite = {
   code: string
   created_at: string
   expires_at: string
+}
+
+/** One of this machine's contexts in full (the server's `context_details`), for the panel's details view. */
+export type ContextDetails = {
+  name: string
+  id: string | null
+  description: string | null
+  role: Person['role']
+  /** Whether you made it. */
+  yours: boolean
+  created_by: string | null
+  in_chat: boolean
+  writes_here: boolean
+  sharing: boolean
+  members: number
+  /** How many of the other members are online. */
+  online: number
+  /** How many items of each kind it holds, withdrawn ones included. */
+  items: Record<string, number>
+  changes: number
+  held: number
+  /** Join codes waiting to be used; null unless you're an admin. */
+  open_invites: number | null
+  stored_at: string
 }
 
 export type Tab = 'overview' | 'questions' | 'claims' | 'people'
@@ -101,8 +126,14 @@ declare module 'claude-code' {
       notice: string | null
       error: string | null
       confirmRemove: string | null
-      /** A new context's name, waiting for its description; starting with ! it's what's wrong with the name typed. */
-      draftName: string | null
+      /** The new-context step (the panel shows only that), with what's wrong with what was typed; null while it's closed. */
+      creating: { error: string | null } | null
+      /** The context (by name) whose details the panel shows; null is the list. */
+      managing: string | null
+      /** The details of the context being managed, once the server has answered. */
+      details: ContextDetails | null
+      /** The context whose deletion is being confirmed (the panel shows only that), with what's wrong with what was typed. */
+      deleting: { name: string; error: string | null } | null
       /** Whether the description is being edited (the panel shows only that). */
       editing: boolean
       /** Whether the panel shows the chat's contexts, to turn on and off, instead of a context. */
