@@ -92,7 +92,8 @@ const START = { cwd: '/', surface: 'desktop', isInteractive: true } as const
 
 type Calls = { tool: string; args: any }[]
 
-function engine(on: any, calls: Calls, prompts: string[] = [], state: unknown = ACTIVITY) {
+/** Mocks the engine and the vine-context server; a tool named in `failing` answers with that error. */
+function engine(on: any, calls: Calls, prompts: string[] = [], state: unknown = ACTIVITY, failing: Record<string, string> = {}) {
   on('command.register', () => ({ value: { command: 'contexts' } }))
   on('clock.every', () => ({ value: undefined }))
   on('clock.after', () => ({ value: undefined }))
@@ -104,6 +105,14 @@ function engine(on: any, calls: Calls, prompts: string[] = [], state: unknown = 
     prompts.push(`copied: ${e.text}`)
     return { value: { isCopied: true } }
   })
+  // The prompt box: what was typed so far, and what a fill puts there (recorded as a draft).
+  let box = ''
+  on('prompt.read', () => ({ value: { text: box, cursor: box.length } }))
+  on('prompt.fill', (_: unknown, e: any) => {
+    box = e.text
+    prompts.push(`draft: ${e.text}`)
+    return { isFilled: true, text: box, cursor: box.length }
+  })
   on('prompt.submit', (_: unknown, e: any) => {
     prompts.push(e.text)
     return { text: e.text }
@@ -111,6 +120,7 @@ function engine(on: any, calls: Calls, prompts: string[] = [], state: unknown = 
   on('session.start', (_: unknown, e: any) => ({ cwd: e.cwd }))
   on('mcp.call', (_: unknown, e: any) => {
     calls.push({ tool: e.tool, args: e.args })
+    if (failing[e.tool]) return { value: { content: [{ type: 'text', text: failing[e.tool] }], isError: true } }
     if (e.tool === 'context_activity') return { value: { content: [{ type: 'text', text: JSON.stringify(state) }], isError: false, structuredContent: state } }
     if (e.tool === 'context_details') {
       const d = { ...DETAILS, name: e.args.name, in_chat: e.args.name === 'team', writes_here: e.args.name === 'team' }
@@ -162,6 +172,10 @@ test('the overview says what needs you, hands steering to the agent, and opens i
   expect((await desk.find({ key: 'tab-questions' }))?.text).toMatch(/❓ Questions 1/)
   expect((await desk.find({ key: 'tab-claims' }))?.text).toMatch(/📌 Claims 4/)
   expect((await desk.find({ key: 'tab-people' }))?.text).toMatch(/👥 People 3/)
+  expect((await desk.find({ key: 'tab-settings' }))?.text).toMatch(/⚙ Settings$/)
+  // Whether it's syncing is in the header, with the way to change it.
+  expect(await desk.find({ type: 'Text', text: /⇅ Syncing/ })).toBeDefined()
+  expect((await desk.find({ key: 'sync-toggle' }))?.text).toMatch(/Go offline/)
   for (const gone of ['refresh', 'add-claim', 'ask-question']) expect(await desk.find({ key: gone })).toBeUndefined()
   expect(await desk.find({ type: 'Svg' })).toBeUndefined()
 
@@ -169,7 +183,12 @@ test('the overview says what needs you, hands steering to the agent, and opens i
   expect(await desk.find({ type: 'Text', text: /1 pair of claims can’t both be true/ })).toBeDefined()
   expect(await desk.find({ type: 'Text', text: /1 of your questions has replies/ })).toBeDefined()
   expect(await desk.find({ type: 'Text', text: /1 open question, 1 with replies/ })).toBeDefined()
+  // Only the first three things that need you show: the rest are behind a link.
+  expect(await desk.find({ type: 'Text', text: /2 join codes are waiting/ })).toBeUndefined()
+  expect((await desk.find({ key: 'fold-needs' }))?.text).toMatch(/^1 more thing ▾/)
+  await desk.press({ key: 'fold-needs' })
   expect(await desk.find({ type: 'Text', text: /2 join codes are waiting/ })).toBeDefined()
+  expect((await desk.find({ key: 'fold-needs' }))?.text).toMatch(/^Show fewer things ▴/)
   expect(await desk.find({ type: 'Text', text: /bob replaced your claim c_old/ })).toBeDefined()
   await desk.press({ key: 'undo-change-x1' })
   expect(calls).toContainEqual({ tool: 'take_back', args: { id: 'x1' } })
@@ -219,8 +238,15 @@ test('the questions tab shows threads; a question opens on its own, where answer
   await desk.press({ key: 'answer-q_2' })
   expect(await desk.find({ key: 'tab-questions' })).toBeUndefined() // nothing else on the panel
   expect(await desk.find({ type: 'Text', text: /Open question/ })).toBeDefined()
-  await desk.input({ key: 'answer-input-q_2', text: 'Thursday, at the cafe', kind: 'submit' })
-  expect(prompts.at(-1)).toMatch(/My answer to the open question q_2 \("Which day is the team lunch\?"\): Thursday, at the cafe[\s\S]*answers: \[q_2\]/)
+  // Answering starts it in the prompt box, for the person to finish and send; the panel stays on the question.
+  expect(await desk.find({ key: 'answer-input-q_2' })).toBeUndefined()
+  await desk.press({ key: 'answer-in-chat-q_2' })
+  expect(prompts.at(-1)).toBe("draft: Record my answer to the open question q_2: paraphrase it as a claim that stands alone, with answers: [q_2].\nQ: Which day is the team lunch?\nA: ")
+  expect(await desk.find({ type: 'Text', text: /Open question/ })).toBeDefined()
+  // What was already typed stays, above it.
+  await desk.press({ key: 'answer-in-chat-q_2' })
+  expect(prompts.at(-1)).toMatch(/A:\n\nRecord my answer to the open question q_2[\s\S]*A: $/)
+  await desk.press({ key: 'close-question-view' })
   expect(await desk.find({ key: 'tab-questions' })).toBeDefined() // back to the context
   await desk.press({ key: 'answer-q_2' })
   await desk.press({ key: 'answer-with-r_1' })
@@ -274,14 +300,10 @@ test('editing the description takes the whole panel; claims show conflicts and h
   await desk.press({ key: 'close-claim-view' })
   expect(await desk.find({ type: 'Text', text: /Evidence for it/ })).toBeDefined()
 
-  // Correct it: its own step, handed to the agent as a replacement. Withdraw: an admin may, for anyone's.
+  // Correct it: started in the prompt box, for the agent to record as a replacement. Withdraw: an admin may, for anyone's.
   await desk.press({ key: 'correct-c_bob' })
-  expect(await desk.find({ key: 'withdraw-c_bob' })).toBeUndefined()
-  await desk.input({ key: 'correct-input-c_bob', text: 'The config push caused it', kind: 'change' })
-  await desk.press({ key: 'send-correction' })
-  expect(prompts.at(-1)).toMatch(/The claim c_bob \("The deploy caused it"\) is wrong or out of date\. What's right: The config push caused it[\s\S]*replaces: \[c_bob\]/)
-  expect(await desk.find({ key: 'tab-claims' })).toBeDefined()
-  await desk.press({ key: 'open-c_bob' })
+  expect(prompts.at(-1)).toMatch(/^draft: The claim c_bob is wrong or out of date\. Record what's right[\s\S]*replaces: \[c_bob\]\.\nWas: The deploy caused it\nNow: $/)
+  expect(await desk.find({ key: 'withdraw-c_bob' })).toBeDefined() // still on the claim
   await desk.press({ key: 'withdraw-c_bob' })
   expect(calls).toContainEqual({ tool: 'withdraw', args: { id: 'c_bob' } })
   await desk.unmount()
@@ -320,13 +342,18 @@ test('the people tab confirms a removal on its own, and invites to this context'
   await desk.press({ key: 'invite' })
   await desk.input({ key: 'invite-note', text: '', kind: 'submit' })
   expect(calls).toContainEqual({ tool: 'share_context', args: {} })
-  // Your name is changed in its own step; going offline and back is a button.
+  // Each member's key and agent are behind a link; syncing is the header's, not a card here.
+  expect(await desk.find({ type: 'Text', text: /^bbbb-cccc-dddd · claude-code/ })).toBeUndefined()
+  await desk.press({ key: 'fold-key-bbbb-cccc-dddd' })
+  expect(await desk.find({ type: 'Text', text: /bbbb-cccc-dddd · claude-code · macOS arm64/ })).toBeDefined()
+  expect(await desk.find({ type: 'Text', text: /signalling relay/ })).toBeUndefined()
+  // Your name is changed in its own step; going offline and back is the header's link.
   expect(await desk.find({ type: 'Text', text: /2 claims, 1 question · active just now/ })).toBeDefined()
   await desk.press({ key: 'rename' })
   expect(await desk.find({ key: 'invite' })).toBeUndefined()
   await desk.input({ key: 'my-name', text: 'Ally', kind: 'submit' })
   expect(calls).toContainEqual({ tool: 'set_my_name', args: { name: 'Ally' } })
-  await desk.press({ key: 'go-offline' })
+  await desk.press({ key: 'sync-toggle' })
   expect(calls).toContainEqual({ tool: 'stop_sharing', args: {} })
   await desk.unmount()
 })
@@ -386,7 +413,7 @@ test('the Contexts view turns contexts on and off, creates one in its own step, 
   await desk.unmount()
 })
 
-test('a context opens its details, shares from the list, and is deleted only once its name is typed', async ($, on) => {
+test('a context opens from the list on its tabs or its Settings tab, an off one has a page of its own, and either is deleted only once its name is typed', async ($, on) => {
   const calls: Calls = []
   engine(on, calls)
   await $.session.start(START)
@@ -401,20 +428,41 @@ test('a context opens its details, shares from the list, and is deleted only onc
   await desk.press({ key: 'make-code' })
   expect(calls).toContainEqual({ tool: 'share_context', args: {} })
 
-  // Details: by the name or the Details button.
+  // A context that's on opens by its name or Open; its Settings button opens it on its Settings tab.
   await desk.press({ key: 'switch' })
   await desk.press({ key: 'name-team' })
+  expect(await desk.find({ key: 'tab-overview' })).toBeDefined() // open, on the tab it was left on
+  expect(calls.some(c => c.tool === 'context_details')).toBe(false)
+  await desk.press({ key: 'switch' })
+  expect(await desk.find({ key: 'details-team' })).toBeUndefined()
+  await desk.press({ key: 'open-team' })
+  expect(await desk.find({ key: 'toggle-team' })).toBeUndefined()
+  expect(await desk.find({ key: 'tab-overview' })).toBeDefined()
+  await desk.press({ key: 'switch' })
+  await desk.press({ key: 'settings-team' })
+  expect((await desk.find({ key: 'tab-settings' }))?.text).toMatch(/^▸ /)
   expect(calls).toContainEqual({ tool: 'context_details', args: { name: 'team' } })
-  expect(await desk.find({ key: 'toggle-own' })).toBeUndefined()
-  expect(await desk.find({ type: 'Text', text: /6 claims · 2 questions · 2 replies · 7 changes in all/ })).toBeDefined()
-  expect(await desk.find({ type: 'Text', text: /3 members · 1 of the others online · 2 join codes waiting/ })).toBeDefined()
+  expect(await desk.find({ type: 'Text', text: /6 claims · 2 questions · 2 replies/ })).toBeDefined()
+  expect(await desk.find({ type: 'Text', text: /3 members · 1 of the others online · 2 join codes waiting · 3 signalling relays reachable/ })).toBeDefined()
+  // Id, storage and history are behind a link.
+  expect(await desk.find({ type: 'Text', text: '/data/graphs/team' })).toBeUndefined()
+  await desk.press({ key: 'fold-about-team' })
   expect(await desk.find({ type: 'Text', text: '/data/graphs/team' })).toBeDefined()
+  expect(await desk.find({ type: 'Text', text: /7 in all, withdrawn items included/ })).toBeDefined()
   await desk.press({ key: 'detail-offline-team' })
   expect(calls).toContainEqual({ tool: 'stop_sharing', args: { context: 'team' } })
-  await desk.press({ key: 'close-context-details' })
-  await desk.press({ key: 'details-own' })
+  await desk.press({ key: 'detail-invite-team' })
+  expect(await desk.find({ type: 'Text', text: /Invite someone to team/ })).toBeDefined()
+  await desk.press({ key: 'close-invite-step' })
+  expect((await desk.find({ key: 'tab-settings' }))?.text).toMatch(/^▸ /)
+
+  // A context that's off can't be opened: Settings shows its own page.
+  await desk.press({ key: 'switch' })
+  expect(await desk.find({ key: 'open-own' })).toBeUndefined()
+  await desk.press({ key: 'settings-own' })
   expect(calls).toContainEqual({ tool: 'context_details', args: { name: 'own' } })
-  expect(await desk.find({ key: 'detail-share-own' })).toBeUndefined()
+  expect(await desk.find({ key: 'tab-settings' })).toBeUndefined()
+  expect(await desk.find({ key: 'detail-invite-own' })).toBeUndefined()
 
   // Deleting: says what goes, and does nothing until the name is typed exactly.
   await desk.press({ key: 'ask-delete-own' })
@@ -434,6 +482,71 @@ test('a context opens its details, shares from the list, and is deleted only onc
   await desk.press({ key: 'delete-own' })
   expect(calls).toContainEqual({ tool: 'delete_context', args: { name: 'own', confirm: 'own' } })
   expect(await desk.find({ key: 'toggle-team' })).toBeDefined() // back on the list
+
+  // Deleting from the Settings tab goes back to the Overview.
+  await desk.press({ key: 'settings-team' })
+  await desk.press({ key: 'ask-delete-team' })
+  await desk.input({ key: 'delete-confirm-team', text: 'team', kind: 'change' })
+  await desk.press({ key: 'delete-team' })
+  expect(calls).toContainEqual({ tool: 'delete_context', args: { name: 'team', confirm: 'team' } })
+  expect((await desk.find({ key: 'tab-overview' }))?.text).toMatch(/^▸ /)
+  await desk.unmount()
+})
+
+test('an action that fails says why, and the next poll doesn\'t clear it', async ($, on) => {
+  const calls: Calls = []
+  engine(on, calls, [], ACTIVITY, { stop_sharing: 'The graph host failed to start', context_details: 'The embedder is not installed' })
+  await $.session.start(START)
+  await $.command.run(RUN)
+  const desk = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await desk.press({ key: 'sync-toggle' }) // fails, then polls again
+  expect(await desk.find({ type: 'Text', text: /The graph host failed to start/ })).toBeDefined()
+  await desk.press({ key: 'dismiss-message' })
+  expect(await desk.find({ type: 'Text', text: /The graph host failed to start/ })).toBeUndefined()
+  // The Settings tab says its details couldn't be read, and why, instead of loading forever.
+  await desk.press({ key: 'tab-settings' })
+  expect(await desk.find({ type: 'Text', text: /The embedder is not installed/ })).toBeDefined()
+  expect(await desk.find({ type: 'Text', text: /Couldn’t read its details/ })).toBeDefined()
+  await desk.unmount()
+})
+
+test('long lists fold behind a link: recent activity, what changed, and a thread\'s earlier replies', async ($, on) => {
+  const calls: Calls = []
+  const reply = (n: number) => ({ id: `Reply:r_${n}`, key: `r_${n}`, label: 'Reply', title: `Reply number ${n}`, ended: false, props: { recorded_by: 'bob', recorded_at: iso(40_000 - n * 1000) } })
+  const change = (n: number) => ({ id: `y${n}`, kind: 'reply', at: iso(n * 60_000), by: 'bob', mine: false, summary: `replied: change ${n}`, node: null, held: false, shared_at: null })
+  const long = {
+    ...ACTIVITY,
+    recent: [1, 2, 3, 4, 5, 6, 7].map(change),
+    digest: [{ at: iso(1_000), lines: ['line one', 'line two', 'line three', 'line four'] }],
+    snapshot: {
+      ...ACTIVITY.snapshot,
+      nodes: [...ACTIVITY.snapshot.nodes, reply(2), reply(3)],
+      edges: [...ACTIVITY.snapshot.edges, { type: 'REPLIES_TO', source: 'Reply:r_2', target: 'Question:q_2' }, { type: 'REPLIES_TO', source: 'Reply:r_3', target: 'Question:q_2' }],
+    },
+  }
+  engine(on, calls, [], long)
+  await $.session.start(START)
+  await $.command.run(RUN)
+  const desk = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await desk.find({ type: 'Text', text: /change 5/ })).toBeDefined()
+  expect(await desk.find({ type: 'Text', text: /change 6/ })).toBeUndefined()
+  expect((await desk.find({ key: 'fold-recent' }))?.text).toMatch(/^2 more changes ▾/)
+  await desk.press({ key: 'fold-recent' })
+  expect(await desk.find({ type: 'Text', text: /change 7/ })).toBeDefined()
+  expect(await desk.find({ type: 'Text', text: 'line four' })).toBeUndefined()
+  expect((await desk.find({ key: 'fold-digest' }))?.text).toMatch(/^1 more change ▾/)
+  await desk.press({ key: 'fold-digest' })
+  expect(await desk.find({ type: 'Text', text: 'line four' })).toBeDefined()
+
+  // A thread shows its latest two replies; the earlier ones come first, behind a link.
+  await desk.press({ key: 'tab-questions' })
+  await desk.press({ key: 'scope-mine' })
+  expect(await desk.find({ type: 'Text', text: /Thursday suits most people/ })).toBeUndefined()
+  expect(await desk.find({ type: 'Text', text: /Reply number 3/ })).toBeDefined()
+  expect((await desk.find({ key: 'fold-replies-q_2' }))?.text).toMatch(/^1 earlier reply ▾/)
+  await desk.press({ key: 'fold-replies-q_2' })
+  expect(await desk.find({ type: 'Text', text: /Thursday suits most people/ })).toBeDefined()
+  expect((await desk.find({ key: 'fold-replies-q_2' }))?.text).toMatch(/^Show fewer replies ▴/)
   await desk.unmount()
 })
 
@@ -529,7 +642,7 @@ test('the create, details and delete steps draw in the terminal too', async ($, 
   await term.press({ key: 'create-new-context' })
   expect(await term.find({ key: 'new-description' })).toBeDefined()
   await term.press({ key: 'cancel-create' })
-  await term.press({ key: 'details-team' })
+  await term.press({ key: 'settings-team' })
   expect(await term.find({ type: 'Text', text: /6 claims/ })).toBeDefined()
   await term.press({ key: 'ask-delete-team' })
   expect(await term.find({ type: 'Text', text: /2 other members keep their own copy/ })).toBeDefined()
