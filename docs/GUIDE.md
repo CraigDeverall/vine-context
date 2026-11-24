@@ -7,6 +7,7 @@ Back to the [README](../README.md).
 ## Contents
 
 - [Install](#install)
+- [Do I need a TURN server?](#do-i-need-a-turn-server)
 - [Where the views show](#where-the-views-show)
 - [Share a context](#share-a-context)
 - [Join codes](#join-codes)
@@ -23,13 +24,44 @@ Back to the [README](../README.md).
 
 ## Install
 
-You need Node 20 or later. Install the `vine` command from npm:
+You need Node 20 or later. Then run:
+
+```bash
+npx vine-context setup
+```
+
+It goes through eight steps, and says what it found at each one:
+
+1. **The `vine` command.** Installs it globally with npm if it's missing or older (the plugin runs it).
+2. **Your agents.** Finds Claude Code and Codex, and installs the plugin for each one that doesn't have it, printing the exact commands before running them. For other MCP agents it prints the `vine mcp` line to add.
+3. **Your name.** Confirms the name others see (your git name, by default).
+4. **This machine.** Runs the `vine doctor` checks.
+5. **Your network.** Decides, without asking, whether it looks like it needs TURN (see [Do I need a TURN server?](#do-i-need-a-turn-server)).
+6. **TURN.** Offers *Set up Cloudflare TURN* (the default when the network needs it), *my own TURN server*, or *skip*.
+7. **Autostart.** On macOS, offers to run `vine up` at login, so contexts sync after a reboot.
+8. **Next.** Suggests `vine demo`, or what to tell your agent.
+
+Run it again at any time: each step checks what's there first, and only fixes what's missing or broken.
+
+| Option | What it does |
+|---|---|
+| `--yes` | Takes the default answer to every question. Secrets are still typed, unseen. |
+| `--agent claude\|codex\|none` | Which agents get the plugin (comma-separated). Default: the ones found. |
+| `--turn cloudflare\|custom\|none` | The TURN choice, instead of asking. |
+| `--json` | Prints each step's result as JSON on stdout; the rest goes to stderr. |
+| `--dry-run` | Runs the read-only checks only, and prints every command, API call and keychain write it would make. |
+
+Once `vine` is installed, `vine setup` is the same command.
+
+### Install by hand
+
+The same steps, one at a time. Install the `vine` command from npm:
 
 ```bash
 npm install -g vine-context
 ```
 
-### Install the plugin (recommended)
+#### Install the plugin (recommended)
 
 The plugin bundles the MCP server, two skills and the `/vine-context:join` command. It starts the server with the `vine` command you just installed.
 
@@ -49,7 +81,7 @@ codex plugin marketplace add CraigDeverall/vine-context
 codex plugin add vine-context@vine-context
 ```
 
-### Other MCP agents
+#### Other MCP agents
 
 Any agent that can start a local MCP server over stdio can use the tools without the plugin. The command to run is `vine mcp`. In Claude Code, for example:
 
@@ -57,7 +89,7 @@ Any agent that can start a local MCP server over stdio can use the tools without
 claude mcp add vine-context -- vine mcp
 ```
 
-### Check your machine
+#### Check your machine
 
 ```bash
 vine doctor
@@ -73,6 +105,28 @@ npm install && npm run build && npm link
 ```
 
 `npm link` installs the `vine` command from your clone.
+
+## Do I need a TURN server?
+
+Probably not. Here is how two machines connect, and where TURN comes in.
+
+1. **Directly, first.** Two members' machines find each other through public Nostr relays, which only pass the short handshake. Then they connect straight to each other, peer to peer.
+2. **STUN finds the way.** Most machines sit behind a router (NAT) and don't know their public address. Vine asks two public STUN servers for it, so each side can tell the other where to connect. That's enough on most home and office networks.
+3. **Some networks don't allow it.** A direct connection fails when the network blocks UDP, or when its NAT hands out a different public port for every destination ("symmetric" NAT). This is common on corporate networks, guest Wi-Fi, VPNs and phone hotspots.
+4. **TURN relays the connection.** A TURN server sits on the public internet and passes the connection between the two machines. It only ever sees encrypted data: the link is encrypted end to end between the members, as it is without TURN.
+5. **Only one machine in a pair needs one.** If either side has a TURN server, that pair can connect.
+6. **You only need it when you can reach no member at all.** Changes are forwarded from member to member, so if you're linked to anyone in a context, everyone's changes still reach you.
+
+**How you'll know.** `vine setup` and `vine doctor` check the network and say *"this network will likely need TURN"* when STUN gets no answer over UDP, or when the two STUN servers see different public ports. When members are found but can't be connected to, Vine says so in plain words, in the terminal, in `vine status` and in your agent's next sync notice:
+
+> Found Sam's machine, but your networks wouldn't allow a direct connection. A TURN server can carry the connection… Run `vine turn set --provider cloudflare`.
+
+**Setting one up.** `vine setup` does it for you, or run `vine turn set --provider cloudflare` on its own. Cloudflare Realtime TURN is free for the first 1,000 GB each month (then $0.05 per GB), and Vine's traffic is tiny. It runs on your own Cloudflare account: Vine ships no shared key. You choose one of two ways:
+
+- **Let Vine create the key.** Make an API token with the *Realtime Admin* (or *Calls Write*) permission, and type your account id and the token, unseen. Vine creates a TURN key named after this machine and then forgets the token.
+- **Create the key yourself** in the dashboard (Realtime → TURN Server), and type its id and secret, unseen.
+
+The key's secret is kept only in the macOS Keychain, or the Linux secret service. It never goes in a file, a command line, a log or the output. When a connection needs TURN, the host uses the key to get short-lived credentials (12 hours) from Cloudflare. It keeps them in memory, and fetches new ones on the next connection once they're within an hour of expiry. The key never leaves your machine. On a machine with no keychain, `--store env` keeps nothing and reads `VINE_CLOUDFLARE_TURN_SECRET`; create the key yourself for that.
 
 ## Where the views show
 
@@ -146,8 +200,9 @@ After that it can only be *withdrawn*, which keeps it in everyone's history.
 
 ## Strict networks: TURN and STUN
 
-If two machines can't reach each other directly (some networks block it), one of them sets a TURN server, which then carries that pair's connection. There's none by default: you bring your own.
+If two machines can't reach each other directly (some networks block it), one of them sets a TURN server, which then carries that pair's connection. There's none by default, and Vine ships no shared one: it's Cloudflare's on your own account, or a server you run. See [Do I need a TURN server?](#do-i-need-a-turn-server).
 
+- `vine turn set --provider cloudflare` sets up Cloudflare Realtime TURN with a key on your account (`--key-id ID` to paste a key you made, or `--account ID` to have Vine create one with an API token). `vine turn show` names the provider and says until when the current credentials are valid.
 - `vine turn set turn.example.org --user sam` asks for the password in the terminal and keeps it in a file only you can read (`--store keychain` uses the macOS Keychain or the Linux secret service; `--store env` keeps nothing and reads `VINE_TURN_PASSWORD`). `--tcp` and `--tls` pick how the server is reached.
 - `vine turn show`, `vine turn test` and `vine turn clear` show, check and remove it; `vine doctor` checks it too.
 - It applies to every context on the machine from the next connection on, with nothing to restart. `vine status` and the console say which links are direct and which are relayed.
@@ -190,12 +245,13 @@ The panel never writes a claim or question itself: your agent does, from what yo
 
 | Command | What it does |
 |---|---|
+| `vine setup` | Set the machine up, or repair it ([install](#install)); `npx vine-context setup` before `vine` is installed |
 | `vine demo` | Open the views on a copy of the example context |
 | `vine mcp` | Run the MCP server (your agent starts this) |
-| `vine doctor` | Check Node, Relate, WebRTC, the model and the data directory |
+| `vine doctor` | Check Node, Relate, WebRTC, the model, the data directory, the network (does it need TURN?) and the TURN server |
 | `vine status --graph <name>` | Members, live links and relay reachability for one context |
 | `vine whoami` | Your name and key |
-| `vine turn set \| show \| test \| clear` | Set, show, check or remove a TURN server ([strict networks](#strict-networks-turn-and-stun)) |
+| `vine turn set \| show \| test \| clear` | Set (`--provider cloudflare`, or a server of your own), show, check or remove a TURN server ([strict networks](#strict-networks-turn-and-stun)) |
 | `vine autostart on` | Keep contexts syncing after login (macOS) |
 
 | Setting | What it changes |
@@ -204,6 +260,7 @@ The panel never writes a claim or question itself: your agent does, from what yo
 | `VINE_USER` | Your name in new contexts (default: your git name) |
 | `VINE_ICE` | STUN and TURN servers, replacing the defaults and the `vine turn` setting ([strict networks](#strict-networks-turn-and-stun)) |
 | `VINE_TURN_PASSWORD` | The TURN server's password, when it was set with `--store env` |
+| `VINE_CLOUDFLARE_TURN_SECRET` | The Cloudflare TURN key's secret, when it was set with `--store env` |
 | `VINE_EMBEDDER` | The search embedder ([limits](HOW-IT-WORKS.md#limits)) |
 
 ## Trying it with two identities on one machine

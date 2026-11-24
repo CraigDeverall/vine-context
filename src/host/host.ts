@@ -27,7 +27,8 @@ import { InviteDesk, type Admission, type Newcomer } from "../p2p/invites.js";
 import { b64u, formatCode, unb64u } from "../p2p/link.js";
 import { groupLink, Mesh } from "../p2p/mesh.js";
 import { lineReader, type Event, type Message, type Request } from "../p2p/protocol.js";
-import { resolveIce, type IceSource } from "../p2p/ice.js";
+import { prepareIce, resolveIce, storedIce, type IceSource } from "../p2p/ice.js";
+import { unreachableAdvice } from "../p2p/advice.js";
 import { nostrSignaller, type SignalFactory } from "../p2p/signal.js";
 import { briefing, digest } from "./digest.js";
 import { InviteStore, hostDir, inviteLink, isLive, socketPath } from "./state.js";
@@ -633,7 +634,9 @@ export class Host {
     if (!this.members.isMember(this.me)) return;
     const signal = this.o.signal ?? nostrSignaller;
     const policy = this.o.icePolicy;
-    const ice: IceSource = this.o.ice ?? (() => ({ ...resolveIce(this.o.dataDir).config, ...(policy ? { policy } : {}) }));
+    const stored = storedIce(this.o.dataDir) as Exclude<IceSource, unknown[]>;
+    const ice: IceSource = this.o.ice ?? Object.assign(() => ({ ...stored(), ...(policy ? { policy } : {}) }), { prepare: stored.prepare });
+    void prepareIce(ice); // fetch minted TURN credentials now, before the first link wants them
     this.mesh = new Mesh({
       group: groupLink(this.group.id, unb64u(this.group.secret)),
       graphId: this.group.id,
@@ -646,6 +649,12 @@ export class Host {
       missing: (theirs) => this.log.missing(theirs),
       receive: (changes, from) => this.receive(changes, from),
       onChange: () => this.broadcastLocal({ t: "evt", event: "peers", data: { online: this.mesh?.online().length ?? 0 } }),
+      onUnreachable: (key) => {
+        const advice = this.unreachableAdvice([key]);
+        this.say(advice.message);
+        // Only worth a notice when nothing gets through: otherwise changes arrive forwarded.
+        if (!advice.anyLinked) this.broadcastLocal({ t: "evt", event: "unreachable", data: { name: this.members.displayName(key), message: advice.message } });
+      },
       log: (m) => this.say(m),
     });
     this.desk = new InviteDesk({
@@ -878,7 +887,16 @@ export class Host {
     }));
   }
 
+  /** The TURN advice for members who are found but can't be connected to. */
+  private unreachableAdvice(keys: string[]): { message: string; anyLinked: boolean } {
+    const anyLinked = Boolean(this.mesh?.online().some((l) => l.state === "active"));
+    const ice = this.o.ice ? undefined : resolveIce(this.o.dataDir).summary;
+    const turn = !ice ? "custom" : ice.source === "env" ? "env" : ice.provider === "cloudflare" ? "cloudflare" : ice.turn ? "custom" : "none";
+    return { anyLinked, message: unreachableAdvice(keys.map((k) => this.members.displayName(k)), { anyLinked, turn }) };
+  }
+
   status() {
+    const unreachable = this.mesh?.unreachable() ?? [];
     return {
       graph: this.o.graph,
       graph_id: this.group.id,
@@ -893,6 +911,9 @@ export class Host {
         .sort((a, b) => b.created_at.localeCompare(a.created_at))
         .map((i) => this.invites.summary(i)),
       links: this.mesh?.online().map((l) => ({ name: this.members.displayName(l.key), fingerprint: l.fingerprint, state: l.state, since: l.since, ...(l.route ? { route: l.route } : {}) })) ?? [],
+      // Members found through the relays whose links never connect, and the advice for that.
+      unreachable: unreachable.map((u) => ({ name: this.members.displayName(u.key), fingerprint: u.fingerprint, attempts: u.attempts, since: u.since })),
+      ...(unreachable.length ? { advice: this.unreachableAdvice(unreachable.map((u) => u.key)).message } : {}),
       relays: this.mesh?.relayStatus() ?? {},
       // The STUN/TURN servers new links use (never a password). Absent when the host was given a fixed list.
       ...(this.o.ice ? {} : { ice: resolveIce(this.o.dataDir).summary }),

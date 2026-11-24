@@ -201,8 +201,15 @@ unchanged.
   context's host, and `vine autostart on` (macOS) runs that at login.
 - If members never connect, or a join fails with "could not connect", the
   networks may block direct WebRTC connections. A TURN server fixes that, and
-  one of the two members having it is enough. There's none by default: the
-  person needs their own. `set_turn_server` saves the server and username.
+  one of the two members having it is enough; and only when this machine
+  reaches no member at all (changes are forwarded). A sync notice that starts
+  "Found …'s machine, but your networks wouldn't allow a direct connection"
+  means exactly this. The simplest fix is Cloudflare's TURN on the person's
+  own Cloudflare account: tell them to run `vine turn set --provider
+  cloudflare` (or `npx vine-context setup`) in their own terminal, which asks
+  for the key unseen. Never ask for a Cloudflare token or key secret in the
+  chat. For a server of their own, `set_turn_server` saves the server and
+  username.
   **Never ask for its password or take one in the chat**: it's read from
   `VINE_TURN_PASSWORD`, or the person runs the `terminal_command` from the
   result (`vine turn set …`) themselves, which asks for it privately.

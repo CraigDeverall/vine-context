@@ -9,7 +9,7 @@ import nodeDataChannel from "node-datachannel";
 import type { Change } from "../core/changes.js";
 import type { Identity } from "../core/identity.js";
 import { FramedChannel } from "./channel.js";
-import { rtcConfig, type IceSource } from "./ice.js";
+import { prepareIce, rtcConfig, type IceSource } from "./ice.js";
 import { gathered } from "./invites.js";
 import { b64u, proof, type Link } from "./link.js";
 import type { SignalFactory } from "./signal.js";
@@ -32,7 +32,13 @@ export interface JoinOptions {
 
 export class JoinRefused extends Error {}
 
-export function joinWithCode(link: Link, identity: Identity, o: JoinOptions): Promise<Welcome> {
+export async function joinWithCode(link: Link, identity: Identity, o: JoinOptions): Promise<Welcome> {
+  // Minted TURN credentials (Cloudflare) are fetched first, if due.
+  await prepareIce(o.ice);
+  return joinNow(link, identity, o);
+}
+
+function joinNow(link: Link, identity: Identity, o: JoinOptions): Promise<Welcome> {
   const me = b64u(randomBytes(6));
   const pc = new nodeDataChannel.PeerConnection(`vine-join-${me}`, rtcConfig(o.ice));
   let answered = false;

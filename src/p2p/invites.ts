@@ -18,7 +18,7 @@ import { NAME_RE, verifySignature } from "../core/identity.js";
 import { cleanAbout } from "../core/members.js";
 import { inviteLink, isLive, type Invite, type InviteStore } from "../host/state.js";
 import { FramedChannel } from "./channel.js";
-import { rtcConfig, type IceSource } from "./ice.js";
+import { prepareIce, rtcConfig, type IceSource } from "./ice.js";
 import { b64u, checkProof } from "./link.js";
 import type { SignalFactory, Signaller } from "./signal.js";
 
@@ -120,6 +120,8 @@ export class InviteDesk {
       return;
     }
     if (this.pending.size >= MAX_AT_ONCE) return;
+    await prepareIce(this.o.ice);
+    if (this.stopped || this.pending.has(id)) return;
     const pc = new nodeDataChannel.PeerConnection(`vine-desk-${m.from}`, rtcConfig(this.o.ice));
     const p: Pending = { id, from: m.from, invite, pc, done: false };
     this.pending.set(id, p);
