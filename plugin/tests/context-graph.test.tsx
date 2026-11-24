@@ -149,7 +149,7 @@ test('the band shows the chat\'s context, who is online and the latest; its name
     expect((await ui.find({ type: 'Text', text: /online/ }))?.text).toBe('1/2 online')
     expect((await ui.find({ type: 'Text', text: /bob replaced your claim c_old/ }))?.text).toMatch(/^· /)
     // The open button is an arrow at the right end, after who is online.
-    expect((await ui.find({ key: 'open-context' }))?.text).toBe('▶')
+    expect((await ui.find({ key: 'open-context' }))?.text).toBe('❯')
     await ui.unmount()
   }
   const band = await $.ui.mount({ ...BAND, surface: 'desktop' })

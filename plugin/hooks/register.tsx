@@ -515,7 +515,7 @@ export const register: Register = on => {
           </Text>
         </Box>
         <Text dimColor>{a.sharing ? (away ? `${a.online.length}/${away} online` : 'just you') : 'offline'}</Text>
-        <Button key="open-context" label="▶" onPress={() => void openPane($)} />
+        <Button key="open-context" label="❯" onPress={() => void openPane($)} />
       </Box>
     )
   })
