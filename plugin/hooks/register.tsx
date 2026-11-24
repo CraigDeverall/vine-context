@@ -503,16 +503,19 @@ export const register: Register = on => {
     const news = d && (!l || d.at >= l.at) ? `${short(d.lines[0] ?? '', 70)} (${ago(d.at, now)})` : l ? `${l.by} ${short(l.summary, 60)} (${ago(l.at, now)})` : ''
     const more = a.contexts.filter(c => c.name !== main).map(c => ` +${c.name}`).join('')
     return (
-      <Box flexDirection="row" gap={1} alignItems="center">
+      <Box flexDirection="row" gap={1} alignItems="center" width="100%">
         <Text color={a.sharing ? 'green' : undefined} dimColor={!a.sharing}>
           ●
         </Text>
         <Button key="band-contexts" label={`${main}${more}`} plain onPress={() => void openPane($, true)} />
-        <Text dimColor>
-          {a.sharing ? (away ? `${a.online.length}/${away} online` : 'just you') : 'offline'}
-          {news ? ` · ${news}` : ''}
-        </Text>
-        <Button key="open-context" label="Open" onPress={() => void openPane($)} />
+        {/* The news takes the free room, so who's here and the open arrow sit at the right end. */}
+        <Box flexGrow={1} flexShrink={1}>
+          <Text dimColor wrap="truncate-end">
+            {news ? `· ${news}` : ''}
+          </Text>
+        </Box>
+        <Text dimColor>{a.sharing ? (away ? `${a.online.length}/${away} online` : 'just you') : 'offline'}</Text>
+        <Button key="open-context" label="▶" onPress={() => void openPane($)} />
       </Box>
     )
   })
