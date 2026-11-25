@@ -1113,7 +1113,8 @@ export const register: Register = on => {
             return card(
               `ctx-${n}`,
               <Box flexDirection="column" gap="xs">
-                <Box flexDirection="row" gap={1} justifyContent="space-between" alignItems="center">
+                {/* Wraps so a long name pushes the toggle onto its own line instead of past the card's edge. */}
+                <Box key={`ctx-head-${n}`} flexDirection="row" gap={1} justifyContent="space-between" alignItems="center" flexWrap="wrap">
                   <Box flexDirection="row" gap="xs" alignItems="center" flexShrink={1} flexWrap="wrap">
                     <Button key={`name-${n}`} label={n} plain onPress={() => (c ? show(n) : manage($, n))} />
                     <Text>
@@ -1455,7 +1456,7 @@ export const register: Register = on => {
 
     const header = (
       <Box flexDirection="column" gap="xs">
-        <Box flexDirection="row" justifyContent="space-between" alignItems="center" gap={1}>
+        <Box flexDirection="row" justifyContent="space-between" alignItems="center" gap={1} flexWrap="wrap">
           {/* Whether it's syncing, with the way to change it: who's online is listed under the description. */}
           <Box flexDirection="row" gap={1} alignItems="center" flexShrink={1} flexWrap="wrap">
             <Text size="footnote" color={a.sharing ? 'success' : 'warning'}>

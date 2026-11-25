@@ -369,6 +369,8 @@ test('the Contexts view turns contexts on and off, creates one in its own step, 
   expect(await desk.find({ key: 'tab-questions' })).toBeUndefined()
   expect((await desk.find({ key: 'toggle-team' }))?.text).toBe('◉ On')
   expect((await desk.find({ key: 'toggle-own' }))?.text).toBe('○ Off')
+  // A long name can push the toggle to its own line, never past the card's edge.
+  expect((await desk.find({ key: 'ctx-head-team' }))?.props.flexWrap).toBe('wrap')
   await desk.press({ key: 'toggle-own' })
   expect(calls).toContainEqual({ tool: 'add_context', args: { name: 'own' } })
   await desk.press({ key: 'toggle-team' })
