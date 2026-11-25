@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { embedderDir, HashEmbedder, makeEmbedder, ModelEmbedder, MODELS, platformPackage, type Embedder } from "../src/core/embed.js";
 import { Graph } from "../src/core/graph.js";
@@ -42,14 +43,19 @@ describe("embedders", () => {
     );
   });
 
-  it("looks in VINE_EMBEDDER_DIR first, else a checkout's build folder when no platform package is installed", () => {
+  it("looks in VINE_EMBEDDER_DIR first, then the installed platform package, then a checkout's build folder", () => {
     expect(platformPackage()).toBe(`vine-context-embedder-${process.platform}-${process.arch}`);
     const before = process.env.VINE_EMBEDDER_DIR;
     try {
       process.env.VINE_EMBEDDER_DIR = "/somewhere/else";
       expect(embedderDir()).toBe("/somewhere/else");
       delete process.env.VINE_EMBEDDER_DIR;
-      expect(embedderDir()).toBe(join(process.cwd(), "native", "embedder", "dist"));
+      // npm installs the platform package as an optional dependency where one is published for this machine.
+      let installed: string | undefined;
+      try {
+        installed = dirname(createRequire(join(process.cwd(), "package.json")).resolve(`${platformPackage()}/package.json`));
+      } catch {}
+      expect(embedderDir()).toBe(installed ?? join(process.cwd(), "native", "embedder", "dist"));
     } finally {
       if (before === undefined) delete process.env.VINE_EMBEDDER_DIR;
       else process.env.VINE_EMBEDDER_DIR = before;

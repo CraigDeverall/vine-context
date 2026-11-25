@@ -74,5 +74,12 @@
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "vitest": "^5.1.0"
+  },
+  "optionalDependencies": {
+    "vine-context-embedder-darwin-arm64": "0.1.0",
+    "vine-context-embedder-darwin-x64": "0.1.0",
+    "vine-context-embedder-linux-arm64": "0.1.0",
+    "vine-context-embedder-linux-x64": "0.1.0",
+    "vine-context-embedder-win32-x64": "0.1.0"
   }
 }

@@ -348,18 +348,23 @@ Decided:
 
 Open:
 
-- Publishing the semantic embedder's platform packages, and whether it then
-  becomes the default. To publish: run the `embedder` workflow, check all five
-  jobs, `npm publish` each `vine-context-embedder-<os>-<arch>` tarball from its
-  artifact, then add the five to `optionalDependencies` at the same version
-  and update the lockfile. The dependency lines wait until the names are ours
-  on npm: an unpublished name anyone can register would be installed on every
-  user's machine.
-- To make it the default afterwards: `makeEmbedder` picks the model when its
-  package is installed and `hash-256` otherwise; the first open of each graph
+- Whether the semantic embedder becomes the default. To make it so:
+  `makeEmbedder` picks the model when its package is installed and `hash-256`
+  otherwise; the first open of each graph
   then re-embeds, which wants a progress line; and the hybrid search needs its
   full-text half tuned first (a match on a common word such as "we" outranks
   the best match by meaning).
+
+Decided 25 Nov:
+
+- **Embedder packages published:** the five `vine-context-embedder-<os>-<arch>`
+  packages are on npm at 0.1.0, built by `embedder` workflow run 45054183954,
+  and are `optionalDependencies` of vine-context at that version. The unscoped
+  `vine-context` name is held by a 0.0.1 placeholder until the first real
+  release (0.1.0). To publish a new version: run the `embedder` workflow, check
+  all five jobs, `npm publish` each tarball from its artifact (publishing needs
+  2FA), then move the five `optionalDependencies` to that version and update
+  the lockfile. Only the macOS arm64 package has been run.
 
 Decided after M4 (22 Nov):
 

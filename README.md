@@ -181,7 +181,7 @@ The full account is in [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md), and the des
 
 ## Limits
 
-- **Search matches words, not meaning, by default.** A semantic embedder is optional and not yet published as a package.
+- **Search matches words, not meaning, by default.** Start vine with `VINE_EMBEDDER=bge-small` to match meaning; its prebuilt package installs with vine, but it has only been run on macOS arm64 so far.
 - **Strict networks need a TURN server, on your own account.** Vine ships no shared TURN server or key. `vine setup` sets up Cloudflare's on your own Cloudflare account in a few steps (free up to 1,000 GB a month, far more than Vine uses), or you can use one you run. Only one machine in a pair needs one ([do I need a TURN server?](docs/GUIDE.md#do-i-need-a-turn-server)). Replication has been tested between processes on one machine and over real public relays.
 - **Removing someone can't recall the copy they already have.**
 - **Clocks are assumed correct,** and a context is sized for about 20 members and 100,000 changes.
