@@ -186,6 +186,9 @@ test('the overview says what needs you, hands steering to the agent, and opens i
   expect((await desk.find({ key: 'sync-toggle' }))?.text).toMatch(/Go offline/)
   for (const gone of ['refresh', 'add-claim', 'ask-question']) expect(await desk.find({ key: gone })).toBeUndefined()
   expect(await desk.find({ type: 'Svg' })).toBeUndefined()
+  // An activity line's who-did-what lead is dim, so the claim itself reads first.
+  const lead = await desk.find({ type: 'Text', text: /^📌 bob claimed: $/ })
+  expect(lead?.props?.dimColor).toBe(true)
 
   // What needs you: the conflict, your question's replies, the open question, the waiting codes; your held write, to undo.
   expect(await desk.find({ type: 'Text', text: /1 pair of claims can’t both be true/ })).toBeDefined()
@@ -461,6 +464,8 @@ test('a context opens from the list on its tabs or its Settings tab, an off one 
   expect(calls).toContainEqual({ tool: 'stop_sharing', args: { context: 'team' } })
   await desk.press({ key: 'detail-invite-team' })
   expect(await desk.find({ type: 'Text', text: /Invite someone to team/ })).toBeDefined()
+  // A way out of a step leads with the ‹ caret, like Back.
+  expect((await desk.find({ key: 'close-invite-step' }))?.text).toBe('‹ Cancel')
   await desk.press({ key: 'close-invite-step' })
   expect((await desk.find({ key: 'tab-settings' }))?.text).toMatch(/^▸ /)
 
@@ -694,4 +699,20 @@ test('the filter falls back to words when the search fails', async ($, on) => {
   expect(await desk.find({ type: 'Text', text: /search by meaning isn’t available, so only words match/ })).toBeDefined()
   expect(await desk.find({ type: 'Text', text: /The outage lasted 6 minutes/ })).toBeDefined()
   expect(await desk.find({ type: 'Text', text: /The cache caused it/ })).toBeUndefined()
+})
+
+test('with many members, the header names you and who is online first, and the rest are a link to People', async ($, on) => {
+  const calls: Calls = []
+  const extra = Array.from({ length: 17 }, (_, i) => ({ name: `member${i + 1}`, fingerprint: `ffff-0000-${String(i).padStart(4, '0')}`, role: 'contributor', you: false, creator: false, online: i === 16, agent: null, platform: null }))
+  const crowd = { ...ACTIVITY, people: [...extra, ...ACTIVITY.people], members: 20 }
+  engine(on, calls, [], crowd)
+  await $.session.start(START)
+  await $.command.run(RUN)
+  const desk = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  // You and the two online come first, whatever order they arrive in; the 14 left over fold behind the link.
+  for (const name of ['alice', 'bob', 'member17']) expect(await desk.find({ type: 'Text', text: new RegExp(`● ${name}\\b`) })).toBeDefined()
+  expect(await desk.find({ type: 'Text', text: /● member10\b/ })).toBeUndefined()
+  expect((await desk.find({ key: 'who-more' }))?.text).toBe('+14 more')
+  await desk.press({ key: 'who-more' })
+  expect((await desk.find({ key: 'tab-people' }))?.text).toMatch(/^▸ 👥 People/)
 })

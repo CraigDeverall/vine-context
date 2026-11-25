@@ -40,6 +40,8 @@ const NOTICE_MS = 6000
 const PAGE = 20
 /** How many recent changes the Overview shows before "N more". */
 const RECENT = 5
+// The header names at most this many members (you, then who's online); the People tab has everyone.
+const HEADER_PEOPLE = 6
 const SERVERS = ['plugin_vine-context_vine-context', 'plugin:vine-context:vine-context', 'vine-context']
 const NAME_RE = /^[a-z0-9][a-z0-9-]{0,62}$/
 
@@ -380,6 +382,9 @@ async function openItem($: Engine, key: string | null) {
   await update($, detail, () => key)
 }
 
+/** A way out of a step (Cancel, Done, Back) leads with a ‹ caret, so it reads as going back. */
+const caret = (label: string) => (label.startsWith('‹') ? label : `‹ ${label}`)
+
 /** Back from an item: to the one opened before it, else to the list. */
 async function backItem($: Engine) {
   trail.pop()
@@ -627,7 +632,7 @@ export const register: Register = on => {
             <Text size="title" weight="semibold" bold>
               {title}
             </Text>
-            {close && <Button key={`close-${key}`} label={close.label} variant="secondary" dimColor onPress={close.onPress} />}
+            {close && <Button key={`close-${key}`} label={caret(close.label)} variant="secondary" dimColor onPress={close.onPress} />}
           </Box>
           {about && <Text wrap="wrap">{about}</Text>}
         </Box>
@@ -638,7 +643,7 @@ export const register: Register = on => {
 
     /** A label over a field as wide as the panel, with a line of help under it. */
     const field = (label: string, input: unknown, help?: string) => (
-      <Box flexDirection="column" gap="xs">
+      <Box flexDirection="column" gap="xs" width="100%" alignItems="stretch">
         <Text weight="semibold" bold>
           {label}
         </Text>
@@ -762,10 +767,12 @@ export const register: Register = on => {
         <Box key={`settings-${n}`} flexDirection="column" gap="md">
           <Box flexDirection="column" gap="xs">
             {heading('This chat')}
-            <Box flexDirection="row" gap="xs" flexWrap="wrap" alignItems="center">
-              <Button key={`detail-toggle-${n}`} label={c ? '◉ On' : '○ Off'} variant={c ? 'primary' : 'secondary'} dimColor={!c} onPress={() => toggle(n)} />
-              {c && severalOn && !c.writes_here && <Button key={`detail-write-${n}`} label="✎ Write here" variant="secondary" onPress={() => writeHere(n)} />}
-              {c && !inTab && <Button key={`detail-open-${n}`} label="Open" variant="secondary" onPress={() => void show(n)} />}
+            <Box flexDirection="row" gap="xs" justifyContent="space-between" alignItems="center">
+              <Box flexDirection="row" gap="xs" flexWrap="wrap" alignItems="center">
+                <Button key={`detail-toggle-${n}`} label={c ? '◉ On' : '○ Off'} variant={c ? 'primary' : 'secondary'} dimColor={!c} onPress={() => toggle(n)} />
+                {c && severalOn && !c.writes_here && <Button key={`detail-write-${n}`} label="✎ Write here" variant="secondary" onPress={() => writeHere(n)} />}
+              </Box>
+              {c && !inTab && <Button key={`detail-open-${n}`} label="Open ›" variant="secondary" onPress={() => void show(n)} />}
             </Box>
             {meta(
               c
@@ -995,7 +1002,7 @@ export const register: Register = on => {
           )}
           <Box flexDirection="row" gap="xs">
             <Button key="create-context" label="Create" variant="primary" onPress={() => create()} />
-            <Button key="cancel-create" label="Cancel" variant="secondary" dimColor onPress={close} />
+            <Button key="cancel-create" label="‹ Cancel" variant="secondary" dimColor onPress={close} />
           </Box>
           {meta('It’s yours: you’re its admin, and it’s added to this chat. Invite people from its People tab, or with Share in the list.')}
         </Box>,
@@ -1082,11 +1089,13 @@ export const register: Register = on => {
                     {c.description ?? 'No description yet'}
                   </Text>
                 )}
-                <Box flexDirection="row" gap="xs" flexWrap="wrap" alignItems="center">
-                  {c && <Button key={`open-${n}`} label="Open" variant="secondary" onPress={() => show(n)} />}
-                  <Button key={`settings-${n}`} label="Settings" variant="secondary" dimColor onPress={() => (c ? settingsTab(n) : manage($, n))} />
-                  {c?.role === 'admin' && <Button key={`share-${n}`} label="Share" variant="secondary" dimColor onPress={() => share(n)} />}
-                  {c && many && !c.writes_here && <Button key={`write-${n}`} label="✎ Write here" variant="secondary" dimColor onPress={() => writeHere(n)} />}
+                <Box flexDirection="row" gap="xs" justifyContent="space-between" alignItems="center">
+                  <Box flexDirection="row" gap="xs" flexWrap="wrap" alignItems="center">
+                    <Button key={`settings-${n}`} label="Settings" variant="secondary" dimColor onPress={() => (c ? settingsTab(n) : manage($, n))} />
+                    {c?.role === 'admin' && <Button key={`share-${n}`} label="Share" variant="secondary" dimColor onPress={() => share(n)} />}
+                    {c && many && !c.writes_here && <Button key={`write-${n}`} label="✎ Write here" variant="secondary" dimColor onPress={() => writeHere(n)} />}
+                  </Box>
+                  {c && <Button key={`open-${n}`} label="Open ›" variant="secondary" onPress={() => show(n)} />}
                 </Box>
                 {pin(n, '')}
               </Box>,
@@ -1215,14 +1224,16 @@ export const register: Register = on => {
               onSelect={(r: string) => void update($, inviting, () => r as Invite['role'])}
             />
           )}
-          <Input
-            key="invite-note"
-            label="Who is it for? (optional)"
-            placeholder="e.g. Sam: shown when they join, so a code used by someone else stands out"
-            autoFocus
-            onInput={(v: string) => (inviteNote = v)}
-            onSubmit={make}
-          />
+          {field(
+            'Who is it for? (optional)',
+            <Input
+              key="invite-note"
+              placeholder="e.g. Sam: shown when they join, so a code used by someone else stands out"
+              autoFocus
+              onInput={(v: string) => (inviteNote = v)}
+              onSubmit={make}
+            />,
+          )}
           <Box flexDirection="row">
             <Button key="make-code" label="Make join code" variant="primary" onPress={() => make(inviteNote)} />
           </Box>
@@ -1273,7 +1284,7 @@ export const register: Register = on => {
               {byline(n)} · {n.key}
             </Text>
           </Box>
-          <Button key={`open-${n.key}`} label="Open" variant="secondary" dimColor onPress={() => void openItem($, n.key)} />
+          <Button key={`open-${n.key}`} label="Open ›" variant="secondary" dimColor onPress={() => void openItem($, n.key)} />
         </Box>
       )
       const group = (title: string, label: string, tone: string | undefined, list: GraphNode[]) =>
@@ -1407,6 +1418,10 @@ export const register: Register = on => {
         .then(() => update($, filters, (v: Filters): Filters => ({ ...v, ...patch })))
         .then(() => (patch.text !== undefined ? findRelated($, patch.text, a.context, ctx) : undefined))
     const members = a.people.filter((p: Person) => p.role)
+    const rank = (p: Person) => (p.you ? 0 : p.online ? 1 : 2)
+    const shown = [...members].sort((x, y) => rank(x) - rank(y)).slice(0, HEADER_PEOPLE)
+    const unshown = members.length - shown.length
+    const unshownOnline = members.filter((p: Person) => p.online).length - shown.filter((p: Person) => p.online).length
     const counts: Record<Tab, number | undefined> = { overview: undefined, questions: t?.open.length, claims: t?.claims.length, people: members.length, settings: undefined }
     const goOnline = <Button key="go-online" label="Go online" variant="primary" onPress={() => void act($, 'start_sharing', { ...ctx }, 'Back online: syncing with the other members.')} />
 
@@ -1463,7 +1478,7 @@ export const register: Register = on => {
           {admin && <Button key="edit-description" label="✎" plain dimColor onPress={() => void update($, editing, () => true)} />}
         </Box>
         <Box flexDirection="row" gap="sm" flexWrap="wrap" alignItems="center">
-          {members.map((p: Person) => (
+          {shown.map((p: Person) => (
             <Box key={`who-${p.fingerprint}`} hover={{ scope: `who-${p.fingerprint}` }}>
               <Text size="footnote" dimColor={!p.online} hover={{ underline: true }}>
                 <Text color={p.online ? 'success' : undefined}>●</Text> {p.name}
@@ -1472,9 +1487,10 @@ export const register: Register = on => {
               </Text>
             </Box>
           ))}
+          {unshown > 0 && <Button key="who-more" label={`+${unshown} more${unshownOnline ? ` · ${unshownOnline} online` : ''}`} plain dimColor onPress={() => setTab('people')} />}
         </Box>
         {graphical &&
-          members.map((p: Person) => (
+          shown.map((p: Person) => (
             <Box key={`who-card-${p.fingerprint}`} display="none" hover={{ scope: `who-${p.fingerprint}`, display: 'flex' }}>
               <Text size="footnote" dimColor>
                 {p.name} · {p.role}
@@ -1541,6 +1557,11 @@ export const register: Register = on => {
       const mineOpen = t.open.filter(th => isMine(th.q) && th.replies.length)
       const digest = a.digest?.at(-1)
       const feed = a.recent
+      // The "you claimed:" part of an activity line is who-did-what metadata: drawn dim so the claim itself reads first.
+      const lead = (c: Change) => {
+        const i = /^(claim|question|reply|describe)$/.test(c.kind) ? c.summary.indexOf(': ') : -1
+        return i < 0 ? { head: '', body: c.summary } : { head: c.summary.slice(0, i + 2), body: c.summary.slice(i + 2) }
+      }
       const ICON: Record<string, string> = { claim: '📌', question: '❓', reply: '↳', link: '🔗', withdraw: '✕', add_member: '👋', remove_member: '🚪', set_role: '🔑', rename: '✎', describe: '✎', create: '✦' }
       const need = (key: string, tone: string, text: unknown, button: unknown) =>
         card(
@@ -1637,18 +1658,17 @@ export const register: Register = on => {
             <Box key={`act-${c.id}`} flexDirection="row" gap={1} justifyContent="space-between" alignItems="flex-start">
               <Box flexDirection="column" flexShrink={1}>
                 <Text wrap="wrap">
-                  <Text dimColor>{ICON[c.kind] ?? '·'} </Text>
-                  <Text weight="semibold" bold>
-                    {c.mine ? 'you' : c.by}
-                  </Text>{' '}
-                  {short(c.summary, 200)}
+                  <Text dimColor>
+                    {ICON[c.kind] ?? '·'} {c.mine ? 'you' : c.by} {lead(c).head}
+                  </Text>
+                  {short(lead(c).body, 200)}
                 </Text>
                 <Text size="footnote" dimColor>
                   {ago(c.at, now)}
                   {c.held ? <Text color="warning"> · still only on this machine</Text> : ''}
                 </Text>
               </Box>
-              {c.node && rel.byKey.has(c.node) && <Button key={`open-change-${c.id}`} label="Open" variant="secondary" dimColor onPress={() => void openItem($, c.node)} />}
+              {c.node && rel.byKey.has(c.node) && <Button key={`open-change-${c.id}`} label="Open ›" variant="secondary" dimColor onPress={() => void openItem($, c.node)} />}
             </Box>
           ))}
           {meta(
@@ -1691,7 +1711,7 @@ export const register: Register = on => {
               <Box flexDirection="row" gap="xs">
                 {undo(q)}
                 {answered || !canWrite ? (
-                  <Button key={`open-${q.key}`} label="Open" variant="secondary" dimColor onPress={() => void openItem($, q.key)} />
+                  <Button key={`open-${q.key}`} label="Open ›" variant="secondary" dimColor onPress={() => void openItem($, q.key)} />
                 ) : (
                   <Button key={`answer-${q.key}`} label="Answer" variant="primary" onPress={() => void openItem($, q.key)} />
                 )}
@@ -1780,7 +1800,7 @@ export const register: Register = on => {
           </Box>
           <Box flexDirection="row" gap="xs">
             {canWrite && <Button key={`keep-${keep.key}-over-${drop.key}`} label="Keep this one" variant="secondary" onPress={() => void ask($, prompts.settle(keep, drop, named))} />}
-            <Button key={`open-${keep.key}-vs-${drop.key}`} label="Open" variant="secondary" dimColor onPress={() => void openItem($, keep.key)} />
+            <Button key={`open-${keep.key}-vs-${drop.key}`} label="Open ›" variant="secondary" dimColor onPress={() => void openItem($, keep.key)} />
           </Box>
         </Box>
       )
@@ -1863,7 +1883,7 @@ export const register: Register = on => {
                   </Box>
                   <Box flexDirection="row" gap="xs">
                     {undo(n)}
-                    <Button key={`open-${n.key}`} label="Open" variant="secondary" dimColor onPress={() => void openItem($, n.key)} />
+                    <Button key={`open-${n.key}`} label="Open ›" variant="secondary" dimColor onPress={() => void openItem($, n.key)} />
                   </Box>
                 </Box>,
                 heldByNode.has(n.key) ? 'warning' : rel.inConflict.has(n.id) ? 'warning' : undefined,

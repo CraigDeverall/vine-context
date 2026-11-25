@@ -17,7 +17,8 @@ Commands:
   host stop [--context NAME]          Stop a context's host
   up                                  Start the host of every context on this machine that is sharing (in the background)
   autostart on|off                    Run \`vine up\` at login (macOS), so your contexts sync after a reboot
-  demo [--port N] [--no-open]         Open the views on an example context (a copy; nothing of yours changes)
+  demo [--pace SECONDS] [--join] [--port N] [--no-open] [--verbose]
+                                      Three members in one process replay the example, syncing peer to peer (nothing of yours changes; --join lets your agent join)
   ui [--context NAME] [--port N] [--open]
                                       Show the console and explorer in a browser
   status [--context NAME]             Show a context's host: sharing, members, links, relays, invites
@@ -32,7 +33,7 @@ Commands:
   --version                           Print the version
 
 Environment:
-  VINE_USER        Your name in contexts (default: the name you set with set_my_name, else git's user.name, else your login name)
+  VINE_USER        Your name in contexts (default: the name you set with set_my_name, else git's user.name, else your computer account's full name, else your login name, else a made-up one)
   VINE_CONTEXT     The context a new chat starts with when its folder has none linked (default: none; the agent asks)
   VINE_CHAT        The chat's id, to remember its context (default: Claude Code's session id)
   VINE_DATA_DIR    Where contexts live (default: ~/.local/share/vine-context)
@@ -100,60 +101,76 @@ async function mcp(args: string[]) {
 }
 
 async function demo(args: string[]): Promise<number> {
-  const { values } = parseArgs({ args, options: { port: { type: "string" }, "no-open": { type: "boolean" } } });
-  const [{ cpSync, existsSync, mkdtempSync }, { tmpdir }, { join }, { packageRoot }] = await Promise.all([
-    import("node:fs"),
-    import("node:os"),
-    import("node:path"),
-    import("../core/package-root.js"),
-  ]);
-  const examples = join(packageRoot(), "examples", "data");
-  if (!existsSync(join(examples, "graphs"))) {
-    console.error(`The example graphs aren't in this install (${examples}).`);
-    return 1;
+  const { values } = parseArgs({
+    args,
+    options: { port: { type: "string" }, "no-open": { type: "boolean" }, pace: { type: "string" }, join: { type: "boolean" }, verbose: { type: "boolean" } },
+  });
+  const [{ startDemo }, { GRAPH_NAME }, { nostrSignaller }, { storedIce }, { defaultDataDir }] = await Promise.all([import("../demo/live.js"), import("../demo/scenario.js"), import("../p2p/signal.js"), import("../p2p/ice.js"), import("../core/graph.js")]);
+  const pace = values.pace === undefined ? 4 : Number(values.pace);
+  if (!Number.isFinite(pace) || pace < 0) {
+    console.error("--pace is seconds between steps, 0 or more.");
+    return 2;
   }
-  // A copy, so the demo never changes the examples that ship with the package.
-  const dataDir = mkdtempSync(join(tmpdir(), "vine-demo-"));
-  cpSync(examples, dataDir, { recursive: true });
-  process.env.VINE_DATA_DIR = dataDir;
-  process.env.VINE_USER ??= "alice";
-  process.env.VINE_AUTO_SHARE ??= "off"; // the example stays on this machine
-  const { make, log } = await sessionFactory({ graph: "incident" });
+  console.log(`vine-context demo: three people, three hosts, one process
+  alice, bob and carol plan the office Christmas party, each from their own copy of the context 'party'.
+  Every write goes through its author's host: signed, held for undo, then carried to the other two over WebRTC.
+  ${values.join ? "They find each other through the public Nostr relays, so your agent can join too." : "They find each other in this process: no network is needed, and nothing leaves this machine."}
+`);
+  const demo = await startDemo({
+    paceMs: pace * 1000,
+    narrate: (line) => console.log(line),
+    log: values.verbose ? (m) => console.error(`  [${m}]`) : undefined,
+    // With --join the members use the relays and this machine's STUN/TURN setting, as any host does.
+    ...(values.join ? { signal: nostrSignaller, ice: storedIce(defaultDataDir()) } : {}),
+  });
+  const alice = demo.members.alice;
+
+  // The browser shows alice's point of view: her console, explorer and conflicts.
+  process.env.VINE_DATA_DIR = alice.dataDir;
+  process.env.VINE_USER = "alice";
+  const { make, log } = await sessionFactory({ graph: GRAPH_NAME });
   const { startUi } = await import("../ui/server.js");
   const server = await startUi({ session: () => make(false), port: values.port ? Number(values.port) : undefined, log });
-  console.log(`vine-context demo: an example graph, copied to ${dataDir}
-  incident   three people investigating a checkout slowdown
-
-Open this on this machine (it acts as you; don't share it):
+  console.log(`
+Open this on this machine (it acts as alice; don't share it):
 ${server.url}
 
-In the browser: Explore the graph (drag the time slider) and Conflicts.
-To point an agent at the same data:
-  VINE_DATA_DIR=${dataDir} vine mcp --graph incident
-
-Ctrl-C stops the demo.`);
+Sharing console: the three members and their live links. Explore a context: the graph as it grows; drag the time slider back to replay it. Conflicts: bob and carol, until bob gives way.
+`);
   if (!values["no-open"]) {
     const { spawn } = await import("node:child_process");
     const cmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "explorer" : "xdg-open";
     spawn(cmd, [server.url], { stdio: "ignore", detached: true }).on("error", () => undefined).unref();
   }
+
+  let stopping = false;
   const stop = async () => {
+    if (stopping) return;
+    stopping = true;
     await server.close();
-    for (const g of ["incident"]) {
-      try {
-        const { LocalHost } = await import("../host/client.js");
-        const { socketPath } = await import("../host/state.js");
-        const c = await LocalHost.connect(socketPath(dataDir, g));
-        await c.request("shutdown");
-        c.close();
-      } catch {
-        // not running
-      }
-    }
+    await demo.stop();
     process.exit(0);
   };
   process.on("SIGINT", () => void stop());
   process.on("SIGTERM", () => void stop());
+
+  try {
+    await demo.story;
+  } catch (e) {
+    console.error(`The story stopped: ${(e as Error).message}`);
+    await stop();
+    return 1;
+  }
+  console.log(`
+The story is over, and the three hosts stay up. To point an agent at alice's copy:
+  VINE_DATA_DIR=${alice.dataDir} vine mcp --context ${GRAPH_NAME}`);
+  if (values.join) {
+    const { code } = await alice.local.request<{ code: string }>("share", { label: "demo guest", role: "contributor" });
+    console.log(`
+To join as a fourth member from any machine, tell your agent:
+  /vine-context:join ${code}`);
+  }
+  console.log("\nCtrl-C stops the demo.");
   return -1;
 }
 

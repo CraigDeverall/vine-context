@@ -170,9 +170,14 @@ link (tell them not to share it: it acts as them).
 - `sharing_status` shows a context's invites, people, live links to other
   members, and whether the signalling relays are reachable. If none are, no
   one can find this machine: say so.
-- **Names:** a member is their machine's key; the name is a label. The first
-  time the person shares or joins, tell them the name others will see and
-  offer `set_my_name`, with the name *they* give. Never use their email.
+- **Names:** a member is their machine's key; the name is a label. Until the
+  person sets one, it is found for them: git's user.name, else the full name
+  on their computer account, else their login name, else a made-up one. The
+  first time they share or join, the result's `your_name` says which. A found
+  name: tell them the name others will see and offer `set_my_name`. A login
+  or made-up name: ask what they want to be called, and keep the found one
+  only if they'd rather not say. Use the name *they* give. Never use their
+  email.
 - `set_peer_role` and `remove_peer` are for admins; every member's machine
   applies them. Removing someone stops everyone syncing with them and refuses
   their later writes, but **they keep the copy they already had**: say so.

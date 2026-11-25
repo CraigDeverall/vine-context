@@ -55,6 +55,15 @@ const TABS: { tab: Tab; label: string }[] = [
 ];
 /** How many recent changes the Overview shows before "Show more". */
 const RECENT = 5;
+// The header names at most this many members (you, then who's online); the People tab has everyone.
+const HEADER_PEOPLE = 6;
+// The "you claimed:" part of an activity line is who-did-what metadata: drawn muted so the claim itself reads first.
+const lead = (c: Change) => {
+  const i = /^(claim|question|reply|describe)$/.test(c.kind) ? c.summary.indexOf(": ") : -1;
+  return i < 0 ? { head: "", body: c.summary } : { head: c.summary.slice(0, i + 2), body: c.summary.slice(i + 2) };
+};
+/** A way out of a step (Cancel, Done, Back) leads with a ‹ caret, so it reads as going back. */
+const caret = (label: string) => (label.startsWith("‹") ? label : `‹ ${label}`);
 const ICON: Record<string, string> = { claim: "📌", question: "❓", reply: "↳", link: "🔗", withdraw: "✕", add_member: "👋", remove_member: "🚪", set_role: "🔑", rename: "✎", describe: "✎", create: "✦" };
 const ROLES: Role[] = ["reader", "contributor", "admin"];
 
@@ -368,7 +377,7 @@ export function Contexts({ b }: { b: Bridge }) {
       <div className="stack sm">
         <div className="spread">
           <h1 className="title wrap">{title}</h1>
-          {close && <button onClick={close.onClick}>{close.label}</button>}
+          {close && <button onClick={close.onClick}>{caret(close.label)}</button>}
         </div>
         {about && <p className="wrap">{about}</p>}
       </div>
@@ -442,12 +451,14 @@ export function Contexts({ b }: { b: Bridge }) {
       <div className="stack lg">
         <div className="stack sm">
           <Heading>This chat</Heading>
-          <div className="row">
-            <Chip active={!!c} onClick={() => toggle(n)}>
-              {c ? "◉ On" : "○ Off"}
-            </Chip>
-            {c && severalOn && !c.writes_here && <button onClick={() => writeHere(n)}>✎ Write here</button>}
-            {c && !inTab && <button onClick={() => void show(n)}>Open</button>}
+          <div className="spread">
+            <div className="row">
+              <Chip active={!!c} onClick={() => toggle(n)}>
+                {c ? "◉ On" : "○ Off"}
+              </Chip>
+              {c && severalOn && !c.writes_here && <button onClick={() => writeHere(n)}>✎ Write here</button>}
+            </div>
+            {c && !inTab && <button onClick={() => void show(n)}>Open ›</button>}
           </div>
           <Meta>
             {c
@@ -656,7 +667,7 @@ export function Contexts({ b }: { b: Bridge }) {
           <button className="primary" onClick={create}>
             Create
           </button>
-          <button onClick={close}>Cancel</button>
+          <button onClick={close}>‹ Cancel</button>
         </div>
         <Meta>It’s yours: you’re its admin, and it’s added to this chat. Invite people from its People tab, or with Share in the list.</Meta>
       </div>,
@@ -731,17 +742,13 @@ export function Contexts({ b }: { b: Bridge }) {
                   </Chip>
                 </div>
                 {c && <p className="faint wrap">{c.description ?? "No description yet"}</p>}
-                <div className="row">
-                  {c ? (
-                    <>
-                      <button onClick={() => void show(n)}>Open</button>
-                      <button onClick={() => void settingsTab(n)}>Settings</button>
-                    </>
-                  ) : (
-                    <button onClick={() => void manage(n)}>Settings</button>
-                  )}
-                  {c?.role === "admin" && <button onClick={() => void share(n)}>Share</button>}
-                  {c && many && !c.writes_here && <button onClick={() => writeHere(n)}>✎ Write here</button>}
+                <div className="spread">
+                  <div className="row">
+                    <button onClick={() => void (c ? settingsTab(n) : manage(n))}>Settings</button>
+                    {c?.role === "admin" && <button onClick={() => void share(n)}>Share</button>}
+                    {c && many && !c.writes_here && <button onClick={() => writeHere(n)}>✎ Write here</button>}
+                  </div>
+                  {c && <button onClick={() => void show(n)}>Open ›</button>}
                 </div>
                 {pin(n)}
               </div>
@@ -940,7 +947,7 @@ export function Contexts({ b }: { b: Bridge }) {
             {byline(n)} · {n.key}
           </Meta>
         </div>
-        <button onClick={() => openItem(n.key)}>Open</button>
+        <button onClick={() => openItem(n.key)}>Open ›</button>
       </div>
     );
     const group = (title: string, label: string, tone: Tone, list: GraphNode[]) =>
@@ -1095,6 +1102,10 @@ export function Contexts({ b }: { b: Bridge }) {
   /** The search behind the filter's text, once it has answered for this text in this context. */
   const near = f.text && found && found.text === f.text && found.context === a.context ? found : null;
   const members = a.people.filter((p) => p.role);
+  const rank = (p: Person) => (p.you ? 0 : p.online ? 1 : 2);
+  const shown = [...members].sort((x, y) => rank(x) - rank(y)).slice(0, HEADER_PEOPLE);
+  const unshown = members.length - shown.length;
+  const unshownOnline = members.filter((p) => p.online).length - shown.filter((p) => p.online).length;
   const counts: Record<Tab, number | undefined> = { overview: undefined, questions: t?.open.length, claims: t?.claims.length, people: members.length, settings: undefined };
   const goOnline = (
     <button className="primary" onClick={() => void act("start_sharing", { ...ctx }, "Back online: syncing with the other members.")}>
@@ -1140,7 +1151,7 @@ export function Contexts({ b }: { b: Bridge }) {
         <span className="faint" aria-hidden="true">
           |
         </span>
-        {members.map((p) => (
+        {shown.map((p) => (
           <span
             key={p.fingerprint}
             className={p.online ? "on" : ""}
@@ -1150,6 +1161,11 @@ export function Contexts({ b }: { b: Bridge }) {
             {p.you ? " (you)" : ""}
           </span>
         ))}
+        {unshown > 0 && (
+          <button className="link" onClick={() => setTab("people")}>
+            +{unshown} more{unshownOnline ? ` · ${unshownOnline} online` : ""}
+          </button>
+        )}
       </div>
       {news && <Meta>Latest: {news}</Meta>}
       <div className="tabs" role="tablist">
@@ -1326,15 +1342,17 @@ export function Contexts({ b }: { b: Bridge }) {
             <div key={c.id} className="item">
               <div className="grow">
                 <p className="wrap">
-                  <span className="muted">{ICON[c.kind] ?? "·"} </span>
-                  <strong>{c.mine ? "you" : c.by}</strong> {short(c.summary, 200)}
+                  <span className="muted">
+                    {ICON[c.kind] ?? "·"} {c.mine ? "you" : c.by} {lead(c).head}
+                  </span>
+                  {short(lead(c).body, 200)}
                 </p>
                 <Meta>
                   {ago(c.at, now)}
                   {c.held && <span className="t-warn"> · still only on this machine</span>}
                 </Meta>
               </div>
-              {c.node && rel.byKey.has(c.node) && <button onClick={() => openItem(c.node)}>Open</button>}
+              {c.node && rel.byKey.has(c.node) && <button onClick={() => openItem(c.node)}>Open ›</button>}
             </div>
           )}
         />
@@ -1374,7 +1392,7 @@ export function Contexts({ b }: { b: Bridge }) {
               <div className="row">
                 {undo(q)}
                 {answered || !canWrite ? (
-                  <button onClick={() => openItem(q.key)}>Open</button>
+                  <button onClick={() => openItem(q.key)}>Open ›</button>
                 ) : (
                   <button className="primary" onClick={() => openItem(q.key)}>
                     Answer
@@ -1461,7 +1479,7 @@ export function Contexts({ b }: { b: Bridge }) {
         </div>
         <div className="row">
           {canWrite && <button onClick={() => void ask(prompts.settle(keep, drop, named))}>Keep this one</button>}
-          <button onClick={() => openItem(keep.key)}>Open</button>
+          <button onClick={() => openItem(keep.key)}>Open ›</button>
         </div>
       </div>
     );
@@ -1548,7 +1566,7 @@ export function Contexts({ b }: { b: Bridge }) {
                   </div>
                   <div className="row">
                     {undo(n)}
-                    <button onClick={() => openItem(n.key)}>Open</button>
+                    <button onClick={() => openItem(n.key)}>Open ›</button>
                   </div>
                 </div>
               </Card>

@@ -14,9 +14,9 @@ That installs the `vine` command and the Claude Code plugin. Then tell your agen
 vine demo
 ```
 
-`demo` opens an example context in your browser: three people investigating a checkout slowdown. It works on a copy, so nothing is changed. You need Node 20 or later, and no account, API key, compiler or model download.
+`demo` runs three members in one process: alice creates the example context, bob and carol join it with codes, and the three replay the planning of an office Christmas party, each writing through their own host and syncing peer to peer. Your browser shows alice's view of it, live. Nothing of yours is touched, and no network is needed. You need Node 20 or later, and no account, API key, compiler or model download.
 
-![The graph explorer on the example incident graph](docs/images/explorer.jpg)
+![The graph explorer on the example party graph](docs/images/explorer.jpg)
 
 <!-- Demo video: add the link here once it is recorded. -->
 
@@ -31,7 +31,7 @@ vine demo
 
 ## Use case
 
-When three people investigate the same problem with their own AI agents, each agent learns things the others never see. Findings get repeated, contradictions go unnoticed, and a week later nobody can say what the team believed when it made a call.
+When three people work on the same thing with their own AI agents, planning the office Christmas party, say, each agent learns things the others never see. Findings get repeated, contradictions go unnoticed (one person has booked a room that another has found is too small), and a week later nobody can say what the team believed when it made a call.
 
 Vine Context gives the group one shared graph of **claims** and **questions**.
 
@@ -49,6 +49,7 @@ It keeps working offline, and when the person who created it is away.
 | Where do we disagree? | `CONTRADICTS` between claims that are both still current |
 | Which questions are still open? | `ANSWERS` from a current claim to a question |
 | What is this based on? | `SUPPORTS` chains, followed back to the evidence |
+| What has been said about an open question? | `REPLIES_TO` from the messages in its thread |
 
 **Who it's for:** a small group (up to about 20 people) working on the same thing, each with their own AI agent: an incident, a research question, a design decision, a project.
 
@@ -102,11 +103,13 @@ Codex and other MCP agents: see [the guide](docs/GUIDE.md#install-by-hand).
 vine demo
 ```
 
-In the browser page that opens:
+Three hosts start in this process, one each for alice, bob and carol: alice creates the context, the other two join it with codes, and the story plays through them, one step every few seconds. Every write is signed by its author's host, held for undo, then carried to the other two over WebRTC, and the terminal says when each one arrives. In the browser page that opens, which is alice's view:
 
-1. **Explore the graph.** Drag the time slider back to 10 Nov. A conflict between Bob's claim and Carol's claim appears, then settles when Bob replaces his claim.
-2. **Conflicts** shows two claims side by side when they contradict each other.
-3. **Sharing console** shows the three members, with their keys and roles.
+1. **Sharing console** shows the three members, their keys, roles and live links.
+2. **Explore the graph** fills in as the changes arrive. Once the story is over, drag the time slider back to replay it: a conflict between bob's claim and carol's appears, then settles when bob replaces his claim.
+3. **Conflicts** shows the two claims side by side while they contradict each other.
+
+`--pace 1` runs it faster, `--pace 0` all at once. `--join` finds the members through the public Nostr relays instead of in this process, and prints a join code at the end, so your own agent (on this machine or another) can join as a fourth member and write into the same graph.
 
 ### 3. Use it from your agent
 
@@ -115,7 +118,7 @@ In the browser page that opens:
 Then ask in plain words:
 
 - *"Start a context called incident-42."*
-- *"Record that checkout p95 rose to 4 s at 13:58."*
+- *"Record that 48 people are coming, from the RSVP sheet."*
 - *"What open questions are there?"*
 - *"Open the graph explorer."*
 
@@ -131,19 +134,19 @@ Join codes, roles, undo, working offline and removing someone are covered in [th
 
 ## Where the data lives
 
-**The example store is in this repo**, at [`examples/data/graphs/incident`](examples/data/graphs/incident): 9 claims, 3 questions and 11 relationships. It is an ordinary Relate directory store, so [Relate's CLI](https://relatedb.ai/docs/get-started/install/) opens it:
+**The example store is in this repo**, at [`examples/data/graphs/party`](examples/data/graphs/party): 8 claims (one withdrawn), 3 questions, 3 replies and 14 relationships. It is an ordinary Relate directory store, so [Relate's CLI](https://relatedb.ai/docs/get-started/install/) opens it:
 
 ```bash
-cp -R "$(npm root -g)/vine-context/examples/data/graphs/incident" /tmp/incident
+cp -R "$(npm root -g)/vine-context/examples/data/graphs/party" /tmp/party
 ```
 
 ```bash
-relate -d /tmp/incident --mode table "MATCH (a:Claim)-[:CONTRADICTS]->(b:Claim) RETURN a.recorded_by, a.text, b.recorded_by, b.text"
+relate -d /tmp/party --mode table "MATCH (a:Claim)-[:CONTRADICTS]->(b:Claim) RETURN a.recorded_by, a.text, b.recorded_by, b.text"
 ```
 
-Work on a copy, because Relate tidies a store's files when it opens one. In a clone of this repo the store is at `examples/data/graphs/incident`. More queries to try, including *what did the team believe at 3:15 pm?*, are in [docs/RELATE.md](docs/RELATE.md#explore-the-example-store).
+Work on a copy, because Relate tidies a store's files when it opens one. In a clone of this repo the store is at `examples/data/graphs/party`. More queries to try, including *what did the team believe on Monday afternoon?*, are in [docs/RELATE.md](docs/RELATE.md#explore-the-example-store).
 
-- The signed change log the store was built from: [`examples/data/hosts/incident/changes.jsonl`](examples/data/hosts/incident/changes.jsonl).
+- The signed change log the store was built from: [`examples/data/hosts/party/changes.jsonl`](examples/data/hosts/party/changes.jsonl).
 - The script that makes both: [`scripts/make-examples.ts`](scripts/make-examples.ts) (`npm run examples`).
 
 **Your own contexts** live in `~/.local/share/vine-context/` (set `VINE_DATA_DIR` to move it): `graphs/<name>` is the Relate store, and `hosts/<name>/changes.jsonl` is its change log. [More detail](docs/HOW-IT-WORKS.md#files-on-your-machine).
