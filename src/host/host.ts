@@ -103,12 +103,33 @@ function writeGroup(dataDir: string, graph: string, g: GroupInfo) {
  * (group, change log, invites, peers) and the name in its group file. The name
  * is this machine's label: the id, which the other members know it by, stays.
  */
+/**
+ * renameSync, tried again for a few seconds while Windows says the folder is busy: a host that
+ * was just stopped can hold its files open until its process has fully exited.
+ */
+function renameRetrying(from: string, to: string): void {
+  for (let i = 0; ; i++) {
+    try {
+      return renameSync(from, to);
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException).code;
+      if (i >= 30 || (code !== "EPERM" && code !== "EBUSY" && code !== "EACCES")) throw e;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
+    }
+  }
+}
+
 export function moveContext(dataDir: string, from: string, to: string): void {
   const graphs = join(dataDir, "graphs");
   const hosts = join(dataDir, "hosts");
   if (existsSync(join(graphs, to)) || existsSync(join(hosts, to))) throw new Error(`There's already a context '${to}' on this machine.`);
   renameSync(join(graphs, from), join(graphs, to));
-  if (existsSync(join(hosts, from))) renameSync(join(hosts, from), join(hosts, to));
+  try {
+    if (existsSync(join(hosts, from))) renameRetrying(join(hosts, from), join(hosts, to));
+  } catch (e) {
+    renameSync(join(graphs, to), join(graphs, from)); // don't leave the context half renamed
+    throw e;
+  }
   const g = readGroup(dataDir, to);
   if (g) writeGroup(dataDir, to, { ...g, name: to });
 }
