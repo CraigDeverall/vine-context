@@ -40,6 +40,23 @@ const NOTICE_MS = 6000
 const PAGE = 20
 /** How many recent changes the Overview shows before "N more". */
 const RECENT = 5
+/** Below this many cells across the pane's body, a row's text and its buttons stack. */
+const NARROW = 46
+/** From this many cells across, the Overview sets its two halves side by side. */
+const WIDE = 100
+
+/**
+ * How the pane lays itself out for the room it has: `glance` for the desktop
+ * app's minimized widget (clicks may not reach it), else by the body's width.
+ * Height isn't used: a change of height alone doesn't redraw the pane, so the
+ * body scrolls instead.
+ */
+export type Fit = 'glance' | 'narrow' | 'regular' | 'wide'
+export const paneFit = (p: { bodyColumns?: number; placement?: string }): Fit => {
+  if (p.placement === 'widget') return 'glance'
+  const cols = p.bodyColumns ?? 80
+  return cols < NARROW ? 'narrow' : cols >= WIDE ? 'wide' : 'regular'
+}
 const SERVERS = ['plugin_vine-context_vine-context', 'plugin:vine-context:vine-context', 'vine-context']
 const NAME_RE = /^[a-z0-9][a-z0-9-]{0,62}$/
 
@@ -529,6 +546,34 @@ export const register: Register = on => {
     const err = await read($, error)
     // The terminal draws borders as box characters: cards there would be heavy, so it gets plain rows.
     const graphical = e.surface !== 'terminal'
+    const cols = e.props.bodyColumns ?? 80
+    const fit = paneFit(e.props)
+    const narrow = fit === 'narrow'
+    /**
+     * Text with its buttons beside it, at the right; stacked under it when the
+     * pane is narrow, so neither is squeezed to a sliver.
+     */
+    const split = (key: string, main: unknown, side: unknown, align: 'center' | 'flex-start' = 'flex-start') => {
+      const actions = [side].flat().filter(Boolean)
+      const buttons = actions.length > 0 && (
+        <Box flexDirection="row" gap="xs" flexWrap="wrap" flexShrink={0} alignItems="center">
+          {actions}
+        </Box>
+      )
+      return narrow ? (
+        <Box key={key} flexDirection="column" gap="xs">
+          <Box flexDirection="column">{main}</Box>
+          {buttons}
+        </Box>
+      ) : (
+        <Box key={key} flexDirection="row" gap={1} justifyContent="space-between" alignItems={align}>
+          <Box flexDirection="column" flexShrink={1}>
+            {main}
+          </Box>
+          {buttons}
+        </Box>
+      )
+    }
     const card = (key: string, children: unknown, tone?: string) =>
       graphical ? (
         <Box key={key} flexDirection="column" borderStyle="round" borderColor={tone ?? 'subtle'} paddingX={1} paddingY="xs" gap="xs">
@@ -557,6 +602,47 @@ export const register: Register = on => {
     const note = await read($, notice)
     const made = await read($, code)
     const none = await read($, unattached)
+
+    // Minimized to a widget on the desktop app: what reads at a glance, with
+    // nothing to press, since clicks may not reach it. Expanding it brings back
+    // whatever view was open.
+    if (fit === 'glance') {
+      const s = a?.snapshot
+      const th = s ? threads(s.nodes, s.edges) : undefined
+      const rl = s ? relations(s.nodes, s.edges) : undefined
+      const unsent = a ? a.recent.filter((c: Change) => c.held && c.mine).length : 0
+      const others = a ? a.people.filter((p: Person) => p.role && p.online && !p.you).length : 0
+      const facts = a
+        ? [
+            a.sharing ? `${others} other${others === 1 ? '' : 's'} online` : 'Offline',
+            th && th.open.length ? `❓ ${th.open.length} open` : '',
+            rl && rl.conflicts.length ? `⚡ ${rl.conflicts.length} conflict${rl.conflicts.length === 1 ? '' : 's'}` : '',
+            unsent ? `${unsent} not sent yet` : '',
+          ].filter(Boolean)
+        : []
+      const last = a?.recent[0]
+      return (
+        <Box key="glance" flexDirection="column" gap="xs" paddingX={graphical ? 1 : 0}>
+          <Text weight="semibold" bold wrap="wrap">
+            <Text color={none || !a ? undefined : a.sharing ? 'success' : 'warning'}>● </Text>
+            {none ? 'No context in this chat' : (a?.context ?? 'Context')}
+          </Text>
+          <Text size="footnote" dimColor wrap="wrap">
+            {none ? 'Open the panel to turn one on.' : a ? facts.join(' · ') : (err ?? 'Loading…')}
+          </Text>
+          {!none && last && (
+            <Box key="glance-latest">
+              <Text size="footnote" wrap="wrap">
+                <Text weight="semibold" bold>
+                  {last.mine ? 'you' : last.by}
+                </Text>{' '}
+                {short(last.summary, 80)}
+              </Text>
+            </Box>
+          )}
+        </Box>
+      )
+    }
     const dismiss = () => void clearError($).then(() => say($, null))
     const messages =
       err || note
@@ -577,11 +663,13 @@ export const register: Register = on => {
     const modal = (key: string, title: string, about: string | null, body: unknown, close?: { label: string; onPress: () => void }) => (
       <Box key={key} flexDirection="column" gap="md" paddingX={graphical ? 1 : 0}>
         <Box flexDirection="column" gap="xs">
-          <Box flexDirection="row" justifyContent="space-between" alignItems="center">
-            <Text size="title" weight="semibold" bold>
-              {title}
-            </Text>
-            {close && <Button key={`close-${key}`} label={close.label} variant="secondary" dimColor onPress={close.onPress} />}
+          <Box flexDirection="row" gap={1} justifyContent="space-between" alignItems="flex-start">
+            <Box flexShrink={1}>
+              <Text size="title" weight="semibold" bold wrap="wrap">
+                {title}
+              </Text>
+            </Box>
+            {close &&<Button key={`close-${key}`} label={close.label} variant="secondary" dimColor onPress={close.onPress} />}
           </Box>
           {about && <Text wrap="wrap">{about}</Text>}
         </Box>
@@ -681,7 +769,7 @@ export const register: Register = on => {
         >
           {pinned ? '📌 Pinned to ' : '📌 Pin to '}
           <Text size="footnote" dimColor>
-            {tail(f.folder, 32)}
+            {tail(f.folder, Math.max(12, Math.min(48, cols - 18)))}
           </Text>
         </Button>
       )
@@ -699,16 +787,25 @@ export const register: Register = on => {
       const severalOn = using.length > 1
       const sharing = d?.sharing ?? (inTab ? a?.sharing : undefined)
       const relays = inTab ? a?.relays_up : undefined
-      const row = (label: string, value: unknown) => (
-        <Box key={`detail-${label}`} flexDirection="row" gap={1}>
-          <Box width={12} flexShrink={0}>
-            <Text dimColor>{label}</Text>
-          </Box>
-          <Box flexShrink={1}>
+      // A label column beside its value; narrow, the label sits over it instead.
+      const row = (label: string, value: unknown) =>
+        narrow ? (
+          <Box key={`detail-${label}`} flexDirection="column">
+            <Text size="footnote" dimColor>
+              {label}
+            </Text>
             <Text wrap="wrap">{value}</Text>
           </Box>
-        </Box>
-      )
+        ) : (
+          <Box key={`detail-${label}`} flexDirection="row" gap={1}>
+            <Box width={12} flexShrink={0}>
+              <Text dimColor>{label}</Text>
+            </Box>
+            <Box flexShrink={1}>
+              <Text wrap="wrap">{value}</Text>
+            </Box>
+          </Box>
+        )
       const count = (k: string, one: string, plural: string) => `${d?.items[k] ?? 0} ${(d?.items[k] ?? 0) === 1 ? one : plural}`
       return (
         <Box key={`settings-${n}`} flexDirection="column" gap="md">
@@ -879,7 +976,7 @@ export const register: Register = on => {
               {doomed.error}
             </Text>
           )}
-          <Box flexDirection="row" gap="xs">
+          <Box flexDirection="row" gap="xs" flexWrap="wrap">
             <Button key="keep-context" label="Keep it" variant="primary" onPress={close} />
             <Button key={`delete-${n}`} label="Delete permanently" variant="secondary" onPress={() => confirm(deleteText)} />
           </Box>
@@ -942,7 +1039,7 @@ export const register: Register = on => {
               {creatingNow.error}
             </Text>
           )}
-          <Box flexDirection="row" gap="xs">
+          <Box flexDirection="row" gap="xs" flexWrap="wrap">
             <Button key="create-context" label="Create" variant="primary" onPress={() => create()} />
             <Button key="cancel-create" label="Cancel" variant="secondary" dimColor onPress={close} />
           </Box>
@@ -1189,7 +1286,7 @@ export const register: Register = on => {
         'remove-step',
         `Remove ${leaving.name}?`,
         `Every member’s machine stops syncing with ${leaving.name} and refuses their later changes. What they wrote stays, and they keep the copy they already had.`,
-        <Box flexDirection="row" gap="xs">
+        <Box flexDirection="row" gap="xs" flexWrap="wrap">
           <Button
             key={`confirm-${leaving.fingerprint}`}
             label={`Remove ${leaving.name}`}
@@ -1209,9 +1306,10 @@ export const register: Register = on => {
     if (item && rel && t) {
       const back = { label: trail.length > 1 ? '‹ Back' : '‹ Back to the list', onPress: () => void backItem($) }
       /** A linked item: its text, who and when, and a way to open it. */
-      const related = (label: string, tone: string | undefined, n: GraphNode) => (
-        <Box key={`rel-${label}-${n.key}`} flexDirection="row" gap={1} justifyContent="space-between" alignItems="flex-start">
-          <Box flexDirection="column" flexShrink={1}>
+      const related = (label: string, tone: string | undefined, n: GraphNode) =>
+        split(
+          `rel-${label}-${n.key}`,
+          <>
             <Text wrap="wrap" strikethrough={n.label === 'Claim' && !rel.current(n)} dimColor={n.ended}>
               <Text color={tone} dimColor={!tone}>
                 {label}{' '}
@@ -1221,10 +1319,9 @@ export const register: Register = on => {
             <Text size="footnote" dimColor>
               {byline(n)} · {n.key}
             </Text>
-          </Box>
-          <Button key={`open-${n.key}`} label="Open" variant="secondary" dimColor onPress={() => void openItem($, n.key)} />
-        </Box>
-      )
+          </>,
+          <Button key={`open-${n.key}`} label="Open" variant="secondary" dimColor onPress={() => void openItem($, n.key)} />,
+        )
       const group = (title: string, label: string, tone: string | undefined, list: GraphNode[]) =>
         list.length > 0 && (
           <Box key={`group-${title}`} flexDirection="column" gap="xs">
@@ -1252,9 +1349,10 @@ export const register: Register = on => {
             {th && th.replies.length > 0 && (
               <Box flexDirection="column" gap="xs">
                 {heading('Thread', th.replies.length)}
-                {th.replies.map(r => (
-                  <Box key={`ar-${r.key}`} flexDirection="row" gap={1} justifyContent="space-between" alignItems="flex-start">
-                    <Box flexDirection="column" flexShrink={1}>
+                {th.replies.map(r =>
+                  split(
+                    `ar-${r.key}`,
+                    <>
                       <Text wrap="wrap">
                         <Text dimColor>↳ </Text>
                         {short(r.title, 600)}
@@ -1263,15 +1361,15 @@ export const register: Register = on => {
                         {byline(r)}
                         {held(r)}
                       </Text>
-                    </Box>
-                    <Box flexDirection="row" gap="xs">
-                      {undo(r)}
-                      {!answered && !item.ended && canWrite && (
+                    </>,
+                    [
+                      undo(r),
+                      !answered && !item.ended && canWrite && (
                         <Button key={`answer-with-${r.key}`} label="Answer with this" variant="secondary" dimColor onPress={() => void ask($, answerPrompt(item, { reply: r }, named))} />
-                      )}
-                    </Box>
-                  </Box>
-                ))}
+                      ),
+                    ],
+                  ),
+                )}
               </Box>
             )}
             {th && group('Answer', '✓', 'success', th.answers)}
@@ -1441,7 +1539,7 @@ export const register: Register = on => {
       <Box flexDirection="column" gap="xs">
         <Input key="filter" value={f.text} placeholder={`Filter ${what} by words, a person or an id`} submitLabel="Filter" onSubmit={(v: string) => setFilter({ text: v.trim() })} />
         {f.text && (
-          <Box flexDirection="row" gap="xs" alignItems="center">
+          <Box flexDirection="row" gap="xs" flexWrap="wrap" alignItems="center">
             <Text size="footnote" dimColor>
               Showing {what} matching “{short(f.text, 40)}”
             </Text>
@@ -1477,17 +1575,7 @@ export const register: Register = on => {
       const digest = a.digest?.at(-1)
       const feed = a.recent
       const ICON: Record<string, string> = { claim: '📌', question: '❓', reply: '↳', link: '🔗', withdraw: '✕', add_member: '👋', remove_member: '🚪', set_role: '🔑', rename: '✎', describe: '✎', create: '✦' }
-      const need = (key: string, tone: string, text: unknown, button: unknown) =>
-        card(
-          `need-${key}`,
-          <Box flexDirection="row" gap={1} justifyContent="space-between" alignItems="center">
-            <Box flexShrink={1}>
-              <Text wrap="wrap">{text}</Text>
-            </Box>
-            {button}
-          </Box>,
-          tone,
-        )
+      const need = (key: string, tone: string, text: unknown, button: unknown) => card(`need-${key}`, split(`need-row-${key}`, <Text wrap="wrap">{text}</Text>, button, 'center'), tone)
       const needs = [
         !a.sharing && need('offline', 'warning', 'You’re offline: what you write stays on this machine, and you don’t see what others add, until you’re back.', goOnline),
         a.sharing && a.relays_up === 0 && need('relays', 'warning', 'No signalling relay is reachable, so the other members can’t find this machine right now.', null),
@@ -1524,21 +1612,21 @@ export const register: Register = on => {
           ),
         invites.length > 0 && need('invites', 'subtle', `${invites.length} join code${invites.length === 1 ? ' is' : 's are'} waiting to be used.`, <Button key="see-invites" label="See" variant="secondary" onPress={() => setTab('people')} />),
       ].filter(Boolean)
-      body = (
-        <Box flexDirection="column" gap="sm">
+      const attention = (
+        <Box key="overview-now" flexDirection="column" gap="sm" {...(fit === 'wide' ? { width: '50%', flexGrow: 1, flexShrink: 1 } : {})}>
           {heldMine.length > 0 &&
             card(
               'held',
               <Box flexDirection="column" gap="xs">
                 <Text color="warning">Just written, still only on this machine:</Text>
-                {heldMine.map((c: Change) => (
-                  <Box key={`held-${c.id}`} flexDirection="row" gap={1} justifyContent="space-between" alignItems="center">
-                    <Box flexShrink={1}>
-                      <Text wrap="wrap">{short(c.summary, 140)}</Text>
-                    </Box>
-                    <Button key={`undo-change-${c.id}`} label="Undo" variant="primary" onPress={() => void act($, 'take_back', { id: c.id, ...ctx }, 'Taken back. It never left this machine.')} />
-                  </Box>
-                ))}
+                {heldMine.map((c: Change) =>
+                  split(
+                    `held-${c.id}`,
+                    <Text wrap="wrap">{short(c.summary, 140)}</Text>,
+                    <Button key={`undo-change-${c.id}`} label="Undo" variant="primary" onPress={() => void act($, 'take_back', { id: c.id, ...ctx }, 'Taken back. It never left this machine.')} />,
+                    'center',
+                  ),
+                )}
               </Box>,
               'warning',
             )}
@@ -1566,11 +1654,16 @@ export const register: Register = on => {
             <Button key="catch-up" label="Catch me up" variant="secondary" onPress={() => void ask($, prompts.catchUp(a.context))} />
             {canWrite && <Button key="save-chat" label="Save what this chat learned" variant="secondary" onPress={() => void ask($, prompts.saveChat(a.context))} />}
           </Box>
+        </Box>
+      )
+      const happened = (
+        <Box key="overview-recent" flexDirection="column" gap="sm" {...(fit === 'wide' ? { width: '50%', flexGrow: 1, flexShrink: 1 } : {})}>
           {heading('Recent activity')}
           {!feed.length && meta('Nothing yet. What your agent and the other members’ agents record shows up here.')}
-          {folded('recent', feed, RECENT, 'changes', 'change', (c: Change) => (
-            <Box key={`act-${c.id}`} flexDirection="row" gap={1} justifyContent="space-between" alignItems="flex-start">
-              <Box flexDirection="column" flexShrink={1}>
+          {folded('recent', feed, RECENT, 'changes', 'change', (c: Change) =>
+            split(
+              `act-${c.id}`,
+              <>
                 <Text wrap="wrap">
                   <Text dimColor>{ICON[c.kind] ?? '·'} </Text>
                   <Text weight="semibold" bold>
@@ -1582,15 +1675,28 @@ export const register: Register = on => {
                   {ago(c.at, now)}
                   {c.held ? <Text color="warning"> · still only on this machine</Text> : ''}
                 </Text>
-              </Box>
-              {c.node && rel.byKey.has(c.node) && <Button key={`open-change-${c.id}`} label="Open" variant="secondary" dimColor onPress={() => void openItem($, c.node)} />}
-            </Box>
-          ))}
+              </>,
+              c.node && rel.byKey.has(c.node) && <Button key={`open-change-${c.id}`} label="Open" variant="secondary" dimColor onPress={() => void openItem($, c.node)} />,
+            ),
+          )}
           {meta(
             `${t.claims.length} claim${t.claims.length === 1 ? '' : 's'} · ${t.open.length} open and ${t.answered.length} answered question${t.answered.length === 1 ? '' : 's'} · ${rel.history.length} replaced or withdrawn · ${a.changes} changes in all${snap.truncated ? ' · showing the latest items only' : ''}`,
           )}
         </Box>
       )
+      // Wide, what needs you sits beside what happened; otherwise one above the other.
+      body =
+        fit === 'wide' ? (
+          <Box key="overview" flexDirection="row" gap={2} alignItems="flex-start">
+            {attention}
+            {happened}
+          </Box>
+        ) : (
+          <Box key="overview" flexDirection="column" gap="sm">
+            {attention}
+            {happened}
+          </Box>
+        )
     } else if (current === 'questions') {
       const scopes = {
         open: t.open,
@@ -1605,8 +1711,9 @@ export const register: Register = on => {
         return card(
           `q-${q.key}`,
           <Box flexDirection="column" gap="xs">
-            <Box flexDirection="row" gap={1} justifyContent="space-between" alignItems="flex-start">
-              <Box flexDirection="column" flexShrink={1}>
+            {split(
+              `q-row-${q.key}`,
+              <>
                 <Text wrap="wrap" weight="semibold" bold>
                   {!graphical && <Text color="warning">? </Text>}
                   {short(q.title, 300)}
@@ -1616,16 +1723,16 @@ export const register: Register = on => {
                   {th.replies.length ? ` · ${th.replies.length} repl${th.replies.length === 1 ? 'y' : 'ies'}` : ''}
                   {held(q)}
                 </Text>
-              </Box>
-              <Box flexDirection="row" gap="xs">
-                {undo(q)}
-                {answered || !canWrite ? (
+              </>,
+              [
+                undo(q),
+                answered || !canWrite ? (
                   <Button key={`open-${q.key}`} label="Open" variant="secondary" dimColor onPress={() => void openItem($, q.key)} />
                 ) : (
                   <Button key={`answer-${q.key}`} label="Answer" variant="primary" onPress={() => void openItem($, q.key)} />
-                )}
-              </Box>
-            </Box>
+                ),
+              ],
+            )}
             {folded(
               `replies-${q.key}`,
               th.replies,
@@ -1699,20 +1806,20 @@ export const register: Register = on => {
       const scope = f.claims in scopes ? f.claims : 'current'
       const list = scopes[scope].filter(n => matches(n, f.text))
       const pairs = scope === 'history' ? [] : rel.conflicts.filter(([x, y]) => matches(x, f.text) || matches(y, f.text))
-      const side = (keep: GraphNode, drop: GraphNode) => (
-        <Box key={`side-${keep.key}`} flexDirection="row" gap={1} justifyContent="space-between" alignItems="flex-start">
-          <Box flexDirection="column" flexShrink={1}>
+      const side = (keep: GraphNode, drop: GraphNode) =>
+        split(
+          `side-${keep.key}`,
+          <>
             <Text wrap="wrap">{short(keep.title, 300)}</Text>
             <Text size="footnote" dimColor>
               {byline(keep)} · {keep.key}
             </Text>
-          </Box>
-          <Box flexDirection="row" gap="xs">
-            {canWrite && <Button key={`keep-${keep.key}-over-${drop.key}`} label="Keep this one" variant="secondary" onPress={() => void ask($, prompts.settle(keep, drop, named))} />}
-            <Button key={`open-${keep.key}-vs-${drop.key}`} label="Open" variant="secondary" dimColor onPress={() => void openItem($, keep.key)} />
-          </Box>
-        </Box>
-      )
+          </>,
+          [
+            canWrite && <Button key={`keep-${keep.key}-over-${drop.key}`} label="Keep this one" variant="secondary" onPress={() => void ask($, prompts.settle(keep, drop, named))} />,
+            <Button key={`open-${keep.key}-vs-${drop.key}`} label="Open" variant="secondary" dimColor onPress={() => void openItem($, keep.key)} />,
+          ],
+        )
       const badges = (n: GraphNode) => {
         const evidence = rel.linked(n.id, 'SUPPORTS', 'in').filter(rel.current).length
         return [
@@ -1770,8 +1877,9 @@ export const register: Register = on => {
               const newer = rel.replacedBy.get(n.id)
               return card(
                 `c-${n.key}`,
-                <Box flexDirection="row" gap={1} justifyContent="space-between" alignItems="flex-start">
-                  <Box flexDirection="column" flexShrink={1}>
+                split(
+                  `c-row-${n.key}`,
+                  <>
                     <Text wrap="wrap" strikethrough={scope === 'history'} dimColor={scope === 'history'}>
                       {!graphical && <Text color="suggestion">• </Text>}
                       {rel.inConflict.has(n.id) && <Text color="warning">⚡ </Text>}
@@ -1788,12 +1896,9 @@ export const register: Register = on => {
                         : badges(n)}
                       {held(n)}
                     </Text>
-                  </Box>
-                  <Box flexDirection="row" gap="xs">
-                    {undo(n)}
-                    <Button key={`open-${n.key}`} label="Open" variant="secondary" dimColor onPress={() => void openItem($, n.key)} />
-                  </Box>
-                </Box>,
+                  </>,
+                  [undo(n), <Button key={`open-${n.key}`} label="Open" variant="secondary" dimColor onPress={() => void openItem($, n.key)} />],
+                ),
                 heldByNode.has(n.key) ? 'warning' : rel.inConflict.has(n.id) ? 'warning' : undefined,
               )
             })}
@@ -1819,9 +1924,10 @@ export const register: Register = on => {
       const person = (p: Person) =>
         card(
           `person-${p.fingerprint}`,
-          <Box flexDirection="row" gap={1} justifyContent="space-between" alignItems="center">
-            <Box flexDirection="column" flexShrink={1}>
-              <Text>
+          split(
+            `person-row-${p.fingerprint}`,
+            <>
+              <Text wrap="wrap">
                 <Text color={p.online ? 'success' : undefined} dimColor={!p.online}>
                   ●
                 </Text>{' '}
@@ -1845,22 +1951,23 @@ export const register: Register = on => {
                   {p.platform ? ` · ${p.platform}` : ''}
                 </Text>,
               )}
-            </Box>
-            <Box flexDirection="row" gap="xs" alignItems="center">
-              {p.you && <Button key="rename" label="✎ Rename" variant="secondary" dimColor onPress={() => void update($, renaming, () => true)} />}
-              {admin && !p.creator && !p.you && p.role && Select && (
+            </>,
+            [
+              p.you && <Button key="rename" label="✎ Rename" variant="secondary" dimColor onPress={() => void update($, renaming, () => true)} />,
+              admin && !p.creator && !p.you && p.role && Select && (
                 <Select
                   key={`role-${p.fingerprint}`}
                   value={p.role}
                   options={['reader', 'contributor', 'admin'].map(r => ({ key: r, value: r, label: r }))}
                   onSelect={(r: string) => r !== p.role && void act($, 'set_peer_role', { name: p.name, role: r, ...ctx }, `${p.name} is now ${r}.`)}
                 />
-              )}
-              {admin && !p.creator && !p.you && p.role && (
+              ),
+              admin && !p.creator && !p.you && p.role && (
                 <Button key={`remove-${p.fingerprint}`} label="Remove" variant="secondary" dimColor onPress={() => void update($, confirmRemove, () => p.fingerprint)} />
-              )}
-            </Box>
-          </Box>,
+              ),
+            ],
+            'center',
+          ),
           p.you ? 'suggestion' : undefined,
         )
       body = (
@@ -1871,11 +1978,12 @@ export const register: Register = on => {
             card(
               'invite-card',
               <Box flexDirection="column" gap="sm">
-                <Box flexDirection="row" justifyContent="space-between" alignItems="center">
+                {split(
+                  'invite-head',
                   <Text weight="semibold" bold>
                     Join codes
                     <Text dimColor weight="regular"> {invites.length ? `${invites.length} waiting` : 'none waiting'}</Text>
-                  </Text>
+                  </Text>,
                   <Button
                     key="invite"
                     label="+ Invite someone"
@@ -1884,8 +1992,9 @@ export const register: Register = on => {
                       inviteNote = ''
                       void update($, inviting, () => 'contributor' as Invite['role'])
                     }}
-                  />
-                </Box>
+                  />,
+                  'center',
+                )}
                 {invites.length === 0
                   ? meta('Each code lets one person in: whoever uses it first. Codes stay here until they’re used, cancelled or expire.')
                   : invites.map((i: Invite) => {
@@ -1894,8 +2003,9 @@ export const register: Register = on => {
                       const hours = Math.round(left / 3600_000)
                       return (
                         <Box key={`inv-${i.id}`} flexDirection="column" gap="xs">
-                          <Box flexDirection="row" justifyContent="space-between" alignItems="center">
-                            <Text>
+                          {split(
+                            `inv-row-${i.id}`,
+                            <Text wrap="wrap">
                               <Text weight="semibold" bold>
                                 {i.label ? `For ${i.label.replace(/^for\s+/i, '')}` : 'No note'}
                               </Text>
@@ -1904,17 +2014,18 @@ export const register: Register = on => {
                                 · {i.role} · {hours >= 1 ? `expires in ${hours}h` : 'expires soon'}
                               </Text>
                               {i.id === made && <Text color="success"> · new: send it now</Text>}
-                            </Text>
-                            <Box flexDirection="row" gap="xs">
+                            </Text>,
+                            [
                               <Button
                                 key={`copy-${i.id}`}
                                 label="Copy"
                                 variant="secondary"
                                 onPress={(press: UiPressArgument) => void $.ui.copy({ text: send, surface: press.surface }).then(r => r.isCopied && $.ui.toast('Copied: send it privately, to that one person.'))}
-                              />
-                              <Button key={`cancel-${i.id}`} label="Cancel" variant="secondary" dimColor onPress={() => void act($, 'revoke_invite', { id: i.id, ...ctx }, 'Cancelled: that code no longer works.')} />
-                            </Box>
-                          </Box>
+                              />,
+                              <Button key={`cancel-${i.id}`} label="Cancel" variant="secondary" dimColor onPress={() => void act($, 'revoke_invite', { id: i.id, ...ctx }, 'Cancelled: that code no longer works.')} />,
+                            ],
+                            'center',
+                          )}
                           {Code ? <Code source={send} /> : <Text>{send}</Text>}
                         </Box>
                       )
