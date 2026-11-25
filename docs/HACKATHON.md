@@ -6,17 +6,15 @@ Back to the [README](../README.md).
 
 ## Judge it in five minutes
 
-1. **Run it.** Two commands, no account or API key ([README](../README.md#setup-and-run)):
+1. **Run it.** One command, with Node 20 or later. It installs nothing, needs no account or API key, and touches nothing of yours:
 
    ```bash
-   npm install -g vine-context
+   npx vine-context demo
    ```
 
-   ```bash
-   vine demo
-   ```
+   Three members start in one process, join with codes, and replay the investigation through their own hosts, syncing peer to peer; the terminal narrates each step as it reaches the others. In the browser (alice's view): *Sharing console* for the three members and their links, *Explore the graph* to watch it grow, then drag the time slider back to replay it. `--pace 1` runs it faster.
 
-   Three members start in one process, join with codes, and replay the investigation through their own hosts, syncing peer to peer; the terminal narrates each step as it reaches the others. In the browser (alice's view): *Sharing console* for the three members and their links, *Explore the graph* to watch it grow, then drag the time slider back to replay it.
+   To use it with your own agent, `npx vine-context setup` installs the `vine` command and the plugin for Claude Code or Codex, printing each command before it runs it ([README](../README.md#setup-and-run)).
 2. **Open the Relate store yourself.** It is a directory store that ships in the package and the repo, at [`examples/data/graphs/incident`](../examples/data/graphs/incident). [Six queries to try](RELATE.md#explore-the-example-store), from *where did the team disagree?* to *what did they believe at 3:15 pm?*
 3. **Read how Relate is used:** [README](../README.md#how-it-uses-relate) for the short form, [RELATE.md](RELATE.md) for each feature and its Cypher.
 4. **Watch the demo video:** link to be added with the Devpost submission.
@@ -33,8 +31,8 @@ The [official rules](https://relate.devpost.com/rules) list five criteria, weigh
 |---|---|---|
 | **Creativity** | An embedded database is one process on one machine. Here every teammate has their own embedded Relate store, and a log of signed changes makes them all the same graph, with no server in between | [How it works](HOW-IT-WORKS.md) |
 | **Usefulness** | Teams' AI sessions are silos: what one person's agent learns, nobody else's sees. A shared graph of claims and questions fixes that for any small group working on one problem | [Use case](../README.md#use-case); the incident example |
-| **Completeness** | Create, invite, join, record, link, search, sync, undo, withdraw, roles and removal all work end to end. 70 automated tests, and CI on Linux, macOS and Windows | [Guide](GUIDE.md); `npm test` |
-| **Clarity** | A README that reaches a first result in two commands, a sample store with queries, and a page per audience | [README](../README.md#more-documentation) |
+| **Completeness** | Create, invite, join, record, link, search, sync, undo, withdraw, roles and removal all work end to end, and `vine demo` exercises the whole path between three members. Over 120 automated tests, and CI on Linux, macOS and Windows | [Guide](GUIDE.md); `npm test` |
+| **Clarity** | One command to see it running and one to set a machine up, a sample store with queries, and a page per audience | [README](../README.md#more-documentation) |
 | **Effective use of connected context** | The relationships are the answers: current beliefs, conflicts, open questions and evidence chains are each a traversal. Hybrid search (vector plus full text), temporal reads and transactions all run on Relate | [RELATE.md](RELATE.md) |
 | **AI and agentic capabilities** | See the next section | |
 
