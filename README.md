@@ -176,6 +176,7 @@ flowchart LR
 - **A write is a signed change.** It is checked, applied locally, held for 10 seconds so *Undo* can truly remove it, then signed with the author's key and sent.
 - **Machines swap what each is missing** over WebRTC. Changes are forwarded, so members who are never online together still get each other's writes.
 - **Agents are told what a sync means for their person:** your claim was replaced, your question was answered, a new conflict appeared.
+- **Agents are told without asking.** In Claude Code and Codex the plugin's hooks run `vine hook`: at the start of a session it tells the agent what the chat's context is for, and beside each prompt it passes on what other members' changes meant and a one-line reminder of where the chat records. Set `VINE_HOOKS=quiet` to drop the reminder, or `off` for none of it. Codex asks you to trust the hooks once (`/hooks`). Other agents get the same news in front of their next vine tool result.
 
 The full account is in [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md), and the design reasoning in [docs/REPLICATION.md](docs/REPLICATION.md).
 

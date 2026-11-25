@@ -31,6 +31,7 @@ import { packageInfo } from "../core/package-root.js";
 import { autoShare, defaultDataDir } from "../core/paths.js";
 import { LocalHost } from "../host/client.js";
 import { hostAlive, placeReplica, readGroup } from "../host/host.js";
+import { chatMarks, markSeen } from "../host/news.js";
 import { socketPath } from "../host/state.js";
 import { checkStoredTurn, clearTurn, readCloudflare, readTurn, saveTurn, type IceSource } from "../p2p/ice.js";
 import { joinWithCode } from "../p2p/join.js";
@@ -113,6 +114,8 @@ export class Session {
   private modelTools = new Map<string, RegisteredTool>();
   /** Notices not yet shown to the agent: they ride on its next tool result. */
   private news: string[] = [];
+  /** Sync digests not yet shown to the agent. The agent hook may show one first: see withNews. */
+  private digests: { context: string; at?: string; lines: string[] }[] = [];
   /** Where the contexts came from when the chat started. */
   private origin: Origin | null = null;
 
@@ -121,9 +124,12 @@ export class Session {
       { name: "vine-context", version: packageInfo().version },
       {
         capabilities: { tools: { listChanged: true }, resources: {}, prompts: {} },
+        // Some agents read only the start of this (Codex: the first 512 characters), so that much stands alone.
         instructions:
-          "This server holds context graphs (contexts): what a group knows, as claims and questions, shared peer to peer. Every member keeps a full copy, so it works offline. " +
-          "A chat usually uses one context (context_info says which); use_context switches it, add_context adds another, remove_context drops one, and the chat keeps them when reopened. " +
+          "Vine Context holds shared contexts: what a group knows, as dated claims and open questions, synced peer to peer between its members' agents. " +
+          "Use it during ordinary work, not only when asked: when this chat reaches a decision, establishes a fact or leaves a question open that fits its context's purpose, record it (add_claim, ask_question; search first), " +
+          "and look there (search, open_questions) before answering what the group may already know. context_info says which context this chat uses and what it is for. " +
+          "Every member keeps a full copy, so it works offline. A chat usually uses one context; use_context switches it, add_context adds another, remove_context drops one, and the chat keeps them when reopened. " +
           "Call model_guide once before you first write, and follow it. " +
           "To invite someone, use share_context: it makes a join code for one person. To join someone else's context, call join_context with the vine1_ code they sent.",
       },
@@ -220,13 +226,17 @@ export class Session {
     this.contexts.get(name)?.host.close();
     this.contexts.set(name, { name, host, d });
     this.writeTo ??= name;
+    // News starts from when the chat first has the context: whichever of this server and the agent hook tells it first moves the marker on.
+    if (this.o.chat && !chatMarks(this.dataDir, this.o.chat).seen[name]) markSeen(this.dataDir, this.o.chat, name, new Date().toISOString());
     host.on("close", () => this.o.log?.(`local host connection for '${name}' closed`));
     host.on("event", (e: { event: string; data: any }) => {
       if (this.contexts.get(name)?.host !== host) return;
       const where = this.where(name);
       const tag = this.contexts.size > 1 ? ` (${name})` : "";
       if (e.event === "joined") this.news.push(joinNotice(e.data, where));
-      if (e.event === "digest" && Array.isArray(e.data?.lines)) for (const l of e.data.lines) this.news.push(`News${tag}: ${l}`);
+      if (e.event === "digest" && Array.isArray(e.data?.lines)) {
+        this.digests.push({ context: name, at: typeof e.data.at === "string" ? e.data.at : undefined, lines: e.data.lines.map((l: string) => `News${tag}: ${l}`) });
+      }
       if (e.event === "unreachable" && typeof e.data?.message === "string") this.news.push(`News${tag}: ${e.data.message}`);
       if (e.event === "removed") {
         this.news.push(`News: ${e.data?.by ?? "An admin"} removed you from ${where}. You keep your copy to read, but can't write to it any more.`);
@@ -446,10 +456,30 @@ export class Session {
 
   /** Puts any notices in front of a tool result, once. */
   private withNews(out: Content): Content {
-    if (!this.news.length) return out;
-    const lines = this.news.splice(0);
+    const lines = [...this.news.splice(0), ...this.freshDigests()];
+    if (!lines.length) return out;
     out.content.unshift({ type: "text", text: `${lines.join("\n")}\nTell the person this, briefly.` });
     return out;
+  }
+
+  /**
+   * The digest lines the agent hasn't been given yet. The agent hook (`vine hook`)
+   * gives the same digests beside the person's next prompt, so each one is
+   * checked against the chat's marker, and the marker is moved past the ones
+   * given here.
+   */
+  private freshDigests(): string[] {
+    const waiting = this.digests.splice(0);
+    if (!waiting.length) return [];
+    const chat = this.o.chat;
+    const seen = chat ? chatMarks(this.dataDir, chat).seen : {};
+    const lines: string[] = [];
+    for (const d of waiting) {
+      if (d.at && seen[d.context] && d.at <= seen[d.context]!) continue;
+      lines.push(...d.lines);
+      if (chat && d.at) markSeen(this.dataDir, chat, d.context, d.at);
+    }
+    return lines;
   }
 
   /** One of this machine's contexts in full, whether or not the chat uses it: what the panel's details show. */
