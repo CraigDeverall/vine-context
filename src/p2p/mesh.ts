@@ -19,7 +19,7 @@ import nodeDataChannel, { type PeerConnection } from "node-datachannel";
 import type { Change, Have } from "../core/changes.js";
 import { fingerprint, verifySignature, type Identity } from "../core/identity.js";
 import { FramedChannel } from "./channel.js";
-import { rtcConfig, type IceSource } from "./ice.js";
+import { prepareIce, rtcConfig, type IceSource } from "./ice.js";
 import { gathered } from "./invites.js";
 import { b64u, checkProof, proof, type Link } from "./link.js";
 import type { SignalFactory, Signaller } from "./signal.js";
@@ -44,10 +44,18 @@ export interface MeshOptions {
   /** Takes changes from a member; returns those that were new here (to forward). */
   receive(changes: Change[], from: string): Promise<Change[]>;
   onChange?(): void;
+  /**
+   * A member was found through the relays, but links to them keep failing to
+   * connect (their network and this one won't allow a direct connection).
+   * Called once each time a member becomes unreachable.
+   */
+  onUnreachable?(key: string): void;
   log?(m: string): void;
   /** Ping interval and the silence after which a link is dropped. */
   pingMs?: number;
   helloMs?: number;
+  /** How long a link may take to connect before it's dropped (default 45 s). */
+  connectMs?: number;
 }
 
 interface PeerLink {
@@ -66,6 +74,18 @@ interface PeerLink {
   initiator: boolean;
   /** Sync frames that arrived before this side finished checking the link: handled once it has. */
   early: any[];
+}
+
+/** Failed attempts in a row before a member counts as unreachable. */
+const UNREACHABLE_AFTER = 2;
+
+/** A member found through the relays whose links never connect. */
+export interface Unreachable {
+  key: string;
+  fingerprint: string;
+  attempts: number;
+  /** When the first failed attempt in this run was. */
+  since: string;
 }
 
 export interface LinkInfo {
@@ -95,6 +115,7 @@ export class Mesh {
   private timers: NodeJS.Timeout[] = [];
   private stopped = false;
   private lastHelloReply = new Map<string, number>();
+  private failures = new Map<string, { attempts: number; since: string }>();
 
   constructor(private o: MeshOptions) {
     this.room = o.signal(o.group, (m) => void this.onSignal(m));
@@ -122,6 +143,13 @@ export class Mesh {
   /** The signalling relays' states, for status. */
   relayStatus(): Record<string, string> {
     return this.room.status?.() ?? {};
+  }
+
+  /** Members found through the relays whose links keep failing to connect, and who aren't linked now. */
+  unreachable(): Unreachable[] {
+    return [...this.failures.entries()]
+      .filter(([key, f]) => f.attempts >= UNREACHABLE_AFTER && !this.isOnline(key) && this.o.isMember(key))
+      .map(([key, f]) => ({ key, fingerprint: fingerprint(key), attempts: f.attempts, since: f.since }));
   }
 
   isOnline(key: string): boolean {
@@ -179,7 +207,8 @@ export class Mesh {
         this.hello();
         continue;
       }
-      if (l.state === "connecting" && now - l.lastHeard > 45_000) {
+      if (l.state === "connecting" && now - l.lastHeard > (this.o.connectMs ?? 45_000)) {
+        this.noteFailure(l);
         this.close(l, "took too long to connect");
         continue;
       }
@@ -245,12 +274,16 @@ export class Mesh {
     };
     this.links.set(them, l);
     pc.onStateChange((s) => {
+      if (s === "failed" && l.state === "connecting") this.noteFailure(l);
       if (s === "failed" || s === "closed" || s === "disconnected") this.forget(l);
     });
     return l;
   }
 
   private async offer(them: string, key: string) {
+    // Minted TURN credentials (Cloudflare) are fetched or renewed first, if due.
+    await prepareIce(this.o.ice);
+    if (this.stopped || this.links.has(them) || this.linkTo(key)) return;
     const l = this.newLink(them, true, key);
     if (!l) return;
     const dc = l.pc.createDataChannel("vine-mesh");
@@ -278,6 +311,8 @@ export class Mesh {
       if (existing.answer && !existing.initiator) await this.room.send({ type: "answer", from: this.me, to: m.from, ...existing.answer });
       return;
     }
+    await prepareIce(this.o.ice);
+    if (this.stopped || this.links.has(m.from)) return;
     const byKey = this.linkTo(m.key);
     if (byKey?.state === "active" && byKey.them === m.from) return;
     if (byKey) this.close(byKey, "they reconnected");
@@ -328,6 +363,7 @@ export class Mesh {
         if (!this.o.isMember(l.key)) return this.close(l, "not a member");
         l.proven.them = true;
         l.state = "active";
+        this.failures.delete(l.key);
         this.log(`linked with ${fingerprint(l.key)}`);
         this.o.onChange?.();
         this.send(l, { t: "have", have: this.o.have() });
@@ -366,6 +402,21 @@ export class Mesh {
     } catch {
       this.forget(l);
     }
+  }
+
+  /**
+   * A link that got as far as the handshake (both sides' descriptions
+   * swapped through the relays) but never connected: the networks are in the
+   * way, not the relays.
+   */
+  private noteFailure(l: PeerLink) {
+    if (!l.key || l.state !== "connecting" || this.stopped || this.links.get(l.id) !== l) return;
+    if (l.initiator && !l.answer) return; // the answer never came: a relay problem, not a network one
+    const f = this.failures.get(l.key) ?? { attempts: 0, since: new Date().toISOString() };
+    f.attempts++;
+    this.failures.set(l.key, f);
+    this.log(`couldn't connect to ${fingerprint(l.key)} (attempt ${f.attempts}): found through the relays, but no direct or relayed route worked`);
+    if (f.attempts === UNREACHABLE_AFTER) this.o.onUnreachable?.(l.key);
   }
 
   private close(l: PeerLink, reason: string) {

@@ -9,6 +9,8 @@ const USAGE = `vine ${pkg.version}: a shared context graph of claims and questio
 Usage: vine <command> [options]
 
 Commands:
+  setup [--yes] [--agent claude|codex|none] [--turn cloudflare|custom|none] [--json] [--dry-run]
+                                      Set this machine up, or repair it: vine, your agents' plugin, your name, checks, TURN, autostart
   mcp [--context NAME]                Run the MCP server on stdio (a chat keeps the context it chose; a new chat starts with its folder's linked context, else NAME, else none until one is chosen)
   host [--context NAME] [--share] [--idle SECONDS]
                                       Run a context's host in the foreground (--share prints a new join code)
@@ -19,8 +21,10 @@ Commands:
   ui [--context NAME] [--port N] [--open]
                                       Show the console and explorer in a browser
   status [--context NAME]             Show a context's host: sharing, members, links, relays, invites
+  turn set --provider cloudflare [--key-id ID | --account ID]
+                                      Use Cloudflare's TURN server, with a TURN key on your own Cloudflare account (kept in your keychain)
   turn set HOST[:PORT] --user NAME [--tcp | --tls] [--store file|keychain|env]
-                                      Set a TURN server, for members whose networks block direct connections (asks for the password)
+                                      Set a TURN server of your own, for members whose networks block direct connections (asks for the password)
   turn show | test | clear            Show, check or remove the TURN server
   whoami                              Show your name and key fingerprint
   doctor                              Check that this machine can run vine
@@ -36,7 +40,8 @@ Environment:
   VINE_HOLD_MS     How long a write stays on this machine (Undo) before it is sent (default 10000)
   VINE_RELAYS      Nostr relays for signalling, comma-separated
   VINE_ICE         STUN/TURN servers, comma-separated; replaces the defaults and the \`vine turn\` setting
-  VINE_TURN_PASSWORD  The TURN server's password, when it was set with --store env`;
+  VINE_TURN_PASSWORD  The TURN server's password, when it was set with --store env
+  VINE_CLOUDFLARE_TURN_SECRET  The Cloudflare TURN key's secret, when it was set with --store env`;
 
 const graphOpts = { graph: { type: "string" }, context: { type: "string" } } as const;
 const graphName = (v?: string): string => {
@@ -226,7 +231,10 @@ async function status(args: string[]): Promise<number> {
   ]);
   try {
     const c = await LocalHost.connect(socketPath(defaultDataDir(), graphName(values.context ?? values.graph)));
-    console.log(JSON.stringify(await c.request("status"), null, 2));
+    const st = await c.request<Record<string, any>>("status");
+    console.log(JSON.stringify(st, null, 2));
+    // The one thing in there a person should act on, in words (on stderr: stdout stays JSON).
+    if (typeof st.advice === "string") console.error(`\n${st.advice}`);
     c.close();
     return 0;
   } catch {
@@ -247,37 +255,12 @@ async function whoami(): Promise<number> {
 
 /** Reads a password: typed unseen at a terminal, or the first line of piped input. */
 async function readPassword(prompt: string): Promise<string> {
-  const stdin = process.stdin;
-  if (!stdin.isTTY) {
-    let all = "";
-    for await (const chunk of stdin) all += chunk;
-    return all.split(/\r?\n/)[0] ?? "";
-  }
-  process.stderr.write(prompt);
-  stdin.setRawMode(true);
-  stdin.resume();
-  return new Promise((resolve, reject) => {
-    let typed = "";
-    const done = (fn: () => void) => {
-      stdin.setRawMode(false);
-      stdin.pause();
-      stdin.off("data", onData);
-      process.stderr.write("\n");
-      fn();
-    };
-    const onData = (buf: Buffer) => {
-      for (const ch of buf.toString("utf8")) {
-        if (ch === "\r" || ch === "\n") return done(() => resolve(typed));
-        if (ch === "\u0003") return done(() => reject(new Error("Cancelled.")));
-        if (ch === "\u007f" || ch === "\b") typed = typed.slice(0, -1);
-        else typed += ch;
-      }
-    };
-    stdin.on("data", onData);
-  });
+  const { readHidden } = await import("./prompt.js");
+  return readHidden(prompt);
 }
 
 const TURN_USAGE = `Usage:
+  vine turn set --provider cloudflare [--key-id ID | --account ID] [--store keychain|env]
   vine turn set HOST[:PORT] --user NAME [--tcp | --tls] [--store file|keychain|env]
   vine turn show
   vine turn test
@@ -297,8 +280,38 @@ async function turn(args: string[]): Promise<number> {
       const { values, positionals } = parseArgs({
         args: args.slice(1),
         allowPositionals: true,
-        options: { user: { type: "string" }, tcp: { type: "boolean" }, tls: { type: "boolean" }, store: { type: "string" } },
+        options: {
+          user: { type: "string" },
+          tcp: { type: "boolean" },
+          tls: { type: "boolean" },
+          store: { type: "string" },
+          provider: { type: "string" },
+          "key-id": { type: "string" },
+          account: { type: "string" },
+        },
       });
+      if (values.provider !== undefined && values.provider !== "custom") {
+        if (values.provider !== "cloudflare" || positionals.length || values.user || values.tcp || values.tls || (values.store && !["keychain", "env"].includes(values.store))) {
+          console.error(TURN_USAGE);
+          return 2;
+        }
+        const [{ setupCloudflare }, { terminalPrompter }] = await Promise.all([import("./cloudflare-setup.js"), import("./prompt.js")]);
+        const r = await setupCloudflare({
+          dataDir,
+          prompt: terminalPrompter(),
+          say: (l) => console.log(l),
+          keyId: values["key-id"],
+          accountId: values.account,
+          ...(values.account ? { via: "token" as const } : values["key-id"] ? { via: "key" as const } : {}),
+          store: values.store as "keychain" | "env" | undefined,
+        });
+        if (!r.ok) {
+          console.log(`FAIL  ${r.error}`);
+          return 1;
+        }
+        console.log(`ok    Cloudflare lent a relay address (${r.relay}). New connections use it when a direct one isn't possible; nothing needs restarting.`);
+        return 0;
+      }
       const store = (values.store ?? "file") as (typeof SECRET_STORES)[number];
       if (positionals.length !== 1 || !values.user || (values.tcp && values.tls) || !SECRET_STORES.includes(store)) {
         console.error(TURN_USAGE);
@@ -318,18 +331,29 @@ async function turn(args: string[]): Promise<number> {
       return report();
     }
     case "show": {
+      await ice.refreshIce(dataDir);
       const s = ice.resolveIce(dataDir).summary;
       const t = ice.readTurn(dataDir);
+      const cf = ice.readCloudflare(dataDir);
       if (s.source === "env") console.log(`VINE_ICE is set, and replaces the setting here: ${[...s.stun, ...(s.turn ? [s.turn] : [])].join(", ") || "no servers"}`);
-      else if (!t) console.log("No TURN server is set. Members connect directly. Set one with `vine turn set` if a member can't connect.");
-      else console.log(`TURN server: ${s.turn}, user ${t.username}, password store: ${t.store}${s.problem ? `\nNot in use: ${s.problem}.` : ""}`);
+      else if (cf)
+        console.log(
+          `TURN server: ${s.turn}. Provider: Cloudflare, key ${cf.name ? `"${cf.name}" ` : ""}…${cf.keyId.slice(-4)}, secret in ${cf.store === "keychain" ? "your keychain" : ice.CLOUDFLARE_SECRET_ENV}.` +
+            (s.expires ? `\nShort-lived credentials minted, valid until ${s.expires}; renewed automatically.` : "") +
+            (s.problem ? `\nNot in use: ${s.problem}.` : ""),
+        );
+      else if (!t) console.log("No TURN server is set. Members connect directly. If a member can't connect, `vine turn set --provider cloudflare` sets up Cloudflare's on your own account.");
+      else console.log(`TURN server: ${s.turn}, user ${t.username}, password store: ${t.store}. Provider: your own server.${s.problem ? `\nNot in use: ${s.problem}.` : ""}`);
       return 0;
     }
     case "test":
       return report();
-    case "clear":
+    case "clear": {
+      const cf = ice.readCloudflare(dataDir);
       console.log(ice.clearTurn(dataDir) ? "TURN server removed. New connections are direct only." : "No TURN server was set.");
+      if (cf) console.log(`The TURN key itself (…${cf.keyId.slice(-4)}) is still on your Cloudflare account: delete it in the dashboard if you won't use it again.`);
       return 0;
+    }
     default:
       console.log(TURN_USAGE);
       return args[0] ? 2 : 0;
@@ -337,76 +361,10 @@ async function turn(args: string[]): Promise<number> {
 }
 
 async function doctor(): Promise<number> {
-  let failed = 0;
-  const check = async (name: string, fn: () => Promise<string> | string) => {
-    try {
-      console.log(`ok    ${name}: ${await fn()}`);
-    } catch (e) {
-      failed++;
-      console.log(`FAIL  ${name}: ${(e as Error).message}`);
-    }
-  };
-  await check("node", () => {
-    const major = Number(process.versions.node.split(".")[0]);
-    if (major < 20) throw new Error(`Node ${process.versions.node}; vine needs Node 20 or later`);
-    return `${process.versions.node} on ${process.platform}-${process.arch}`;
-  });
-  await check("vine-context", () => pkg.version);
-  await check("relate", async () => {
-    const { loadRelate } = await import("../core/relate.js");
-    const R = await loadRelate();
-    const conn = R.Database.open(":memory:").connect();
-    conn.query("CREATE FULLTEXT INDEX t IF NOT EXISTS FOR (n:T) ON EACH [n.text]");
-    conn.query(
-      "CREATE VECTOR INDEX v IF NOT EXISTS FOR (n:T) ON (n.e) OPTIONS {indexConfig: {`vector.dimensions`: 2, `vector.similarity_function`: 'cosine'}}",
-    );
-    conn.query("CREATE (:T {text: 'hello graph', e: [1.0, 0.0]})");
-    const r = conn.query(
-      "MATCH (n:T) SEARCH n IN (COMBINE (VECTOR INDEX v FOR [1.0, 0.0] LIMIT 5 WEIGHT 1, " +
-        "FULLTEXT INDEX t FOR 'hello' LIMIT 5 WEIGHT 1) USING WRRF WITH CONSTANT 60 LIMIT 5) SCORE AS s RETURN count(n) AS n",
-    );
-    if (Number(r.rows[0]?.n) !== 1) throw new Error("hybrid search returned nothing");
-    return "embedded store, vector + full-text + COMBINE hybrid search";
-  });
-  await check("node-datachannel", async () => {
-    const ndc = (await import("node-datachannel")).default;
-    const pc = new ndc.PeerConnection("doctor", { iceServers: [] });
-    pc.createDataChannel("probe");
-    pc.close();
-    return "WebRTC data channels available";
-  });
-  await check("model", async () => {
-    const { claimsPack } = await import("../core/pack.js");
-    const p = claimsPack();
-    return `${p.model.title}: ${p.tools.length} tools`;
-  });
-  await check("search embedder", async () => {
-    const { makeEmbedder } = await import("../core/embed.js");
-    const e = makeEmbedder();
-    const v = e.embed("hello graph");
-    if (v?.length !== e.dim) throw new Error(`${e.name} returned ${v?.length ?? "no"} numbers, not ${e.dim}`);
-    return e.name === "hash-256" ? `${e.name} (built in; matches words, not meaning)` : `${e.name} (${e.dim} dimensions, matches meaning)`;
-  });
-  await check("data directory", async () => {
-    const { defaultDataDir } = await import("../core/graph.js");
-    const { mkdirSync, accessSync, constants } = await import("node:fs");
-    const dir = defaultDataDir();
-    mkdirSync(dir, { recursive: true });
-    accessSync(dir, constants.W_OK);
-    return dir;
-  });
-  await check("turn server", async () => {
-    const { defaultDataDir } = await import("../core/graph.js");
-    const ice = await import("../p2p/ice.js");
-    const s = ice.resolveIce(defaultDataDir()).summary;
-    if (s.source === "env") return `VINE_ICE is set (${s.turn ?? "no TURN server"})`;
-    if (!s.turn) return "none set: members connect directly (`vine turn set` adds one)";
-    const r = await ice.checkStoredTurn(defaultDataDir());
-    if (!r.ok) throw new Error(`${s.turn}: ${r.error}`);
-    return `${s.turn} answered`;
-  });
-  console.log(failed ? `\n${failed} check(s) failed.` : "\nAll checks passed.");
-  return failed ? 1 : 0;
+  const { runDoctor } = await import("./doctor.js");
+  const r = await runDoctor({ print: (l) => console.log(l) });
+  console.log(r.failed ? `\n${r.failed} check(s) failed.` : "\nAll checks passed.");
+  return r.failed ? 1 : 0;
 }
 
 /** Starts the host of every graph here that is sharing, so they sync without an agent open. */
@@ -511,6 +469,11 @@ switch (command) {
   case "whoami":
     process.exitCode = await whoami();
     break;
+  case "setup": {
+    const { setupCommand } = await import("./setup.js");
+    process.exitCode = await setupCommand(rest);
+    break;
+  }
   case "doctor":
     process.exitCode = await doctor();
     break;

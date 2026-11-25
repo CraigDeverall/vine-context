@@ -32,7 +32,7 @@ import { autoShare, defaultDataDir } from "../core/paths.js";
 import { LocalHost } from "../host/client.js";
 import { hostAlive, placeReplica, readGroup } from "../host/host.js";
 import { socketPath } from "../host/state.js";
-import { checkStoredTurn, clearTurn, readTurn, saveTurn, type IceSource } from "../p2p/ice.js";
+import { checkStoredTurn, clearTurn, readCloudflare, readTurn, saveTurn, type IceSource } from "../p2p/ice.js";
 import { joinWithCode } from "../p2p/join.js";
 import { parseCode } from "../p2p/link.js";
 import type { GraphDescription } from "../p2p/protocol.js";
@@ -227,6 +227,7 @@ export class Session {
       const tag = this.contexts.size > 1 ? ` (${name})` : "";
       if (e.event === "joined") this.news.push(joinNotice(e.data, where));
       if (e.event === "digest" && Array.isArray(e.data?.lines)) for (const l of e.data.lines) this.news.push(`News${tag}: ${l}`);
+      if (e.event === "unreachable" && typeof e.data?.message === "string") this.news.push(`News${tag}: ${e.data.message}`);
       if (e.event === "removed") {
         this.news.push(`News: ${e.data?.by ?? "An admin"} removed you from ${where}. You keep your copy to read, but can't write to it any more.`);
         void this.refresh(name);
@@ -717,6 +718,10 @@ export class Session {
       wrap(async (a: { host: string; port?: number; username: string; transport?: "udp" | "tcp" | "tls" }) => {
         if (process.env.VINE_ICE !== undefined) throw new Error("VINE_ICE is set in this agent's configuration and replaces this setting; change it there, or remove it first.");
         // A server whose password vine keeps is left alone: saving from here would drop that password.
+        if (readCloudflare(this.dataDir))
+          throw new Error(
+            "Cloudflare TURN is set up on this machine, and this tool would replace it. To change it, the person runs `vine turn set` in a terminal; or remove it first with remove_turn_server.",
+          );
         const kept = readTurn(this.dataDir);
         if (kept && kept.store !== "env")
           throw new Error(
