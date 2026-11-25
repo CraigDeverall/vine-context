@@ -580,6 +580,24 @@ export const register: Register = on => {
      * Text with its buttons beside it, at the right; stacked under it when the
      * pane is narrow, so neither is squeezed to a sliver.
      */
+    /** A line of text with a quiet copy button at its end, shown only while the pointer is on the line. */
+    const copyable = (key: string, content: unknown, text: string, what: string) => (
+      <Box key={key} flexDirection="row" gap={1} alignItems="center">
+        <Box flexShrink={1}>{content}</Box>
+        <Box display="none" hover={{ display: 'flex' }} flexShrink={0}>
+          <Button
+            key={`${key}-copy`}
+            label="⧉"
+            plain
+            dimColor
+            onPress={(press: UiPressArgument) =>
+              $.ui.copy({ text, surface: press.surface }).then(r => $.ui.toast(r.isCopied ? `Copied the ${what}: ${text}` : `Couldn’t copy the ${what}.`))
+            }
+          />
+        </Box>
+      </Box>
+    )
+
     const split = (key: string, main: unknown, side: unknown, align: 'center' | 'flex-start' = 'flex-start') => {
       const actions = [side].flat().filter(Boolean)
       const buttons = actions.length > 0 && (
@@ -844,17 +862,26 @@ export const register: Register = on => {
             {heading('Name')}
             {split(
               `name-row-${n}`,
-              <Text weight="semibold" bold wrap="wrap">
-                {n}
-              </Text>,
+              copyable(
+                `context-name-${n}`,
+                <Text weight="semibold" bold wrap="wrap">
+                  {n}
+                </Text>,
+                n,
+                'name',
+              ),
               <Button key={`rename-context-${n}`} label="✎ Rename" variant="secondary" dimColor onPress={() => ((renameText = ''), void update($, renamingContext, () => n))} />,
               'center',
             )}
-            {d?.id && (
-              <Text key={`context-id-${n}`} size="footnote" dimColor mono wrap="wrap">
-                {d.id}
-              </Text>
-            )}
+            {d?.id &&
+              copyable(
+                `context-id-${n}`,
+                <Text size="footnote" dimColor mono wrap="wrap">
+                  {d.id}
+                </Text>,
+                d.id,
+                'id',
+              )}
             {meta(d?.id ? 'The name is this machine’s own; other members may call it something else. The id above is the same for everyone.' : 'This machine’s name for it. Other members have their own.')}
           </Box>
           <Box flexDirection="column" gap="xs">
