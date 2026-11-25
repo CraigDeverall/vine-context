@@ -455,8 +455,13 @@ test('a context opens from the list on its tabs or its Settings tab, an off one 
   await desk.press({ key: 'fold-about-team' })
   expect(await desk.find({ type: 'Text', text: '/data/graphs/team' })).toBeDefined()
   expect(await desk.find({ type: 'Text', text: /7 in all, withdrawn items included/ })).toBeDefined()
-  await desk.press({ key: 'detail-offline-team' })
-  expect(calls).toContainEqual({ tool: 'stop_sharing', args: { context: 'team' } })
+  // What the header already says isn't said again: the description is under its own heading only, the name is the
+  // title, and going offline is the header's switch.
+  expect((await desk.findAll({ type: 'Text', text: ACTIVITY.description })).length).toBe(1)
+  expect(await desk.find({ key: 'edit-description' })).toBeUndefined()
+  expect(await desk.find({ key: 'detail-offline-team' })).toBeUndefined()
+  await desk.press({ key: 'sync-toggle' })
+  expect(calls.some(c => c.tool === 'stop_sharing')).toBe(true)
   await desk.press({ key: 'detail-invite-team' })
   expect(await desk.find({ type: 'Text', text: /Invite someone to team/ })).toBeDefined()
   await desk.press({ key: 'close-invite-step' })
