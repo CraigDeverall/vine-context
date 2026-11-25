@@ -435,7 +435,8 @@ async function openPane($: Engine, contexts = false) {
   await manage($, null)
   if (contexts) await openItem($, null)
   await refresh($)
-  return $.ui.open({ id: PANE, title: 'Context', closeOnEscape: true })
+  // `focus` also brings the panel's tab to the front when it's already open behind another.
+  return $.ui.open({ id: PANE, title: 'Context', focus: true, closeOnEscape: true })
 }
 
 export const register: Register = on => {
