@@ -674,9 +674,13 @@ export const register: Register = on => {
         {text}
       </Text>
     )
-    /** One of a row of choices: the chosen one stands out. */
+    /**
+     * One of a row of choices: the chosen one stands out. On a graphical surface its filled colour says so, and
+     * nothing is added to its label, so the row doesn't shift as the choice moves. A terminal may have no colour
+     * to go by, so there the chosen one is marked with ▸ as well.
+     */
     const chip = (key: string, label: string, active: boolean, onPress: () => void) => (
-      <Button key={key} label={`${active ? '▸ ' : ''}${label}`} variant={active ? 'primary' : 'secondary'} dimColor={!active} onPress={onPress} />
+      <Button key={key} label={`${active && !graphical ? '▸ ' : ''}${label}`} variant={active ? 'primary' : 'secondary'} dimColor={!active} onPress={onPress} />
     )
     const note = await read($, notice)
     const made = await read($, code)
@@ -896,20 +900,22 @@ export const register: Register = on => {
         <Box key={`settings-${n}`} flexDirection="column" gap="md">
           <Box flexDirection="column" gap="xs">
             {heading('Name')}
+            {/* The id every member shares sits right under this machine's name for it, with nothing between. */}
             {split(
               `name-row-${n}`,
-              <Text weight="semibold" bold wrap="wrap">
-                {n}
-              </Text>,
+              [
+                <Text key={`context-name-${n}`} weight="semibold" bold wrap="wrap">
+                  {n}
+                </Text>,
+                d?.id && (
+                  <Text key={`context-id-${n}`} size="footnote" dimColor mono wrap="wrap">
+                    {d.id}
+                  </Text>
+                ),
+              ],
               <Button key={`rename-context-${n}`} label="✎ Rename" variant="secondary" dimColor onPress={() => ((renameText = ''), void update($, renamingContext, () => n))} />,
               'center',
             )}
-            {d?.id && (
-              <Text key={`context-id-${n}`} size="footnote" dimColor mono wrap="wrap">
-                {d.id}
-              </Text>
-            )}
-            {meta(d?.id ? 'The name is this machine’s own; other members may call it something else. The id above is the same for everyone.' : 'This machine’s name for it. Other members have their own.')}
           </Box>
           <Box flexDirection="column" gap="xs">
             {heading('What it’s for')}
@@ -961,17 +967,14 @@ export const register: Register = on => {
                 </Text>
               </Text>
             )}
-            {meta(
-              sharing === false
-                ? 'Your copy keeps working. What you write is sent when you’re back online.'
-                : relays === 0
-                  ? 'This machine can’t reach the servers that help members find each other, so nothing syncs right now.'
-                  : alone
-                    ? d?.open_invites
-                      ? 'Nobody has joined yet. Syncing starts when someone uses a join code you sent.'
-                      : 'Nobody else is in this context yet. Invite someone to share it with them.'
-                    : 'Every member keeps a full copy. Changes travel directly between your machines whenever you’re both online.',
-            )}
+            {/* Said only when something is off, or there's no one to sync with yet: the usual state needs no explaining. */}
+            {sharing === false
+              ? meta('Your copy keeps working. What you write is sent when you’re back online.')
+              : relays === 0
+                ? meta('This machine can’t reach the servers that help members find each other, so nothing syncs right now.')
+                : alone
+                  ? meta(d?.open_invites ? 'Nobody has joined yet. Syncing starts when someone uses a join code you sent.' : 'Nobody else is in this context yet. Invite someone to share it with them.')
+                  : null}
             {(
               <Box flexDirection="row" gap="xs" flexWrap="wrap">
                 {isAdmin && (
@@ -985,7 +988,9 @@ export const register: Register = on => {
                     }}
                   />
                 )}
-                {sharing !== undefined &&
+                {/* The open context's header already has this switch. */}
+                {!inTab &&
+                  sharing !== undefined &&
                   (sharing ? (
                     <Button key={`detail-offline-${n}`} label="Go offline" variant="secondary" dimColor onPress={() => void act($, 'stop_sharing', { context: n }, `'${n}' is offline: not syncing until you go online again.`)} />
                   ) : (
@@ -1686,19 +1691,31 @@ export const register: Register = on => {
             ))}
           </Box>
         )}
-        <Box flexDirection="row" gap="xs" alignItems="flex-start">
-          <Box flexShrink={1}>
-            {a.description ? (
-              <Text wrap="wrap">{a.description}</Text>
-            ) : (
+        {/* What it's for is written out once: in full on the overview, and in Settings under its own heading
+            (where it's edited). The other tabs keep a line of it, so the lists start higher. */}
+        {current === 'settings' ? null : !a.description ? (
+          <Box flexDirection="row" gap="xs" alignItems="flex-start">
+            <Box flexShrink={1}>
               <Text italic dimColor wrap="wrap">
                 No description yet{admin ? '' : ': an admin can add one'}, so agents won’t know what belongs here.
               </Text>
-            )}
+            </Box>
+            {admin && <Button key="edit-description" label="✎" plain dimColor onPress={() => void update($, editing, () => a.context)} />}
           </Box>
-          {admin && <Button key="edit-description" label="✎" plain dimColor onPress={() => void update($, editing, () => a.context)} />}
-        </Box>
-        <Box flexDirection="row" gap="sm" flexWrap="wrap" alignItems="center">
+        ) : current === 'overview' ? (
+          <Box flexDirection="row" gap="xs" alignItems="flex-start">
+            <Box flexShrink={1}>
+              <Text wrap="wrap">{a.description}</Text>
+            </Box>
+            {admin && <Button key="edit-description" label="✎" plain dimColor onPress={() => void update($, editing, () => a.context)} />}
+          </Box>
+        ) : (
+          <Text key="description-line" size="footnote" dimColor wrap="truncate-end">
+            {a.description}
+          </Text>
+        )}
+        {/* Who's in it: the People tab lists them in full, so not above it too. */}
+        <Box flexDirection="row" gap="sm" flexWrap="wrap" alignItems="center" display={current === 'people' ? 'none' : 'flex'}>
           {shown.map((p: Person) => (
             <Box key={`who-${p.fingerprint}`} hover={{ scope: `who-${p.fingerprint}` }}>
               <Text size="footnote" dimColor={!p.online} hover={{ underline: true }}>
@@ -1711,6 +1728,7 @@ export const register: Register = on => {
           {unshown > 0 && <Button key="who-more" label={`+${unshown} more${unshownOnline ? ` · ${unshownOnline} online` : ''}`} plain dimColor onPress={() => setTab('people')} />}
         </Box>
         {graphical &&
+          current !== 'people' &&
           shown.map((p: Person) => (
             <Box key={`who-card-${p.fingerprint}`} display="none" hover={{ scope: `who-${p.fingerprint}`, display: 'flex' }}>
               <Text size="footnote" dimColor>
