@@ -30,7 +30,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, UiPressArgument } from 'claude-code'
 
-import type { Activity, Change, ContextDetails, Filters, GraphEdge, GraphNode, Invite, Latest, Person, Tab } from '../types'
+import type { Activity, Change, ContextDetails, Filters, Found, GraphEdge, GraphNode, Invite, Latest, Person, Tab } from '../types'
 
 const PANE = 'context-graph'
 const POLL_MS = 4000
@@ -57,6 +57,9 @@ export const paneFit = (p: { bodyColumns?: number; placement?: string }): Fit =>
   const cols = p.bodyColumns ?? 80
   return cols < NARROW ? 'narrow' : cols >= WIDE ? 'wide' : 'regular'
 }
+
+// The header names at most this many members (you, then who's online); the People tab has everyone.
+const HEADER_PEOPLE = 6
 const SERVERS = ['plugin_vine-context_vine-context', 'plugin:vine-context:vine-context', 'vine-context']
 const NAME_RE = /^[a-z0-9][a-z0-9-]{0,62}$/
 
@@ -79,6 +82,7 @@ const switching = atom({ plugin: 'vine-context', key: 'switching' } as const, fa
 const detail = atom({ plugin: 'vine-context', key: 'detail' } as const, null)
 const renaming = atom({ plugin: 'vine-context', key: 'renaming' } as const, false)
 const filters = atom({ plugin: 'vine-context', key: 'filters' } as const, { text: '', claims: 'current', questions: 'open' })
+const found = atom({ plugin: 'vine-context', key: 'found' } as const, null)
 const more = atom({ plugin: 'vine-context', key: 'more' } as const, 0)
 const unattached = atom({ plugin: 'vine-context', key: 'unattached' } as const, null)
 const viewing = atom({ plugin: 'vine-context', key: 'viewing' } as const, null)
@@ -192,6 +196,50 @@ export function matches(n: GraphNode, text: string): boolean {
   if (!words.length) return true
   const hay = `${n.title} ${prop(n, 'recorded_by')} ${prop(n, 'source')} ${n.key}`.toLowerCase()
   return words.every(w => hay.includes(w))
+}
+
+/** How many items a filter adds because they're close in meaning, past those that share its words. */
+export const RELATED = 5
+
+/**
+ * A list under the filter: the items that match its words, then up to RELATED
+ * more that the search found close in meaning (`near`, best first), which are
+ * marked so the list can say so.
+ */
+export function filtered<T>(items: T[], key: (x: T) => string, words: (x: T) => boolean, near: string[] | null | undefined): { list: T[]; byMeaning: Set<string> } {
+  const list = items.filter(words)
+  const byMeaning = new Set<string>()
+  if (!near?.length) return { list, byMeaning }
+  const shown = new Set(list.map(key))
+  const byKey = new Map(items.map(x => [key(x), x] as const))
+  for (const id of near) {
+    if (byMeaning.size >= RELATED) break
+    const x = byKey.get(id)
+    if (x !== undefined && !shown.has(id)) {
+      byMeaning.add(id)
+      list.push(x)
+    }
+  }
+  return { list, byMeaning }
+}
+
+/**
+ * Asks the server's search for what the filter's text is close to, in the
+ * context the panel shows, ended items included so History can use it too.
+ * A server from before `include_ended` is asked again without it.
+ */
+async function findRelated($: Engine, text: string, context: string, ctx: Record<string, unknown>) {
+  if (!text) return update($, found, () => null)
+  await update($, found, () => ({ text, context, ids: null }))
+  const ask = { query: text, kind: 'any', limit: 50, ...ctx }
+  const settle = (next: Found) => update($, found, (v: Found | null) => (v?.text === text && v.context === context ? next : v))
+  try {
+    const rows = await call($, 'search', { ...ask, include_ended: true }).catch(() => call($, 'search', ask))
+    const ids = (Array.isArray(rows) ? rows : []).map((r: any) => r?.id).filter((id: unknown): id is string => typeof id === 'string')
+    await settle({ text, context, ids })
+  } catch {
+    await settle({ text, context, ids: [], failed: true })
+  }
 }
 
 /** What the agent is asked from the panel's other buttons: the person steers, the agent records. */
@@ -360,6 +408,9 @@ async function openItem($: Engine, key: string | null) {
   await update($, detail, () => key)
 }
 
+/** A way out of a step (Cancel, Done, Back) leads with a ‹ caret, so it reads as going back. */
+const caret = (label: string) => (label.startsWith('‹') ? label : `‹ ${label}`)
+
 /** Back from an item: to the one opened before it, else to the list. */
 async function backItem($: Engine) {
   trail.pop()
@@ -479,7 +530,8 @@ async function openPane($: Engine, contexts = false) {
   await manage($, null)
   if (contexts) await openItem($, null)
   await refresh($)
-  return $.ui.open({ id: PANE, title: 'Context', closeOnEscape: true })
+  // `focus` also brings the panel's tab to the front when it's already open behind another.
+  return $.ui.open({ id: PANE, title: 'Context', focus: true, closeOnEscape: true })
 }
 
 export const register: Register = on => {
@@ -640,9 +692,13 @@ export const register: Register = on => {
         {text}
       </Text>
     )
-    /** One of a row of choices: the chosen one stands out. */
+    /**
+     * One of a row of choices: the chosen one stands out. On a graphical surface its filled colour says so, and
+     * nothing is added to its label, so the row doesn't shift as the choice moves. A terminal may have no colour
+     * to go by, so there the chosen one is marked with ▸ as well.
+     */
     const chip = (key: string, label: string, active: boolean, onPress: () => void) => (
-      <Button key={key} label={`${active ? '▸ ' : ''}${label}`} variant={active ? 'primary' : 'secondary'} dimColor={!active} onPress={onPress} />
+      <Button key={key} label={`${active && !graphical ? '▸ ' : ''}${label}`} variant={active ? 'primary' : 'secondary'} dimColor={!active} onPress={onPress} />
     )
     const note = await read($, notice)
     const made = await read($, code)
@@ -714,7 +770,7 @@ export const register: Register = on => {
                 {title}
               </Text>
             </Box>
-            {close &&<Button key={`close-${key}`} label={close.label} variant="secondary" dimColor onPress={close.onPress} />}
+            {close && <Button key={`close-${key}`} label={caret(close.label)} variant="secondary" dimColor onPress={close.onPress} />}
           </Box>
           {about && <Text wrap="wrap">{about}</Text>}
         </Box>
@@ -725,7 +781,7 @@ export const register: Register = on => {
 
     /** A label over a field as wide as the panel, with a line of help under it. */
     const field = (label: string, input: unknown, help?: string) => (
-      <Box flexDirection="column" gap="xs">
+      <Box flexDirection="column" gap="xs" width="100%" alignItems="stretch">
         <Text weight="semibold" bold>
           {label}
         </Text>
@@ -812,7 +868,7 @@ export const register: Register = on => {
             void act($, 'link_folder', pinned ? { name: n, off: true } : { name: n }, pinned ? `New chats in this folder no longer start with '${n}'.` : `New chats in this folder start with '${n}'.`)
           }
         >
-          {pinned ? '📌 Pinned to ' : '📌 Pin to '}
+          {pinned ? '📌 On for new chats in ' : '📌 Turn on for new chats in '}
           {/* The folder's end is what tells folders apart, so a long path loses its start. Desktop always
               cuts a Text at its end, so the cut is made here; it leaves more room there for the wider font. */}
           <Text size="footnote" dimColor wrap="truncate-start">
@@ -856,33 +912,37 @@ export const register: Register = on => {
       const count = (k: string, one: string, plural: string) => `${d?.items[k] ?? 0} ${(d?.items[k] ?? 0) === 1 ? one : plural}`
       const description = d ? d.description : descriptionOf(n)
       const fresh = !inTab && madeCode?.name === n ? madeCode : null
+      /** No one else has joined, so there is nobody to sync with. */
+      const alone = d?.members === 1
       return (
         <Box key={`settings-${n}`} flexDirection="column" gap="md">
           <Box flexDirection="column" gap="xs">
             {heading('Name')}
+            {/* The id every member shares sits right under this machine's name for it, with nothing between. */}
             {split(
               `name-row-${n}`,
-              copyable(
-                `context-name-${n}`,
-                <Text weight="semibold" bold wrap="wrap">
-                  {n}
-                </Text>,
-                n,
-                'name',
-              ),
+              [
+                copyable(
+                  `context-name-${n}`,
+                  <Text weight="semibold" bold wrap="wrap">
+                    {n}
+                  </Text>,
+                  n,
+                  'name',
+                ),
+                d?.id &&
+                  copyable(
+                    `context-id-${n}`,
+                    <Text size="footnote" dimColor mono wrap="wrap">
+                      {d.id}
+                    </Text>,
+                    d.id,
+                    'id',
+                  ),
+              ],
               <Button key={`rename-context-${n}`} label="✎ Rename" variant="secondary" dimColor onPress={() => ((renameText = ''), void update($, renamingContext, () => n))} />,
               'center',
             )}
-            {d?.id &&
-              copyable(
-                `context-id-${n}`,
-                <Text size="footnote" dimColor mono wrap="wrap">
-                  {d.id}
-                </Text>,
-                d.id,
-                'id',
-              )}
-            {meta(d?.id ? 'The name is this machine’s own; other members may call it something else. The id above is the same for everyone.' : 'This machine’s name for it. Other members have their own.')}
           </Box>
           <Box flexDirection="column" gap="xs">
             {heading('What it’s for')}
@@ -901,19 +961,21 @@ export const register: Register = on => {
           </Box>
           <Box flexDirection="column" gap="xs">
             {heading('This chat')}
-            <Box flexDirection="row" gap="xs" flexWrap="wrap" alignItems="center">
-              <Button key={`detail-toggle-${n}`} label={c ? '◉ On' : '○ Off'} variant={c ? 'primary' : 'secondary'} dimColor={!c} onPress={() => toggle(n)} />
-              {c && severalOn && !c.writes_here && <Button key={`detail-write-${n}`} label="✎ Write here" variant="secondary" onPress={() => writeHere(n)} />}
-              {c && !inTab && <Button key={`detail-open-${n}`} label="Open" variant="secondary" onPress={() => void show(n)} />}
+            <Box flexDirection="row" gap="xs" justifyContent="space-between" alignItems="center">
+              <Box flexDirection="row" gap="xs" flexWrap="wrap" alignItems="center">
+                <Button key={`detail-toggle-${n}`} label={c ? '◉ On' : '○ Off'} variant={c ? 'primary' : 'secondary'} dimColor={!c} onPress={() => toggle(n)} />
+                {c && severalOn && !c.writes_here && <Button key={`detail-write-${n}`} label="✎ Write here" variant="secondary" onPress={() => writeHere(n)} />}
+              </Box>
+              {c && !inTab && <Button key={`detail-open-${n}`} label="Open ›" variant="secondary" onPress={() => void show(n)} />}
             </Box>
             {meta(
               c
                 ? severalOn
                   ? c.writes_here
-                    ? 'Your agent reads it, and writes here when no other context clearly fits.'
-                    : 'Your agent reads it, and writes here when its description fits.'
-                  : 'Your agent reads and writes here. Turning it off leaves it on this machine.'
-                : 'Off for this chat: your agent doesn’t read it here. Turn it on to use it.',
+                    ? 'Your agent looks things up in this context, and records new items in it unless another context clearly fits better.'
+                    : 'Your agent looks things up in this context, and records a new item in it only when the item fits its description.'
+                  : 'This chat uses this context: your agent looks things up in it and records new claims and questions in it. Turning it off only affects this chat. Your copy stays on this machine.'
+                : 'This chat isn’t using this context. Turn it on to open it here, share it or change its settings.',
             )}
             {pin(n, 'detail-')}
           </Box>
@@ -924,22 +986,22 @@ export const register: Register = on => {
             ) : (
               <Text wrap="wrap">
                 <Text color={sharing ? 'success' : 'warning'}>● </Text>
-                {sharing ? 'Syncing' : 'Offline'}
+                {!sharing ? 'Offline' : alone ? 'Only you so far' : 'Syncing'}
                 <Text dimColor>
-                  {d ? ` · ${d.members} member${d.members === 1 ? '' : 's'}` : ''}
-                  {d && d.members > 1 ? ` · ${d.online} of the others online` : ''}
-                  {d?.open_invites ? ` · ${d.open_invites} join code${d.open_invites === 1 ? '' : 's'} waiting` : ''}
-                  {sharing && relays !== undefined ? ` · ${relays} signalling relay${relays === 1 ? '' : 's'} reachable` : ''}
+                  {!sharing && alone ? ' · only you so far' : ''}
+                  {d && !alone ? ` · ${d.members} members · ${d.online} of the others online now` : ''}
+                  {d?.open_invites ? ` · ${d.open_invites} join code${d.open_invites === 1 ? '' : 's'} not used yet` : ''}
                 </Text>
               </Text>
             )}
-            {meta(
-              sharing === false
-                ? 'Your copy keeps working. What you write is sent when you’re back online.'
-                : relays === 0
-                  ? 'No relay is reachable, so the others can’t find this machine right now.'
-                  : 'Every member keeps a full copy. Changes travel directly between your machines whenever you’re both online.',
-            )}
+            {/* Said only when something is off, or there's no one to sync with yet: the usual state needs no explaining. */}
+            {sharing === false
+              ? meta('Your copy keeps working. What you write is sent when you’re back online.')
+              : relays === 0
+                ? meta('This machine can’t reach the servers that help members find each other, so nothing syncs right now.')
+                : alone
+                  ? meta(d?.open_invites ? 'Nobody has joined yet. Syncing starts when someone uses a join code you sent.' : 'Nobody else is in this context yet. Invite someone to share it with them.')
+                  : null}
             {(
               <Box flexDirection="row" gap="xs" flexWrap="wrap">
                 {isAdmin && (
@@ -953,7 +1015,9 @@ export const register: Register = on => {
                     }}
                   />
                 )}
-                {sharing !== undefined &&
+                {/* The open context's header already has this switch. */}
+                {!inTab &&
+                  sharing !== undefined &&
                   (sharing ? (
                     <Button key={`detail-offline-${n}`} label="Go offline" variant="secondary" dimColor onPress={() => void act($, 'stop_sharing', { context: n }, `'${n}' is offline: not syncing until you go online again.`)} />
                   ) : (
@@ -1133,14 +1197,16 @@ export const register: Register = on => {
               onSelect={(r: string) => void update($, inviting, () => ({ name: n, role: r as Invite['role'] }))}
             />
           )}
-          <Input
-            key="invite-note"
-            label="Who is it for? (optional)"
-            placeholder="e.g. Sam: shown when they join, so a code used by someone else stands out"
-            autoFocus
-            onInput={(v: string) => (inviteNote = v)}
-            onSubmit={make}
-          />
+          {field(
+            'Who is it for? (optional)',
+            <Input
+              key="invite-note"
+              placeholder="e.g. Sam: shown when they join, so a code used by someone else stands out"
+              autoFocus
+              onInput={(v: string) => (inviteNote = v)}
+              onSubmit={make}
+            />,
+          )}
           <Box flexDirection="row">
             <Button key="make-code" label="Make join code" variant="primary" onPress={() => make(inviteNote)} />
           </Box>
@@ -1273,7 +1339,7 @@ export const register: Register = on => {
           )}
           <Box flexDirection="row" gap="xs" flexWrap="wrap">
             <Button key="create-context" label="Create" variant="primary" onPress={() => create()} />
-            <Button key="cancel-create" label="Cancel" variant="secondary" dimColor onPress={close} />
+            <Button key="cancel-create" label="‹ Cancel" variant="secondary" dimColor onPress={close} />
           </Box>
           {meta('It’s yours: you’re its admin, and it’s added to this chat. Invite people from its People tab, or with Share in the list.')}
         </Box>,
@@ -1346,11 +1412,13 @@ export const register: Register = on => {
                     {c.description ?? 'No description yet'}
                   </Text>
                 )}
-                <Box flexDirection="row" gap="xs" flexWrap="wrap" alignItems="center">
-                  {c && <Button key={`open-${n}`} label="Open" variant="secondary" onPress={() => show(n)} />}
-                  <Button key={`settings-${n}`} label="Settings" variant="secondary" dimColor onPress={() => (c ? settingsTab(n) : manage($, n))} />
-                  {c?.role === 'admin' && <Button key={`share-${n}`} label="Share" variant="secondary" dimColor onPress={() => share(n)} />}
-                  {c && many && !c.writes_here && <Button key={`write-${n}`} label="✎ Write here" variant="secondary" dimColor onPress={() => writeHere(n)} />}
+                <Box flexDirection="row" gap="xs" justifyContent="space-between" alignItems="center">
+                  <Box flexDirection="row" gap="xs" flexWrap="wrap" alignItems="center">
+                    <Button key={`settings-${n}`} label="Settings" variant="secondary" dimColor onPress={() => (c ? settingsTab(n) : manage($, n))} />
+                    {c?.role === 'admin' && <Button key={`share-${n}`} label="Share" variant="secondary" dimColor onPress={() => share(n)} />}
+                    {c && many && !c.writes_here && <Button key={`write-${n}`} label="✎ Write here" variant="secondary" dimColor onPress={() => writeHere(n)} />}
+                  </Box>
+                  {c && <Button key={`open-${n}`} label="Open ›" variant="secondary" onPress={() => show(n)} />}
                 </Box>
                 {pin(n, '')}
               </Box>,
@@ -1469,7 +1537,7 @@ export const register: Register = on => {
               {byline(n)} · {n.key}
             </Text>
           </>,
-          <Button key={`open-${n.key}`} label="Open" variant="secondary" dimColor onPress={() => void openItem($, n.key)} />,
+          <Button key={`open-${n.key}`} label="Open ›" variant="secondary" dimColor onPress={() => void openItem($, n.key)} />,
         )
       const group = (title: string, label: string, tone: string | undefined, list: GraphNode[]) =>
         list.length > 0 && (
@@ -1597,8 +1665,16 @@ export const register: Register = on => {
         })
         .then(() => (x === current ? undefined : update($, filters, (v: Filters): Filters => ({ ...v, text: '' }))))
         .then(() => update($, tab, () => x))
-    const setFilter = (patch: Partial<Filters>) => void update($, more, () => 0).then(() => update($, filters, (v: Filters): Filters => ({ ...v, ...patch })))
+    // Returned, so whoever presses waits for the search too.
+    const setFilter = (patch: Partial<Filters>) =>
+      update($, more, () => 0)
+        .then(() => update($, filters, (v: Filters): Filters => ({ ...v, ...patch })))
+        .then(() => (patch.text !== undefined ? findRelated($, patch.text, a.context, ctx) : undefined))
     const members = a.people.filter((p: Person) => p.role)
+    const rank = (p: Person) => (p.you ? 0 : p.online ? 1 : 2)
+    const shown = [...members].sort((x, y) => rank(x) - rank(y)).slice(0, HEADER_PEOPLE)
+    const unshown = members.length - shown.length
+    const unshownOnline = members.filter((p: Person) => p.online).length - shown.filter((p: Person) => p.online).length
     const counts: Record<Tab, number | undefined> = { overview: undefined, questions: t?.open.length, claims: t?.claims.length, people: members.length, settings: undefined }
     const goOnline = <Button key="go-online" label="Go online" variant="primary" onPress={() => void act($, 'start_sharing', { ...ctx }, 'Back online: syncing with the other members.')} />
 
@@ -1642,20 +1718,32 @@ export const register: Register = on => {
             ))}
           </Box>
         )}
-        <Box flexDirection="row" gap="xs" alignItems="flex-start">
-          <Box flexShrink={1}>
-            {a.description ? (
-              <Text wrap="wrap">{a.description}</Text>
-            ) : (
+        {/* What it's for is written out once: in full on the overview, and in Settings under its own heading
+            (where it's edited). The other tabs keep a line of it, so the lists start higher. */}
+        {current === 'settings' ? null : !a.description ? (
+          <Box flexDirection="row" gap="xs" alignItems="flex-start">
+            <Box flexShrink={1}>
               <Text italic dimColor wrap="wrap">
                 No description yet{admin ? '' : ': an admin can add one'}, so agents won’t know what belongs here.
               </Text>
-            )}
+            </Box>
+            {admin && <Button key="edit-description" label="✎" plain dimColor onPress={() => void update($, editing, () => a.context)} />}
           </Box>
-          {admin && <Button key="edit-description" label="✎" plain dimColor onPress={() => void update($, editing, () => a.context)} />}
-        </Box>
-        <Box flexDirection="row" gap="sm" flexWrap="wrap" alignItems="center">
-          {members.map((p: Person) => (
+        ) : current === 'overview' ? (
+          <Box flexDirection="row" gap="xs" alignItems="flex-start">
+            <Box flexShrink={1}>
+              <Text wrap="wrap">{a.description}</Text>
+            </Box>
+            {admin && <Button key="edit-description" label="✎" plain dimColor onPress={() => void update($, editing, () => a.context)} />}
+          </Box>
+        ) : (
+          <Text key="description-line" size="footnote" dimColor wrap="truncate-end">
+            {a.description}
+          </Text>
+        )}
+        {/* Who's in it: the People tab lists them in full, so not above it too. */}
+        <Box flexDirection="row" gap="sm" flexWrap="wrap" alignItems="center" display={current === 'people' ? 'none' : 'flex'}>
+          {shown.map((p: Person) => (
             <Box key={`who-${p.fingerprint}`} hover={{ scope: `who-${p.fingerprint}` }}>
               <Text size="footnote" dimColor={!p.online} hover={{ underline: true }}>
                 <Text color={p.online ? 'success' : undefined}>●</Text> {p.name}
@@ -1664,9 +1752,11 @@ export const register: Register = on => {
               </Text>
             </Box>
           ))}
+          {unshown > 0 && <Button key="who-more" label={`+${unshown} more${unshownOnline ? ` · ${unshownOnline} online` : ''}`} plain dimColor onPress={() => setTab('people')} />}
         </Box>
         {graphical &&
-          members.map((p: Person) => (
+          current !== 'people' &&
+          shown.map((p: Person) => (
             <Box key={`who-card-${p.fingerprint}`} display="none" hover={{ scope: `who-${p.fingerprint}`, display: 'flex' }}>
               <Text size="footnote" dimColor>
                 {p.name} · {p.role}
@@ -1683,14 +1773,24 @@ export const register: Register = on => {
       </Box>
     )
 
-    /** The filter box above a list, and what it's filtering by. */
-    const filterBox = (what: string) => (
-      <Box flexDirection="column" gap="xs">
-        <Input key="filter" value={f.text} placeholder={`Filter ${what} by words, a person or an id`} submitLabel="Filter" onSubmit={(v: string) => setFilter({ text: v.trim() })} />
+    /** The search behind the filter's text, once it has answered for this text in this context. */
+    const search = f.text ? await read($, found) : null
+    const near = search && search.text === f.text && search.context === a.context ? search : null
+    /** The filter box above a list, and what it's filtering by: its words, and how many more are close in meaning. */
+    const filterBox = (what: string, byMeaning: number) => (
+      <Box flexDirection="column" gap="xs" width="100%" alignItems="stretch">
+        <Input key="filter" value={f.text} placeholder={`Search ${what} by meaning, words, a person or an id`} submitLabel="Search" onSubmit={(v: string) => setFilter({ text: v.trim() })} />
         {f.text && (
-          <Box flexDirection="row" gap="xs" flexWrap="wrap" alignItems="center">
-            <Text size="footnote" dimColor>
+          <Box flexDirection="row" gap="xs" alignItems="center" flexWrap="wrap">
+            <Text size="footnote" dimColor wrap="wrap">
               Showing {what} matching “{short(f.text, 40)}”
+              {!near || near.ids === null
+                ? ' · looking for ones close in meaning…'
+                : near.failed
+                  ? ' · search by meaning isn’t available, so only words match'
+                  : byMeaning
+                    ? `, then ${byMeaning} close in meaning`
+                    : ''}
             </Text>
             <Button key="clear-filter" label="× Clear" plain dimColor onPress={() => setFilter({ text: '' })} />
           </Box>
@@ -1723,6 +1823,11 @@ export const register: Register = on => {
       const mineOpen = t.open.filter(th => isMine(th.q) && th.replies.length)
       const digest = a.digest?.at(-1)
       const feed = a.recent
+      // The "you claimed:" part of an activity line is who-did-what metadata: drawn dim so the claim itself reads first.
+      const lead = (c: Change) => {
+        const i = /^(claim|question|reply|describe)$/.test(c.kind) ? c.summary.indexOf(': ') : -1
+        return i < 0 ? { head: '', body: c.summary } : { head: c.summary.slice(0, i + 2), body: c.summary.slice(i + 2) }
+      }
       const ICON: Record<string, string> = { claim: '📌', question: '❓', reply: '↳', link: '🔗', withdraw: '✕', add_member: '👋', remove_member: '🚪', set_role: '🔑', rename: '✎', describe: '✎', create: '✦' }
       const need = (key: string, tone: string, text: unknown, button: unknown) => card(`need-${key}`, split(`need-row-${key}`, <Text wrap="wrap">{text}</Text>, button, 'center'), tone)
       const needs = [
@@ -1814,18 +1919,17 @@ export const register: Register = on => {
               `act-${c.id}`,
               <>
                 <Text wrap="wrap">
-                  <Text dimColor>{ICON[c.kind] ?? '·'} </Text>
-                  <Text weight="semibold" bold>
-                    {c.mine ? 'you' : c.by}
-                  </Text>{' '}
-                  {short(c.summary, 200)}
+                  <Text dimColor>
+                    {ICON[c.kind] ?? '·'} {c.mine ? 'you' : c.by} {lead(c).head}
+                  </Text>
+                  {short(lead(c).body, 200)}
                 </Text>
                 <Text size="footnote" dimColor>
                   {ago(c.at, now)}
                   {c.held ? <Text color="warning"> · still only on this machine</Text> : ''}
                 </Text>
               </>,
-              c.node && rel.byKey.has(c.node) && <Button key={`open-change-${c.id}`} label="Open" variant="secondary" dimColor onPress={() => void openItem($, c.node)} />,
+              c.node && rel.byKey.has(c.node) && <Button key={`open-change-${c.id}`} label="Open ›" variant="secondary" dimColor onPress={() => void openItem($, c.node)} />,
             ),
           )}
           {meta(
@@ -1853,7 +1957,12 @@ export const register: Register = on => {
         mine: [...t.open, ...t.answered].filter(th => isMine(th.q)),
       }
       const scope = f.questions in scopes ? f.questions : 'open'
-      const list = scopes[scope].filter(th => matches(th.q, f.text) || th.replies.some(r => matches(r, f.text)) || th.answers.some(c => matches(c, f.text)))
+      const { list, byMeaning } = filtered(
+        scopes[scope],
+        th => th.q.key,
+        th => matches(th.q, f.text) || th.replies.some(r => matches(r, f.text)) || th.answers.some(c => matches(c, f.text)),
+        near?.ids,
+      )
       const question = (th: Thread) => {
         const q = th.q
         const answered = th.answers.length > 0
@@ -1870,13 +1979,14 @@ export const register: Register = on => {
                 <Text size="footnote" dimColor>
                   asked by {byline(q)}
                   {th.replies.length ? ` · ${th.replies.length} repl${th.replies.length === 1 ? 'y' : 'ies'}` : ''}
+                  {byMeaning.has(q.key) ? ' · close in meaning' : ''}
                   {held(q)}
                 </Text>
               </>,
               [
                 undo(q),
                 answered || !canWrite ? (
-                  <Button key={`open-${q.key}`} label="Open" variant="secondary" dimColor onPress={() => void openItem($, q.key)} />
+                  <Button key={`open-${q.key}`} label="Open ›" variant="secondary" dimColor onPress={() => void openItem($, q.key)} />
                 ) : (
                   <Button key={`answer-${q.key}`} label="Answer" variant="primary" onPress={() => void openItem($, q.key)} />
                 ),
@@ -1924,7 +2034,7 @@ export const register: Register = on => {
             {chip('scope-answered', `Answered ${t.answered.length}`, scope === 'answered', () => setFilter({ questions: 'answered' }))}
             {chip('scope-mine', `Mine ${scopes.mine.length}`, scope === 'mine', () => setFilter({ questions: 'mine' }))}
           </Box>
-          {filterBox('questions')}
+          {filterBox('questions', byMeaning.size)}
           {!list.length &&
             card(
               'empty',
@@ -1953,7 +2063,7 @@ export const register: Register = on => {
         history: rel.history,
       }
       const scope = f.claims in scopes ? f.claims : 'current'
-      const list = scopes[scope].filter(n => matches(n, f.text))
+      const { list, byMeaning } = filtered(scopes[scope], n => n.key, n => matches(n, f.text), near?.ids)
       const pairs = scope === 'history' ? [] : rel.conflicts.filter(([x, y]) => matches(x, f.text) || matches(y, f.text))
       const side = (keep: GraphNode, drop: GraphNode) =>
         split(
@@ -1966,7 +2076,7 @@ export const register: Register = on => {
           </>,
           [
             canWrite && <Button key={`keep-${keep.key}-over-${drop.key}`} label="Keep this one" variant="secondary" onPress={() => void ask($, prompts.settle(keep, drop, named))} />,
-            <Button key={`open-${keep.key}-vs-${drop.key}`} label="Open" variant="secondary" dimColor onPress={() => void openItem($, keep.key)} />,
+            <Button key={`open-${keep.key}-vs-${drop.key}`} label="Open ›" variant="secondary" dimColor onPress={() => void openItem($, keep.key)} />,
           ],
         )
       const badges = (n: GraphNode) => {
@@ -1989,7 +2099,7 @@ export const register: Register = on => {
             {(rel.conflicts.length > 0 || scope === 'conflicts') && chip('scope-conflicts', `⚡ Conflicts ${rel.conflicts.length}`, scope === 'conflicts', () => setFilter({ claims: 'conflicts' }))}
             {chip('scope-history', `History ${rel.history.length}`, scope === 'history', () => setFilter({ claims: 'history' }))}
           </Box>
-          {filterBox('claims')}
+          {filterBox('claims', byMeaning.size)}
           {pairs.map(([x, y]) =>
             card(
               `conflict-${x.key}-${y.key}`,
@@ -2036,6 +2146,7 @@ export const register: Register = on => {
                     </Text>
                     <Text size="footnote" dimColor wrap="wrap">
                       {byline(n)}
+                      {byMeaning.has(n.key) ? ' · close in meaning' : ''}
                       {scope === 'history'
                         ? n.ended
                           ? ` · withdrawn${prop(n, 'withdrawn_by') ? ` by ${prop(n, 'withdrawn_by')}` : ''}${prop(n, 'withdraw_reason') ? `: ${short(prop(n, 'withdraw_reason'), 80)}` : ''}`
@@ -2046,7 +2157,7 @@ export const register: Register = on => {
                       {held(n)}
                     </Text>
                   </>,
-                  [undo(n), <Button key={`open-${n.key}`} label="Open" variant="secondary" dimColor onPress={() => void openItem($, n.key)} />],
+                  [undo(n), <Button key={`open-${n.key}`} label="Open ›" variant="secondary" dimColor onPress={() => void openItem($, n.key)} />],
                 ),
                 heldByNode.has(n.key) ? 'warning' : rel.inConflict.has(n.id) ? 'warning' : undefined,
               )

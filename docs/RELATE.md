@@ -93,59 +93,65 @@ The embedder is a small sentence model (bge-small, 384 numbers) that installs wi
 
 ## Explore the example store
 
-The example is a real investigation in miniature: Alice, Bob and Carol working out why checkout slowed down on 10 Nov 2026. It holds 9 claims, 3 questions and 11 relationships.
+The example is a bit of office life in miniature: Alice, Bob and Carol planning the Christmas party over three days in November 2026. It holds 8 claims (one withdrawn), 3 questions, 3 replies and 14 relationships, of every kind.
 
 Install [Relate's CLI](https://relatedb.ai/docs/get-started/install/), then work on a copy, because Relate tidies a store's files when it opens one.
 
 ```bash
-cp -R "$(npm root -g)/vine-context/examples/data/graphs/incident" /tmp/incident
+cp -R "$(npm root -g)/vine-context/examples/data/graphs/party" /tmp/party
 ```
 
-In a clone of this repo, copy `examples/data/graphs/incident` instead.
+In a clone of this repo, copy `examples/data/graphs/party` instead.
 
-**What's in it?**
+**What's in it?** Two `ABOUT`, five `SUPPORTS`, one `CONTRADICTS`, two `ANSWERS`, one `REPLACES` and three `REPLIES_TO`.
 
 ```bash
-relate -d /tmp/incident --mode table "MATCH ()-[r]->() RETURN type(r) AS relationship, count(*) AS n"
+relate -d /tmp/party --mode table "MATCH ()-[r]->() RETURN type(r) AS relationship, count(*) AS n"
 ```
 
-**Where did the team disagree?** Carol's timing contradicts Bob's first theory.
+**Where did the team disagree?** Carol's reading of the Riverside Room's licence (40 seated) contradicts Bob's claim that it takes the whole party of 48.
 
 ```bash
-relate -d /tmp/incident --mode table "MATCH (a:Claim)-[:CONTRADICTS]->(b:Claim) RETURN a.recorded_by AS who, a.text AS claim, b.recorded_by AS against, b.text AS other"
+relate -d /tmp/party --mode table "MATCH (a:Claim)-[:CONTRADICTS]->(b:Claim) RETURN a.recorded_by AS who, a.text AS claim, b.recorded_by AS against, b.text AS other"
 ```
 
-**How was it settled?** Bob replaced his own claim at 17:40.
+**How was it settled?** Bob replaced his own claim on Tuesday at 16:45: the party is at the Orangery on 19 Dec.
 
 ```bash
-relate -d /tmp/incident --mode table "MATCH (new:Claim)-[r:REPLACES]->(old:Claim) RETURN old.text AS was, new.text AS now, new.recorded_by AS by, r.recorded_at AS at"
+relate -d /tmp/party --mode table "MATCH (new:Claim)-[r:REPLACES]->(old:Claim) RETURN old.text AS was, new.text AS now, new.recorded_by AS by, r.recorded_at AS at"
 ```
 
-**Which questions are answered, and which is still open?**
+**Which questions are answered, and which is still open?** The venue and the budget questions have answers; whether partners are invited has none.
 
 ```bash
-relate -d /tmp/incident --mode table "MATCH (q:Question) OPTIONAL MATCH (c:Claim)-[:ANSWERS]->(q) RETURN q.text AS question, c.text AS answer"
+relate -d /tmp/party --mode table "MATCH (q:Question) OPTIONAL MATCH (c:Claim)-[:ANSWERS]->(q) RETURN q.text AS question, c.text AS answer"
 ```
 
-**What is the conclusion based on?** Follow `SUPPORTS` back to the evidence.
+**What was said in the threads?** A reply is a message in a question's thread, not an answer. Two of these threads were closed by a claim that answers the question; the partners question has only its reply, so it stays open.
 
 ```bash
-relate -d /tmp/incident --mode table "MATCH p=(a:Claim)-[:SUPPORTS*1..3]->(b:Claim) RETURN [n IN nodes(p) | n.text] AS chain"
+relate -d /tmp/party --mode table "MATCH (m:Reply)-[:REPLIES_TO]->(q:Question) RETURN q.text AS question, m.recorded_by AS who, m.text AS reply"
 ```
 
-**What did the team believe at 3:15 pm?** Only what had been recorded by then, and not yet replaced or withdrawn. At that moment Bob's deploy theory and Carol's contradicting claim were both current.
+**What is the decision based on?** Follow `SUPPORTS` back to the evidence: the Orangery's availability, its hire-fee waiver, the budget. The withdrawn claim's link is still in the graph (nothing is deleted), so leave it out by its `withdrawn_at`.
 
 ```bash
-relate -d /tmp/incident --mode table "WITH datetime('2026-11-10T15:15:00Z') AS T MATCH (c:Claim) WHERE c.recorded_at <= T AND (c.withdrawn_at IS NULL OR c.withdrawn_at > T) AND NOT EXISTS { MATCH (:Claim)-[r:REPLACES]->(c) WHERE r.recorded_at <= T } RETURN c.recorded_by AS who, c.text AS believed ORDER BY c.recorded_at"
+relate -d /tmp/party --mode table "MATCH p=(a:Claim)-[:SUPPORTS*1..3]->(b:Claim) WHERE a.withdrawn_at IS NULL RETURN [n IN nodes(p) | n.text] AS chain"
 ```
 
-Change the time to `2026-11-10T18:00:00Z` and the answer changes: the deploy theory is gone and the mobile-retries claim has taken its place.
+**What did the team believe on Monday afternoon?** Only what had been recorded by then, and not yet replaced or withdrawn. At 16:00 on Monday 17 Nov, Bob's Riverside Room claim and Carol's contradicting one were both current.
+
+```bash
+relate -d /tmp/party --mode table "WITH datetime('2026-11-17T16:00:00Z') AS T MATCH (c:Claim) WHERE c.recorded_at <= T AND (c.withdrawn_at IS NULL OR c.withdrawn_at > T) AND NOT EXISTS { MATCH (:Claim)-[r:REPLACES]->(c) WHERE r.recorded_at <= T } RETURN c.recorded_by AS who, c.text AS believed ORDER BY c.recorded_at"
+```
+
+Change the time to `2026-11-19T10:00:00Z` and the answer changes: the Riverside Room is gone, the Orangery has taken its place, and last year's cost (recorded and withdrawn on Tuesday) never shows.
 
 The same store, seen in the explorer with `vine demo`:
 
-![The graph explorer on the example incident graph](images/explorer.jpg)
+![The graph explorer on the example party graph](images/explorer.jpg)
 
-The store was built by [`scripts/make-examples.ts`](../scripts/make-examples.ts) from the signed change log in [`examples/data/hosts/incident/changes.jsonl`](../examples/data/hosts/incident/changes.jsonl). `npm run examples` rebuilds both.
+The store was built by [`scripts/make-examples.ts`](../scripts/make-examples.ts) from the signed change log in [`examples/data/hosts/party/changes.jsonl`](../examples/data/hosts/party/changes.jsonl). `npm run examples` rebuilds both.
 
 ## How agents reach the graph
 

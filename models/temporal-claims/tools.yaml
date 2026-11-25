@@ -43,7 +43,10 @@ tools:
     undo: { tool: withdraw }
     description: >-
       Record one statement you or the person believe is true, in one or two
-      sentences. Link it to existing claims it supports, contradicts or replaces,
+      sentences. Use it in the course of ordinary work, without being asked:
+      when the chat reaches a decision, establishes a fact or settles how
+      something works, and it fits what the context is for.
+      Link it to existing claims it supports, contradicts or replaces,
       and to questions it answers. Use replaces to correct or update an earlier
       claim rather than withdrawing it. Returns the new claim's id.
     input:
@@ -81,7 +84,9 @@ tools:
     view: receipt
     undo: { tool: withdraw }
     description: >-
-      Record something the group needs to find out. Link it to the claims or
+      Record something the group needs to find out. Use it in the course of
+      ordinary work, without being asked: when the chat leaves a question open
+      that someone else in the context may be able to answer. Link it to the claims or
       questions it is about. It stays open until a current claim answers it
       (add_claim with answers, or link with ANSWERS). Search first: the question
       may already be asked or answered.
@@ -176,10 +181,12 @@ tools:
     description: >-
       Find claims and questions related to a text, ranked by hybrid search (meaning
       plus keywords). Returns only claims that are current and questions that are
-      not withdrawn; questions show whether they are answered. Search before
-      adding, to avoid duplicates and to find what to link to.
+      not withdrawn, unless include_ended; questions show whether they are
+      answered. Search before adding, to avoid duplicates and to find what to
+      link to.
     input:
       query: { type: string, required: true, max_length: 1000, description: What to look for }
+      include_ended: { type: boolean, default: false, description: Also find claims that were replaced or withdrawn and questions that were withdrawn (each row says whether it is current) }
       kind: { type: enum, values: [any, claim, question], default: any, description: Only claims, only questions, or both }
       at: { type: datetime, description: Search the graph as it stood at this time (ISO 8601). Default now. }
       limit: { type: integer, min: 1, max: 50, default: 10, description: How many results }
@@ -195,9 +202,12 @@ tools:
           WITH n, score, datetime(coalesce($at, $now)) AS T
           WITH n, score, T
           WHERE ($kind = 'any' OR ($kind = 'claim' AND n:Claim) OR ($kind = 'question' AND n:Question))
-            AND ((n:Claim AND {{current_claim n}}) OR (n:Question AND {{live_question n}}))
+            AND n.recorded_at <= T
+          WITH n, score, T, (n:Claim AND {{current_claim n}}) OR (n:Question AND {{live_question n}}) AS current
+          WHERE current OR $include_ended
           RETURN n.id AS id,
                  CASE WHEN n:Claim THEN 'claim' ELSE 'question' END AS kind,
+                 current,
                  n.text AS text, n.source AS source, n.about_from AS about_from, n.about_to AS about_to,
                  n.recorded_at AS recorded_at, n.recorded_by AS recorded_by,
                  CASE WHEN n:Question THEN NOT ({{open_question n}}) END AS answered,
