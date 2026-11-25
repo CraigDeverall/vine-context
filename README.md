@@ -1,16 +1,31 @@
 <h1 align="center"><img src="docs/images/vine-context-logo.svg" alt="Vine Context" width="460"></h1>
 
-<p align="center"><b>Peer to Peer Graphs</b></p>
+<p align="center"><a href="https://github.com/CraigDeverall/vine-context/actions/workflows/ci.yml"><img src="https://github.com/CraigDeverall/vine-context/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a></p>
 
-**Shared memory for a team's AI agents.** One [Relate](https://relatedb.ai/) context graph of claims and questions, kept in step between everyone's machines, peer to peer, with no server.
+<p align="center"><b>P2P Shared memory graph for a team and their AI agents</b></p>
+
+One [Relate](https://relatedb.ai/) context graph of claims and questions, kept in step between everyone's machines, peer to peer, with no server.
+
+```bash
+npx vine-context setup
+```
+
+One command installs the `vine` command and the plugin for Claude Code or Codex, checks the machine and its network, and repairs it if you run it again. `--dry-run` shows what it would do without changing anything.
+
+<details><summary>By hand</summary>
 
 ```bash
 npm install -g vine-context
 claude plugin marketplace add CraigDeverall/vine-context
 claude plugin install vine-context@vine-context
+vine doctor
 ```
 
-That installs the `vine` command and the Claude Code plugin. Then tell your agent *"start a context called incident-42"*, or look first with no agent at all:
+Codex and other MCP agents: see [the guide](docs/GUIDE.md#install-by-hand). To run it from a clone of this repo instead, see [Setup and run](#1-install-it).
+
+</details>
+
+Then tell your agent *"start a context called incident-42"*, or look first with no agent at all:
 
 ```bash
 vine demo
@@ -99,18 +114,18 @@ Codex and other MCP agents: see [the guide](docs/GUIDE.md#install-by-hand).
 
 </details>
 
-<details><summary>From a clone of this repo</summary>
+<details><summary>From a clone of this repo (no npm registry needed)</summary>
 
 ```bash
 git clone https://github.com/CraigDeverall/vine-context.git
 cd vine-context
 npm ci
 npm run build
-npm install -g .
+npm link
 vine demo
 ```
 
-The example store is then at `examples/data/graphs/party` in the clone.
+`npm link` puts this clone's `vine` command on your PATH, so the plugin steps above work with it too. `npm run check` runs the typecheck, the tests and the build, as CI does.
 
 </details>
 
