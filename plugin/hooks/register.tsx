@@ -1444,7 +1444,7 @@ export const register: Register = on => {
 
     /** The filter box above a list, and what it's filtering by. */
     const filterBox = (what: string) => (
-      <Box flexDirection="column" gap="xs">
+      <Box flexDirection="column" gap="xs" width="100%" alignItems="stretch">
         <Input key="filter" value={f.text} placeholder={`Filter ${what} by words, a person or an id`} submitLabel="Filter" onSubmit={(v: string) => setFilter({ text: v.trim() })} />
         {f.text && (
           <Box flexDirection="row" gap="xs" alignItems="center">
