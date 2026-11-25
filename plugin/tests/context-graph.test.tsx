@@ -448,7 +448,9 @@ test('a context opens from the list on its tabs or its Settings tab, an off one 
   expect(calls).toContainEqual({ tool: 'context_details', args: { name: 'team' } })
   expect(await desk.find({ type: 'Text', text: /6 claims · 2 questions · 2 replies/ })).toBeDefined()
   expect(await desk.find({ type: 'Text', text: /3 members · 1 of the others online · 2 join codes waiting · 3 signalling relays reachable/ })).toBeDefined()
-  // Id, storage and history are behind a link.
+  // The id every member shares sits under this machine's name for it.
+  expect(await desk.find({ type: 'Text', text: '0193-aaaa' })).toBeDefined()
+  // Storage and history are behind a link.
   expect(await desk.find({ type: 'Text', text: '/data/graphs/team' })).toBeUndefined()
   await desk.press({ key: 'fold-about-team' })
   expect(await desk.find({ type: 'Text', text: '/data/graphs/team' })).toBeDefined()

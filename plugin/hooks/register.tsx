@@ -850,7 +850,12 @@ export const register: Register = on => {
               <Button key={`rename-context-${n}`} label="✎ Rename" variant="secondary" dimColor onPress={() => ((renameText = ''), void update($, renamingContext, () => n))} />,
               'center',
             )}
-            {meta('This machine’s name for it. Other members have their own.')}
+            {d?.id && (
+              <Text key={`context-id-${n}`} size="footnote" dimColor mono wrap="wrap">
+                {d.id}
+              </Text>
+            )}
+            {meta(d?.id ? 'The name is this machine’s own; other members may call it something else. The id above is the same for everyone.' : 'This machine’s name for it. Other members have their own.')}
           </Box>
           <Box flexDirection="column" gap="xs">
             {heading('What it’s for')}
@@ -966,11 +971,10 @@ export const register: Register = on => {
                 </Box>
                 {reveal(
                   `about-${n}`,
-                  'Id, storage and history',
-                  'Hide id, storage and history',
+                  'Storage and history',
+                  'Hide storage and history',
                   <Box key={`about-more-${n}`} flexDirection="column">
                     {row('Changes', `${d.changes} in all, withdrawn items included`)}
-                    {row('Id', d.id ?? 'none')}
                     {row('Stored at', d.stored_at)}
                   </Box>,
                 )}
