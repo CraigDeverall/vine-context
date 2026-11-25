@@ -382,6 +382,9 @@ async function openItem($: Engine, key: string | null) {
   await update($, detail, () => key)
 }
 
+/** A way out of a step (Cancel, Done, Back) leads with a ‹ caret, so it reads as going back. */
+const caret = (label: string) => (label.startsWith('‹') ? label : `‹ ${label}`)
+
 /** Back from an item: to the one opened before it, else to the list. */
 async function backItem($: Engine) {
   trail.pop()
@@ -629,7 +632,7 @@ export const register: Register = on => {
             <Text size="title" weight="semibold" bold>
               {title}
             </Text>
-            {close && <Button key={`close-${key}`} label={close.label} variant="secondary" dimColor onPress={close.onPress} />}
+            {close && <Button key={`close-${key}`} label={caret(close.label)} variant="secondary" dimColor onPress={close.onPress} />}
           </Box>
           {about && <Text wrap="wrap">{about}</Text>}
         </Box>
@@ -997,7 +1000,7 @@ export const register: Register = on => {
           )}
           <Box flexDirection="row" gap="xs">
             <Button key="create-context" label="Create" variant="primary" onPress={() => create()} />
-            <Button key="cancel-create" label="Cancel" variant="secondary" dimColor onPress={close} />
+            <Button key="cancel-create" label="‹ Cancel" variant="secondary" dimColor onPress={close} />
           </Box>
           {meta('It’s yours: you’re its admin, and it’s added to this chat. Invite people from its People tab, or with Share in the list.')}
         </Box>,

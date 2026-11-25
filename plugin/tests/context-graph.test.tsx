@@ -464,6 +464,8 @@ test('a context opens from the list on its tabs or its Settings tab, an off one 
   expect(calls).toContainEqual({ tool: 'stop_sharing', args: { context: 'team' } })
   await desk.press({ key: 'detail-invite-team' })
   expect(await desk.find({ type: 'Text', text: /Invite someone to team/ })).toBeDefined()
+  // A way out of a step leads with the ‹ caret, like Back.
+  expect((await desk.find({ key: 'close-invite-step' }))?.text).toBe('‹ Cancel')
   await desk.press({ key: 'close-invite-step' })
   expect((await desk.find({ key: 'tab-settings' }))?.text).toMatch(/^▸ /)
 
