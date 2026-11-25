@@ -16,6 +16,8 @@ import { NoToolCalls, asks, copyText, usePoll, type Bridge } from "../bridge";
 import {
   ago,
   answerPrompt,
+  filtered,
+  ids,
   matches,
   newContextProblem,
   prompts,
@@ -28,6 +30,7 @@ import {
   type Activity,
   type Change,
   type ContextDetails,
+  type Found,
   type Filters,
   type GraphNode,
   type Invite,
@@ -178,6 +181,8 @@ export function Contexts({ b }: { b: Bridge }) {
   const [notice, setNotice] = useState<string | null>(null);
   const [tab, setTabState] = useState<Tab>("overview");
   const [filters, setFilters] = useState<Filters>({ text: "", claims: "current", questions: "open" });
+  /** The search behind the filter's text: the lists add its best matches to those that share its words. */
+  const [found, setFound] = useState<Found | null>(null);
   /** How many more items than the first page a list shows. */
   const [more, setMore] = useState(0);
   /** The item (a claim's or question's key) shown on its own. */
@@ -1061,10 +1066,34 @@ export function Contexts({ b }: { b: Bridge }) {
     setFilters((v) => ({ ...v, ...(x === tab ? {} : { text: "" }), ...patch }));
     setTabState(x);
   };
+  /**
+   * Asks the server's search for what the filter's text is close to, in the
+   * context shown, ended items included so History can use it too. A server
+   * from before `include_ended` is asked again without it.
+   */
+  const findRelated = async (text: string) => {
+    if (!text || !b.canCall) return setFound(null);
+    const context = a.context;
+    setFound({ text, context, ids: null });
+    const ask = { query: text, kind: "any", limit: 50, ...ctx };
+    const settle = (next: Found) => setFound((v) => (v?.text === text && v.context === context ? next : v));
+    try {
+      const rows = await b.call("search", { ...ask, include_ended: true }).catch((e) => {
+        if (e instanceof NoToolCalls) throw e;
+        return b.call("search", ask);
+      });
+      settle({ text, context, ids: ids(rows) });
+    } catch {
+      settle({ text, context, ids: [], failed: true });
+    }
+  };
   const setFilter = (patch: Partial<Filters>) => {
     setMore(0);
     setFilters((v) => ({ ...v, ...patch }));
+    if (patch.text !== undefined) void findRelated(patch.text);
   };
+  /** The search behind the filter's text, once it has answered for this text in this context. */
+  const near = f.text && found && found.text === f.text && found.context === a.context ? found : null;
   const members = a.people.filter((p) => p.role);
   const counts: Record<Tab, number | undefined> = { overview: undefined, questions: t?.open.length, claims: t?.claims.length, people: members.length, settings: undefined };
   const goOnline = (
@@ -1136,14 +1165,23 @@ export function Contexts({ b }: { b: Bridge }) {
     </div>
   );
 
-  /** The filter box above a list, and what it's filtering by. */
-  const filterBox = (what: string) => (
+  /** The filter box above a list, and what it's filtering by: its words, and how many more are close in meaning. */
+  const filterBox = (what: string, byMeaning: number) => (
     <div className="stack sm">
-      <Field key={`filter-${tab}-${f.text}`} value={f.text} placeholder={`Filter ${what} by words, a person or an id`} submit="Filter" onSubmit={(v) => setFilter({ text: v.trim() })} />
+      <Field key={`filter-${tab}-${f.text}`} value={f.text} placeholder={`Search ${what} by meaning, words, a person or an id`} submit="Search" onSubmit={(v) => setFilter({ text: v.trim() })} />
       {f.text && (
         <div className="row">
           <span className="faint">
             Showing {what} matching “{short(f.text, 40)}”
+            {!b.canCall
+              ? ""
+              : !near || near.ids === null
+                ? " · looking for ones close in meaning…"
+                : near.failed
+                  ? " · search by meaning isn’t available, so only words match"
+                  : byMeaning
+                    ? `, then ${byMeaning} close in meaning`
+                    : ""}
           </span>
           <button className="link" onClick={() => setFilter({ text: "" })}>
             × Clear
@@ -1309,7 +1347,12 @@ export function Contexts({ b }: { b: Bridge }) {
   } else if (tab === "questions") {
     const scopes = { open: t.open, answered: t.answered, mine: [...t.open, ...t.answered].filter((th) => isMine(th.q)) };
     const scope = f.questions in scopes ? f.questions : "open";
-    const list = scopes[scope].filter((th) => matches(th.q, f.text) || th.replies.some((r) => matches(r, f.text)) || th.answers.some((c) => matches(c, f.text)));
+    const { list, byMeaning } = filtered(
+      scopes[scope],
+      (th) => th.q.key,
+      (th) => matches(th.q, f.text) || th.replies.some((r) => matches(r, f.text)) || th.answers.some((c) => matches(c, f.text)),
+      near?.ids,
+    );
     const question = (th: Thread) => {
       const q = th.q;
       const answered = th.answers.length > 0;
@@ -1324,6 +1367,7 @@ export function Contexts({ b }: { b: Bridge }) {
                 <Meta>
                   asked by {byline(q)}
                   {th.replies.length ? ` · ${th.replies.length} repl${th.replies.length === 1 ? "y" : "ies"}` : ""}
+                  {byMeaning.has(q.key) ? " · close in meaning" : ""}
                   {held(q)}
                 </Meta>
               </div>
@@ -1383,7 +1427,7 @@ export function Contexts({ b }: { b: Bridge }) {
             Mine {scopes.mine.length}
           </Chip>
         </div>
-        {filterBox("questions")}
+        {filterBox("questions", byMeaning.size)}
         {!list.length && (
           <p className="empty">
             {f.text
@@ -1405,7 +1449,7 @@ export function Contexts({ b }: { b: Bridge }) {
   } else if (tab === "claims") {
     const scopes = { current: t.claims, mine: t.claims.filter(isMine), conflicts: t.claims.filter((n) => rel.inConflict.has(n.id)), history: rel.history };
     const scope = f.claims in scopes ? f.claims : "current";
-    const list = scopes[scope].filter((n) => matches(n, f.text));
+    const { list, byMeaning } = filtered(scopes[scope], (n) => n.key, (n) => matches(n, f.text), near?.ids);
     const pairs = scope === "history" ? [] : rel.conflicts.filter(([x, y]) => matches(x, f.text) || matches(y, f.text));
     const side = (keep: GraphNode, drop: GraphNode) => (
       <div className="item">
@@ -1451,7 +1495,7 @@ export function Contexts({ b }: { b: Bridge }) {
             History {rel.history.length}
           </Chip>
         </div>
-        {filterBox("claims")}
+        {filterBox("claims", byMeaning.size)}
         {pairs.map(([x, y]) => (
           <Card key={`${x.key}-${y.key}`} tone="warn">
             <div className="stack sm">
@@ -1491,6 +1535,7 @@ export function Contexts({ b }: { b: Bridge }) {
                     </p>
                     <Meta>
                       {byline(n)}
+                      {byMeaning.has(n.key) ? " · close in meaning" : ""}
                       {scope === "history"
                         ? n.ended
                           ? ` · withdrawn${prop(n, "withdrawn_by") ? ` by ${prop(n, "withdrawn_by")}` : ""}${prop(n, "withdraw_reason") ? `: ${short(prop(n, "withdraw_reason"), 80)}` : ""}`
