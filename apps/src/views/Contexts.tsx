@@ -449,12 +449,14 @@ export function Contexts({ b }: { b: Bridge }) {
       <div className="stack lg">
         <div className="stack sm">
           <Heading>This chat</Heading>
-          <div className="row">
-            <Chip active={!!c} onClick={() => toggle(n)}>
-              {c ? "◉ On" : "○ Off"}
-            </Chip>
-            {c && severalOn && !c.writes_here && <button onClick={() => writeHere(n)}>✎ Write here</button>}
-            {c && !inTab && <button onClick={() => void show(n)}>Open</button>}
+          <div className="spread">
+            <div className="row">
+              <Chip active={!!c} onClick={() => toggle(n)}>
+                {c ? "◉ On" : "○ Off"}
+              </Chip>
+              {c && severalOn && !c.writes_here && <button onClick={() => writeHere(n)}>✎ Write here</button>}
+            </div>
+            {c && !inTab && <button onClick={() => void show(n)}>Open ›</button>}
           </div>
           <Meta>
             {c
@@ -738,17 +740,13 @@ export function Contexts({ b }: { b: Bridge }) {
                   </Chip>
                 </div>
                 {c && <p className="faint wrap">{c.description ?? "No description yet"}</p>}
-                <div className="row">
-                  {c ? (
-                    <>
-                      <button onClick={() => void show(n)}>Open</button>
-                      <button onClick={() => void settingsTab(n)}>Settings</button>
-                    </>
-                  ) : (
-                    <button onClick={() => void manage(n)}>Settings</button>
-                  )}
-                  {c?.role === "admin" && <button onClick={() => void share(n)}>Share</button>}
-                  {c && many && !c.writes_here && <button onClick={() => writeHere(n)}>✎ Write here</button>}
+                <div className="spread">
+                  <div className="row">
+                    <button onClick={() => void (c ? settingsTab(n) : manage(n))}>Settings</button>
+                    {c?.role === "admin" && <button onClick={() => void share(n)}>Share</button>}
+                    {c && many && !c.writes_here && <button onClick={() => writeHere(n)}>✎ Write here</button>}
+                  </div>
+                  {c && <button onClick={() => void show(n)}>Open ›</button>}
                 </div>
                 {pin(n)}
               </div>
@@ -947,7 +945,7 @@ export function Contexts({ b }: { b: Bridge }) {
             {byline(n)} · {n.key}
           </Meta>
         </div>
-        <button onClick={() => openItem(n.key)}>Open</button>
+        <button onClick={() => openItem(n.key)}>Open ›</button>
       </div>
     );
     const group = (title: string, label: string, tone: Tone, list: GraphNode[]) =>
@@ -1352,7 +1350,7 @@ export function Contexts({ b }: { b: Bridge }) {
                   {c.held && <span className="t-warn"> · still only on this machine</span>}
                 </Meta>
               </div>
-              {c.node && rel.byKey.has(c.node) && <button onClick={() => openItem(c.node)}>Open</button>}
+              {c.node && rel.byKey.has(c.node) && <button onClick={() => openItem(c.node)}>Open ›</button>}
             </div>
           )}
         />
@@ -1392,7 +1390,7 @@ export function Contexts({ b }: { b: Bridge }) {
               <div className="row">
                 {undo(q)}
                 {answered || !canWrite ? (
-                  <button onClick={() => openItem(q.key)}>Open</button>
+                  <button onClick={() => openItem(q.key)}>Open ›</button>
                 ) : (
                   <button className="primary" onClick={() => openItem(q.key)}>
                     Answer
@@ -1479,7 +1477,7 @@ export function Contexts({ b }: { b: Bridge }) {
         </div>
         <div className="row">
           {canWrite && <button onClick={() => void ask(prompts.settle(keep, drop, named))}>Keep this one</button>}
-          <button onClick={() => openItem(keep.key)}>Open</button>
+          <button onClick={() => openItem(keep.key)}>Open ›</button>
         </div>
       </div>
     );
@@ -1566,7 +1564,7 @@ export function Contexts({ b }: { b: Bridge }) {
                   </div>
                   <div className="row">
                     {undo(n)}
-                    <button onClick={() => openItem(n.key)}>Open</button>
+                    <button onClick={() => openItem(n.key)}>Open ›</button>
                   </div>
                 </div>
               </Card>
