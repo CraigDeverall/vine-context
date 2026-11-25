@@ -148,3 +148,17 @@ describe.each(Object.keys(MODELS))("the %s model embedder", (short) => {
     expect(found[0]).toMatchObject({ id: release.id });
   });
 });
+
+describe("searching what has ended", () => {
+  it("leaves out withdrawn claims unless include_ended, and says which rows are current", async () => {
+    const g = await Graph.open({ dataDir: tempDir(), name: "ended", embedder: new TopicEmbedder() });
+    const release = await seed(g);
+    await act(g, "withdraw", { id: release.id, reason: "The date moved" }, alice);
+    // No word in common with the claim: only its vector can find it.
+    const now = (await act(g, "search", { query: "ship" }, reader)) as Row[];
+    expect(now.map((r) => r.id)).not.toContain(release.id);
+    expect(now.every((r) => r.current === true)).toBe(true);
+    const all = (await act(g, "search", { query: "ship", include_ended: true }, reader)) as Row[];
+    expect(all[0]).toMatchObject({ id: release.id, current: false });
+  });
+});

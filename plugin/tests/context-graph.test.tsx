@@ -93,6 +93,9 @@ const START = { cwd: '/', surface: 'desktop', isInteractive: true } as const
 type Calls = { tool: string; args: any }[]
 
 /** Mocks the engine and the vine-context server; a tool named in `failing` answers with that error. */
+/** What the stubbed search finds close in meaning, best first, by query. */
+const HITS: Record<string, string[]> = { outage: ['c_cache', 'c_new', 'c_gone'] }
+
 function engine(on: any, calls: Calls, prompts: string[] = [], state: unknown = ACTIVITY, failing: Record<string, string> = {}) {
   on('command.register', () => ({ value: { command: 'contexts' } }))
   on('clock.every', () => ({ value: undefined }))
@@ -126,11 +129,15 @@ function engine(on: any, calls: Calls, prompts: string[] = [], state: unknown = 
       const d = { ...DETAILS, name: e.args.name, in_chat: e.args.name === 'team', writes_here: e.args.name === 'team' }
       return { value: { content: [{ type: 'text', text: JSON.stringify(d) }], isError: false, structuredContent: d } }
     }
+    if (e.tool === 'search') {
+      const rows = (HITS[e.args.query] ?? []).map(id => ({ id }))
+      return { value: { content: [{ type: 'text', text: JSON.stringify(rows) }], isError: false } }
+    }
     if (e.tool === 'share_context') return { value: { content: [{ type: 'text', text: '{}' }], isError: false, structuredContent: { send: 'Join my context graph: /vine-context:join vine1_x.y', invite: { id: 'inv_1' } } } }
     return { value: { content: [{ type: 'text', text: '{}' }], isError: false } }
   })
 }
-const acts = (calls: Calls) => calls.filter(c => c.tool !== 'context_activity')
+const acts = (calls: Calls) => calls.filter(c => c.tool !== 'context_activity' && c.tool !== 'search')
 
 test('the band shows loading until the server answers', async ($, on) => {
   engine(on, [])
@@ -652,4 +659,39 @@ test('the create, details and delete steps draw in the terminal too', async ($, 
   expect(await term.find({ key: 'ask-delete-team' })).toBeDefined()
   expect(acts(calls).some(c => c.tool === 'delete_context')).toBe(false)
   await term.unmount()
+})
+
+test('the filter adds what the search finds close in meaning, after what shares its words, in History too', async ($, on) => {
+  const calls: Calls = []
+  engine(on, calls)
+  await $.session.start(START)
+  await $.command.run(RUN)
+  const desk = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await desk.press({ key: 'tab-claims' })
+  await desk.input({ key: 'filter', text: 'outage', kind: 'submit' })
+  expect(calls).toContainEqual({ tool: 'search', args: { query: 'outage', kind: 'any', limit: 50, include_ended: true } })
+  // Both outage claims share the word; the search adds the cache claim, marked, and not the deploy claim it didn't find.
+  expect(await desk.find({ type: 'Text', text: /Showing claims matching “outage”, then 1 close in meaning/ })).toBeDefined()
+  expect(await desk.find({ type: 'Text', text: /The cache caused it/ })).toBeDefined()
+  expect(await desk.find({ type: 'Text', text: /· close in meaning/ })).toBeDefined()
+  expect(await desk.find({ type: 'Text', text: /The deploy caused it/ })).toBeUndefined()
+  // History keeps the filter and finds the withdrawn claim by meaning alone.
+  await desk.press({ key: 'scope-history' })
+  expect(await desk.find({ type: 'Text', text: /It was a DNS problem/ })).toBeDefined()
+  expect(await desk.find({ type: 'Text', text: /then 1 close in meaning/ })).toBeDefined()
+})
+
+test('the filter falls back to words when the search fails', async ($, on) => {
+  const calls: Calls = []
+  engine(on, calls, [], ACTIVITY, { search: 'no such tool' })
+  await $.session.start(START)
+  await $.command.run(RUN)
+  const desk = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await desk.press({ key: 'tab-claims' })
+  await desk.input({ key: 'filter', text: 'outage', kind: 'submit' })
+  // Asked once with include_ended, then again without it, as an older server would need.
+  expect(calls.filter(c => c.tool === 'search').map(c => 'include_ended' in c.args)).toEqual([true, false])
+  expect(await desk.find({ type: 'Text', text: /search by meaning isn’t available, so only words match/ })).toBeDefined()
+  expect(await desk.find({ type: 'Text', text: /The outage lasted 6 minutes/ })).toBeDefined()
+  expect(await desk.find({ type: 'Text', text: /The cache caused it/ })).toBeUndefined()
 })

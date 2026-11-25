@@ -185,6 +185,41 @@ export function relations(nodes: GraphNode[], edges: GraphEdge[]) {
   return { byId, byKey, replacedBy, current, linked, conflicts, inConflict, history };
 }
 
+/**
+ * What the server's search (meaning plus keywords) found for the filter's text
+ * in a context, best first: item ids, or null while it's looking.
+ */
+export type Found = { text: string; context: string; ids: string[] | null; failed?: boolean };
+
+/** How many items a filter adds because they're close in meaning, past those that share its words. */
+export const RELATED = 5;
+
+/**
+ * A list under the filter: the items that match its words, then up to RELATED
+ * more that the search found close in meaning (`near`, best first), which are
+ * marked so the list can say so.
+ */
+export function filtered<T>(items: T[], key: (x: T) => string, words: (x: T) => boolean, near: string[] | null | undefined): { list: T[]; byMeaning: Set<string> } {
+  const list = items.filter(words);
+  const byMeaning = new Set<string>();
+  if (!near?.length) return { list, byMeaning };
+  const shown = new Set(list.map(key));
+  const byKey = new Map(items.map((x) => [key(x), x] as const));
+  for (const id of near) {
+    if (byMeaning.size >= RELATED) break;
+    const x = byKey.get(id);
+    if (x !== undefined && !shown.has(id)) {
+      byMeaning.add(id);
+      list.push(x);
+    }
+  }
+  return { list, byMeaning };
+}
+
+/** The item ids in a search tool's rows. */
+export const ids = (rows: unknown): string[] =>
+  (Array.isArray(rows) ? rows : []).map((r: any) => r?.id).filter((id: unknown): id is string => typeof id === "string");
+
 /** Whether an item matches the filter's words: all of them, anywhere in its text, author, source or id. */
 export function matches(n: GraphNode, text: string): boolean {
   const words = text.toLowerCase().split(/\s+/).filter(Boolean);
