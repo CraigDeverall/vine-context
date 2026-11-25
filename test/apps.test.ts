@@ -248,6 +248,8 @@ describe("names, auto-share and which graph", () => {
     delete process.env.VINE_USER;
     try {
       const me = await agent("first", "main", { storedName: true });
+      // Until they choose a name, an invite's result says where the name came from.
+      expect((await me.call("share_context")).your_name).toContain(`'${defaultName(me.dataDir)}'`);
       const r = await me.call("set_my_name", { name: "Craig Deverall" });
       expect(r).toMatchObject({ name: "Craig Deverall", fingerprint: expect.stringMatching(/^[0-9a-f]{4}-/) });
       expect(defaultName(me.dataDir)).toBe("Craig Deverall");
@@ -255,6 +257,7 @@ describe("names, auto-share and which graph", () => {
       const c = await me.call("add_claim", { text: "Recorded after the rename" });
       expect(await me.call("history", { id: c.result.id })).toMatchObject({ item: { recorded_by: "Craig Deverall" } });
       expect(await me.call("open_console")).toMatchObject({ you: { name: "Craig Deverall", name_from: "set_my_name" } });
+      expect(await me.call("share_context")).not.toHaveProperty("your_name");
       expect((await me.raw("set_my_name", { name: "<script>" })).isError).toBe(true);
     } finally {
       if (before !== undefined) process.env.VINE_USER = before;

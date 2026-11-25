@@ -11,7 +11,7 @@ interface World {
   claudeMarkets?: string;
   codexPlugins?: string;
   codexMarkets?: string;
-  name?: { name: string; source: string };
+  name?: { name: string; source: import("../src/core/identity.js").NameSource };
   needsTurn?: boolean;
   turn?: { turn: string | null; provider?: "cloudflare" | "custom"; source?: "default" | "setting" | "env"; works?: boolean };
   autostart?: boolean;
@@ -92,6 +92,17 @@ describe("vine setup", () => {
     expect(step(r.steps, "plugin:claude").status).toBe("done");
     expect(step(r.steps, "turn").status).toBe("skipped"); // the network looks fine: the default is skip
     expect(r.exitCode).toBe(0);
+  });
+
+  it("asks for a name when the one it found is a guess, and doesn't save the guess when it's kept", async () => {
+    const f = fake({ onPath: { vine: "/bin/vine" }, vineVersion: "0.2.0", name: { name: "Brisk Otter", source: "generated" }, autostart: true });
+    const r = await f.run({ agents: "none" });
+    expect(f.named).toEqual([]);
+    expect(step(r.steps, "name")).toMatchObject({ status: "skipped", detail: expect.stringContaining("Brisk Otter for now (made up)") });
+    // A name found on the computer account is kept as theirs, like git's.
+    const g = fake({ onPath: { vine: "/bin/vine" }, vineVersion: "0.2.0", name: { name: "Craig Deverall", source: "os" }, autostart: true });
+    await g.run({ agents: "none" });
+    expect(g.named).toEqual(["Craig Deverall"]);
   });
 
   it("run again on a set-up machine: changes nothing", async () => {

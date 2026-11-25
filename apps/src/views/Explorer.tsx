@@ -4,7 +4,7 @@
 // relationship type is a dash pattern plus the legend, never colour alone.
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { when, type Bridge } from "../bridge";
+import { usePoll, when, type Bridge } from "../bridge";
 
 interface SNode {
   id: string;
@@ -201,6 +201,11 @@ export function Explorer({ b }: { b: Bridge }) {
     }
     return s;
   }, [snap, selected]);
+
+  // While showing "now", keep up with changes arriving from other members (a replayed moment stays as it is).
+  usePoll(() => {
+    if (b.canCall && at === undefined && !busy) void load();
+  }, 2500, [b.canCall, at, busy]);
 
   const load = async (when?: number) => {
     setBusy(true);

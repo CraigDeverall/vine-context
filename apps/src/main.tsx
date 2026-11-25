@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
-import { NoToolCalls, useBridge, type Bridge } from "./bridge";
+import { NoToolCalls, asks, useBridge, type Bridge } from "./bridge";
 import type { Panel } from "./panel";
 import "./styles.css";
 import { Conflicts } from "./views/Conflicts";
@@ -48,7 +48,7 @@ function Root() {
       await setMode(["fullscreen", "pip"]);
     } catch (e) {
       if (!(e instanceof NoToolCalls)) return setError((e as Error).message);
-      await b.say(`Please run the vine-context tool ${PANEL_TOOL[view]} (from the view, which can't run tools in this app).`);
+      await b.say(asks(PANEL_TOOL[view], {}));
     }
   };
   const back = async () => {

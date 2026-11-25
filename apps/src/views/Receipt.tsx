@@ -45,7 +45,7 @@ export function Receipt({ b, open }: { b: Bridge; open?: (p: Panel) => void }) {
     setError(undefined);
     try {
       const how = await b.run(tool, args, asks(tool, args));
-      setUndone(how === "called" ? done : `Asked the agent to run ${tool}: this app can't run it from here. Check its reply.`);
+      setUndone(how === "called" ? done : "Asked your agent to do that. Check its reply.");
     } catch (e) {
       setError((e as Error).message);
     } finally {

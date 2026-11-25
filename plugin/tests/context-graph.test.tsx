@@ -93,6 +93,9 @@ const START = { cwd: '/', surface: 'desktop', isInteractive: true } as const
 type Calls = { tool: string; args: any }[]
 
 /** Mocks the engine and the vine-context server; a tool named in `failing` answers with that error. */
+/** What the stubbed search finds close in meaning, best first, by query. */
+const HITS: Record<string, string[]> = { outage: ['c_cache', 'c_new', 'c_gone'] }
+
 function engine(on: any, calls: Calls, prompts: string[] = [], state: unknown = ACTIVITY, failing: Record<string, string> = {}) {
   on('command.register', () => ({ value: { command: 'contexts' } }))
   on('clock.every', () => ({ value: undefined }))
@@ -126,11 +129,15 @@ function engine(on: any, calls: Calls, prompts: string[] = [], state: unknown = 
       const d = { ...DETAILS, name: e.args.name, in_chat: e.args.name === 'team', writes_here: e.args.name === 'team' }
       return { value: { content: [{ type: 'text', text: JSON.stringify(d) }], isError: false, structuredContent: d } }
     }
+    if (e.tool === 'search') {
+      const rows = (HITS[e.args.query] ?? []).map(id => ({ id }))
+      return { value: { content: [{ type: 'text', text: JSON.stringify(rows) }], isError: false } }
+    }
     if (e.tool === 'share_context') return { value: { content: [{ type: 'text', text: '{}' }], isError: false, structuredContent: { send: 'Join my context graph: /vine-context:join vine1_x.y', invite: { id: 'inv_1' } } } }
     return { value: { content: [{ type: 'text', text: '{}' }], isError: false } }
   })
 }
-const acts = (calls: Calls) => calls.filter(c => c.tool !== 'context_activity')
+const acts = (calls: Calls) => calls.filter(c => c.tool !== 'context_activity' && c.tool !== 'search')
 
 test('the band shows loading until the server answers', async ($, on) => {
   engine(on, [])
@@ -179,6 +186,9 @@ test('the overview says what needs you, hands steering to the agent, and opens i
   expect((await desk.find({ key: 'sync-toggle' }))?.text).toMatch(/Go offline/)
   for (const gone of ['refresh', 'add-claim', 'ask-question']) expect(await desk.find({ key: gone })).toBeUndefined()
   expect(await desk.find({ type: 'Svg' })).toBeUndefined()
+  // An activity line's who-did-what lead is dim, so the claim itself reads first.
+  const lead = await desk.find({ type: 'Text', text: /^📌 bob claimed: $/ })
+  expect(lead?.props?.dimColor).toBe(true)
 
   // What needs you: the conflict, your question's replies, the open question, the waiting codes; your held write, to undo.
   expect(await desk.find({ type: 'Text', text: /1 pair of claims can’t both be true/ })).toBeDefined()
@@ -377,8 +387,8 @@ test('the Contexts view turns contexts on and off, creates one in its own step, 
   expect(calls).toContainEqual({ tool: 'remove_context', args: { name: 'team' } })
   // Each context has its own pin for the chat's folder, whose path keeps its end.
   // The folder shows as much of its path as the pane has room for.
-  expect((await desk.find({ key: 'pin-team' }))?.text).toBe('📌 Pin to /Users/alice/work/shop/services/checkout')
-  expect((await desk.find({ key: 'pin-own' }))?.text).toBe('📌 Pinned to /Users/alice/work/shop/services/checkout')
+  expect((await desk.find({ key: 'pin-team' }))?.text).toBe('📌 Turn on for new chats in /Users/alice/work/shop/services/checkout')
+  expect((await desk.find({ key: 'pin-own' }))?.text).toBe('📌 On for new chats in /Users/alice/work/shop/services/checkout')
   expect(await desk.find({ key: 'link-folder' })).toBeUndefined()
   await desk.press({ key: 'pin-team' })
   expect(calls).toContainEqual({ tool: 'link_folder', args: { name: 'team' } })
@@ -447,7 +457,7 @@ test('a context opens from the list on its tabs or its Settings tab, an off one 
   expect((await desk.find({ key: 'tab-settings' }))?.text).toMatch(/^▸ /)
   expect(calls).toContainEqual({ tool: 'context_details', args: { name: 'team' } })
   expect(await desk.find({ type: 'Text', text: /6 claims · 2 questions · 2 replies/ })).toBeDefined()
-  expect(await desk.find({ type: 'Text', text: /3 members · 1 of the others online · 2 join codes waiting · 3 signalling relays reachable/ })).toBeDefined()
+  expect(await desk.find({ type: 'Text', text: /Syncing · 3 members · 1 of the others online now · 2 join codes not used yet/ })).toBeDefined()
   // Id, storage and history are behind a link.
   expect(await desk.find({ type: 'Text', text: '/data/graphs/team' })).toBeUndefined()
   await desk.press({ key: 'fold-about-team' })
@@ -457,6 +467,8 @@ test('a context opens from the list on its tabs or its Settings tab, an off one 
   expect(calls).toContainEqual({ tool: 'stop_sharing', args: { context: 'team' } })
   await desk.press({ key: 'detail-invite-team' })
   expect(await desk.find({ type: 'Text', text: /Invite someone to team/ })).toBeDefined()
+  // A way out of a step leads with the ‹ caret, like Back.
+  expect((await desk.find({ key: 'close-invite-step' }))?.text).toBe('‹ Cancel')
   await desk.press({ key: 'close-invite-step' })
   expect((await desk.find({ key: 'tab-settings' }))?.text).toMatch(/^▸ /)
 
@@ -672,7 +684,7 @@ test('a narrow pane stacks each row’s buttons under its text, and the details�
   await narrow.press({ key: 'tab-settings' })
   expect((await narrow.find({ key: 'detail-Your role' }))?.props.flexDirection).toBe('column')
   // The folder keeps only the end of its path that fits.
-  expect((await narrow.find({ key: 'pin-detail-team' }))?.text).toBe('📌 Pin to …es/checkout')
+  expect((await narrow.find({ key: 'pin-detail-team' }))?.text).toBe('📌 Turn on for new chats in …es/checkout')
   await narrow.unmount()
 
   const roomy = await $.ui.mount({ ...sized(90), surface: 'desktop' })
@@ -714,4 +726,55 @@ test('minimized to a widget, the pane is a glance with nothing to press, and exp
   expect(await docked.find({ key: 'glance' })).toBeUndefined()
   expect((await docked.find({ key: 'tab-overview' }))?.text).toMatch(/^▸ /)
   await docked.unmount()
+})
+
+test('the filter adds what the search finds close in meaning, after what shares its words, in History too', async ($, on) => {
+  const calls: Calls = []
+  engine(on, calls)
+  await $.session.start(START)
+  await $.command.run(RUN)
+  const desk = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await desk.press({ key: 'tab-claims' })
+  await desk.input({ key: 'filter', text: 'outage', kind: 'submit' })
+  expect(calls).toContainEqual({ tool: 'search', args: { query: 'outage', kind: 'any', limit: 50, include_ended: true } })
+  // Both outage claims share the word; the search adds the cache claim, marked, and not the deploy claim it didn't find.
+  expect(await desk.find({ type: 'Text', text: /Showing claims matching “outage”, then 1 close in meaning/ })).toBeDefined()
+  expect(await desk.find({ type: 'Text', text: /The cache caused it/ })).toBeDefined()
+  expect(await desk.find({ type: 'Text', text: /· close in meaning/ })).toBeDefined()
+  expect(await desk.find({ type: 'Text', text: /The deploy caused it/ })).toBeUndefined()
+  // History keeps the filter and finds the withdrawn claim by meaning alone.
+  await desk.press({ key: 'scope-history' })
+  expect(await desk.find({ type: 'Text', text: /It was a DNS problem/ })).toBeDefined()
+  expect(await desk.find({ type: 'Text', text: /then 1 close in meaning/ })).toBeDefined()
+})
+
+test('the filter falls back to words when the search fails', async ($, on) => {
+  const calls: Calls = []
+  engine(on, calls, [], ACTIVITY, { search: 'no such tool' })
+  await $.session.start(START)
+  await $.command.run(RUN)
+  const desk = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await desk.press({ key: 'tab-claims' })
+  await desk.input({ key: 'filter', text: 'outage', kind: 'submit' })
+  // Asked once with include_ended, then again without it, as an older server would need.
+  expect(calls.filter(c => c.tool === 'search').map(c => 'include_ended' in c.args)).toEqual([true, false])
+  expect(await desk.find({ type: 'Text', text: /search by meaning isn’t available, so only words match/ })).toBeDefined()
+  expect(await desk.find({ type: 'Text', text: /The outage lasted 6 minutes/ })).toBeDefined()
+  expect(await desk.find({ type: 'Text', text: /The cache caused it/ })).toBeUndefined()
+})
+
+test('with many members, the header names you and who is online first, and the rest are a link to People', async ($, on) => {
+  const calls: Calls = []
+  const extra = Array.from({ length: 17 }, (_, i) => ({ name: `member${i + 1}`, fingerprint: `ffff-0000-${String(i).padStart(4, '0')}`, role: 'contributor', you: false, creator: false, online: i === 16, agent: null, platform: null }))
+  const crowd = { ...ACTIVITY, people: [...extra, ...ACTIVITY.people], members: 20 }
+  engine(on, calls, [], crowd)
+  await $.session.start(START)
+  await $.command.run(RUN)
+  const desk = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  // You and the two online come first, whatever order they arrive in; the 14 left over fold behind the link.
+  for (const name of ['alice', 'bob', 'member17']) expect(await desk.find({ type: 'Text', text: new RegExp(`● ${name}\\b`) })).toBeDefined()
+  expect(await desk.find({ type: 'Text', text: /● member10\b/ })).toBeUndefined()
+  expect((await desk.find({ key: 'who-more' }))?.text).toBe('+14 more')
+  await desk.press({ key: 'who-more' })
+  expect((await desk.find({ key: 'tab-people' }))?.text).toMatch(/^▸ 👥 People/)
 })
