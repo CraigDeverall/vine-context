@@ -3,6 +3,7 @@
 
 import { App, applyDocumentTheme, applyHostStyleVariables, type McpUiHostContext } from "@modelcontextprotocol/ext-apps";
 import { useEffect, useState } from "react";
+import { setHostLook } from "./theme";
 
 type CallResult = { content?: { type: string; text?: string }[]; structuredContent?: unknown; isError?: boolean };
 
@@ -42,6 +43,7 @@ function applyContext(ctx: McpUiHostContext | undefined) {
   if (!ctx) return;
   if (ctx.theme) applyDocumentTheme(ctx.theme);
   if (ctx.styles?.variables) applyHostStyleVariables(ctx.styles.variables);
+  setHostLook(ctx as Parameters<typeof setHostLook>[0]);
 }
 
 /** The host can't pass a view's tool calls on to the server (some hosts show views but don't relay their calls). */

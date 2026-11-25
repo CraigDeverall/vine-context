@@ -45,8 +45,8 @@ async function bundle(entry, file, icon = "") {
     logLevel: "warning",
     legalComments: "none",
     plugins: [englishOnly],
-    // The views are written against React's API and run on Preact: a tenth of the size.
-    alias: { react: "preact/compat", "react-dom": "preact/compat", "react/jsx-runtime": "preact/jsx-runtime", "react-dom/client": "preact/compat/client" },
+    // The views are built on @squonk/ui (React 19); its Latin fonts are embedded.
+    loader: { ".woff2": "dataurl" },
   });
   const js = r.outputFiles.find((f) => f.path.endsWith(".js")).text.replaceAll("</script", "<\\/script");
   const css = (r.outputFiles.find((f) => f.path.endsWith(".css"))?.text ?? "").replaceAll("</style", "<\\/style");

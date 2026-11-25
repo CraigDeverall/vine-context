@@ -6,10 +6,16 @@
 import { AppBridge, PostMessageTransport } from "@modelcontextprotocol/ext-apps/app-bridge";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { Alert } from "@squonk/ui/alert";
+import { Container } from "@squonk/ui/container";
+import { Tabs } from "@squonk/ui/tabs";
+import { Textarea } from "@squonk/ui/textarea";
+import { VStack } from "@squonk/ui/vstack";
 import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { LOGO_PATH, LOGO_VIEWBOX } from "./logo";
+import { Brand } from "./brand";
 import "./styles.css";
+import { VineTheme } from "./theme";
 
 interface AppTool {
   name: string;
@@ -83,7 +89,7 @@ function View({ client, tool: { name, title, uri }, onMessage }: { client: Clien
 
   return (
     <>
-      {error && <p className="notice bad">{error}</p>}
+      {error && <Alert tone="error">{error}</Alert>}
       <iframe ref={frame} title={title} sandbox="allow-scripts" style={{ width: "100%", height, border: 0, display: "block" }} />
     </>
   );
@@ -114,38 +120,43 @@ function Shell() {
   };
 
   const tool = tools.find((t) => t.name === active) ?? tools[0];
+  const label = (t: AppTool) => t.title.replace(/^Open the /, "").replace(/^./, (c) => c.toUpperCase());
   return (
-    <div style={{ maxWidth: 1000, margin: "0 auto" }}>
-      <div className="head">
-        <h1 className="brand">
-          <svg viewBox={LOGO_VIEWBOX} aria-hidden="true">
-            <path fillRule="evenodd" d={LOGO_PATH} />
-          </svg>
-          Vine Context
-        </h1>
-        <div className="tabs" role="tablist" style={{ margin: 0, border: 0 }}>
-          {tools.map((t) => (
-            <button key={t.name} role="tab" aria-selected={tool?.name === t.name} onClick={() => pick(t.name)}>
-              {t.title.replace(/^Open the /, "").replace(/^./, (c) => c.toUpperCase())}
-            </button>
-          ))}
-        </div>
-      </div>
-      {message && (
-        <div className="notice" style={{ margin: "8px 0" }}>
-          <div className="spread">
-            <strong>Paste this to your agent</strong>
-            <button className="link" onClick={() => setMessage(undefined)}>
-              Dismiss
-            </button>
-          </div>
-          <textarea readOnly value={message} style={{ width: "100%", minHeight: 60, marginTop: 6, font: "inherit" }} onFocus={(e) => e.currentTarget.select()} />
-        </div>
-      )}
-      {error && <p className="notice bad">{error}</p>}
-      {client && tool && <View key={`${tool.name}:${gen}`} client={client} tool={tool} onMessage={setMessage} />}
-    </div>
+    <Container size="desktop">
+      <VStack gap="md" style={{ paddingBlock: "var(--squonk-spacing-md)" }}>
+        <Brand />
+        {message && (
+          <Alert tone="info" variant="tinted" title="Paste this to your agent" onDismiss={() => setMessage(undefined)}>
+            <Textarea
+              label="Message for your agent"
+              readOnly
+              value={message}
+              fullWidth
+              autoResize
+              onFocus={(e: React.FocusEvent<HTMLTextAreaElement>) => e.currentTarget.select()}
+            />
+          </Alert>
+        )}
+        {error && <Alert tone="error">{error}</Alert>}
+        {tools.length > 0 && (
+          <Tabs
+            listLabel="Views"
+            value={tool?.name}
+            onValueChange={pick}
+            items={tools.map((t) => ({
+              value: t.name,
+              label: label(t),
+              content: client && tool?.name === t.name ? <View key={`${t.name}:${gen}`} client={client} tool={t} onMessage={setMessage} /> : null,
+            }))}
+          />
+        )}
+      </VStack>
+    </Container>
   );
 }
 
-createRoot(document.getElementById("root")!).render(<Shell />);
+createRoot(document.getElementById("root")!).render(
+  <VineTheme>
+    <Shell />
+  </VineTheme>,
+);
