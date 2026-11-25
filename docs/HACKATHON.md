@@ -65,7 +65,7 @@ The documentation is one page per audience: the [README](../README.md) to a firs
 
 The code and documentation were written with the help of Claude Code (Anthropic's AI coding agent), directed and reviewed by the author. The product itself calls no AI service: search embeddings come from a small open sentence model (bge-small) run on the CPU, installed with vine, with a local hash of words as the fallback.
 
-## What is new, and what was reused
+## What is new and what was reused
 
 Everything in this repository was written during the contest period: the first commit is dated 15 Nov 2026.
 

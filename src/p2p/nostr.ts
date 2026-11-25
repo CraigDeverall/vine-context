@@ -8,7 +8,7 @@
 // (common after a sleep) would otherwise look open while hearing nothing.
 //
 // Why not nostr-tools' SimplePool: in nostr-tools 2.26 a failed relay
-// connection overflows the stack (spike A, 2026-11-15).
+// connection overflows the stack (found 2026-11-15).
 
 import WebSocket from "ws";
 import { finalizeEvent, generateSecretKey, type Event } from "nostr-tools/pure";

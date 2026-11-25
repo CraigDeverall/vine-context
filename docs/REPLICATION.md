@@ -28,7 +28,7 @@ when the host is gone (asleep, offline, sharing off) nobody can read or write.
 | **A member is their machine's key; the name is just a label.** | Names can change freely (a `rename` change); everything records the key. |
 | **Writes wait 10 seconds before leaving the machine; Undo works only in that time.** | Undo can truly remove something said by mistake (section 4.1). After that, only `withdraw`, which keeps the text in the history. |
 
-## 3. The idea: replicate changes, not the database
+## 3. Replicating changes instead of the database
 
 Each machine keeps an **append-only log of signed changes**. The Relate
 database is built from that log, and is never sent between machines.
@@ -88,7 +88,7 @@ per kind.
 current name, from the membership log. A member is one machine's key: the same
 person on two machines is two members (as today).
 
-### 4.1 Undo, and the send delay
+### 4.1 Undo and the send delay
 
 Undo on the receipt is for "that shouldn't have gone in there", such as
 personal details typed in the wrong chat. A withdrawal doesn't do that job:
@@ -242,7 +242,7 @@ The mesh needs the same protections as the star, and a few more:
 
 None at the moment. The four earlier ones are decided in section 2.
 
-## 12. As built: where it differs
+## 12. Where the code differs from this design
 
 - **The group secret isn't changed on removal** (sections 6 and 7). Every
   member's machine refuses a removed key at the link handshake and refuses
