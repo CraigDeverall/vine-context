@@ -374,8 +374,8 @@ test('the Contexts view turns contexts on and off, creates one in its own step, 
   await desk.press({ key: 'toggle-team' })
   expect(calls).toContainEqual({ tool: 'remove_context', args: { name: 'team' } })
   // Each context has its own pin for the chat's folder, whose path keeps its end.
-  expect((await desk.find({ key: 'pin-team' }))?.text).toBe('📌 Pin to …ice/work/shop/services/checkout')
-  expect((await desk.find({ key: 'pin-own' }))?.text).toBe('📌 Pinned to …ice/work/shop/services/checkout')
+  expect((await desk.find({ key: 'pin-team' }))?.text).toBe('📌 Turn on for new chats in …ice/work/shop/services/checkout')
+  expect((await desk.find({ key: 'pin-own' }))?.text).toBe('📌 On for new chats in …ice/work/shop/services/checkout')
   expect(await desk.find({ key: 'link-folder' })).toBeUndefined()
   await desk.press({ key: 'pin-team' })
   expect(calls).toContainEqual({ tool: 'link_folder', args: { name: 'team' } })
@@ -444,7 +444,7 @@ test('a context opens from the list on its tabs or its Settings tab, an off one 
   expect((await desk.find({ key: 'tab-settings' }))?.text).toMatch(/^▸ /)
   expect(calls).toContainEqual({ tool: 'context_details', args: { name: 'team' } })
   expect(await desk.find({ type: 'Text', text: /6 claims · 2 questions · 2 replies/ })).toBeDefined()
-  expect(await desk.find({ type: 'Text', text: /3 members · 1 of the others online · 2 join codes waiting · 3 signalling relays reachable/ })).toBeDefined()
+  expect(await desk.find({ type: 'Text', text: /Syncing · 3 members · 1 of the others online now · 2 join codes not used yet/ })).toBeDefined()
   // Id, storage and history are behind a link.
   expect(await desk.find({ type: 'Text', text: '/data/graphs/team' })).toBeUndefined()
   await desk.press({ key: 'fold-about-team' })

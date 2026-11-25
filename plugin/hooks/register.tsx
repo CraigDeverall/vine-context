@@ -679,7 +679,7 @@ export const register: Register = on => {
             void act($, 'link_folder', pinned ? { name: n, off: true } : { name: n }, pinned ? `New chats in this folder no longer start with '${n}'.` : `New chats in this folder start with '${n}'.`)
           }
         >
-          {pinned ? '📌 Pinned to ' : '📌 Pin to '}
+          {pinned ? '📌 On for new chats in ' : '📌 Turn on for new chats in '}
           <Text size="footnote" dimColor>
             {tail(f.folder, 32)}
           </Text>
@@ -710,6 +710,8 @@ export const register: Register = on => {
         </Box>
       )
       const count = (k: string, one: string, plural: string) => `${d?.items[k] ?? 0} ${(d?.items[k] ?? 0) === 1 ? one : plural}`
+      /** No one else has joined, so there is nobody to sync with. */
+      const alone = d?.members === 1
       return (
         <Box key={`settings-${n}`} flexDirection="column" gap="md">
           <Box flexDirection="column" gap="xs">
@@ -723,10 +725,10 @@ export const register: Register = on => {
               c
                 ? severalOn
                   ? c.writes_here
-                    ? 'Your agent reads it, and writes here when no other context clearly fits.'
-                    : 'Your agent reads it, and writes here when its description fits.'
-                  : 'Your agent reads and writes here. Turning it off leaves it on this machine.'
-                : 'Off for this chat. Turn it on to open it here, share it or change its settings.',
+                    ? 'Your agent looks things up in this context, and records new items in it unless another context clearly fits better.'
+                    : 'Your agent looks things up in this context, and records a new item in it only when the item fits its description.'
+                  : 'This chat uses this context: your agent looks things up in it and records new claims and questions in it. Turning it off only affects this chat. Your copy stays on this machine.'
+                : 'This chat isn’t using this context. Turn it on to open it here, share it or change its settings.',
             )}
             {pin(n, 'detail-')}
           </Box>
@@ -737,12 +739,11 @@ export const register: Register = on => {
             ) : (
               <Text wrap="wrap">
                 <Text color={sharing ? 'success' : 'warning'}>● </Text>
-                {sharing ? 'Syncing' : 'Offline'}
+                {!sharing ? 'Offline' : alone ? 'Only you so far' : 'Syncing'}
                 <Text dimColor>
-                  {d ? ` · ${d.members} member${d.members === 1 ? '' : 's'}` : ''}
-                  {d && d.members > 1 ? ` · ${d.online} of the others online` : ''}
-                  {d?.open_invites ? ` · ${d.open_invites} join code${d.open_invites === 1 ? '' : 's'} waiting` : ''}
-                  {sharing && relays !== undefined ? ` · ${relays} signalling relay${relays === 1 ? '' : 's'} reachable` : ''}
+                  {!sharing && alone ? ' · only you so far' : ''}
+                  {d && !alone ? ` · ${d.members} members · ${d.online} of the others online now` : ''}
+                  {d?.open_invites ? ` · ${d.open_invites} join code${d.open_invites === 1 ? '' : 's'} not used yet` : ''}
                 </Text>
               </Text>
             )}
@@ -750,8 +751,12 @@ export const register: Register = on => {
               sharing === false
                 ? 'Your copy keeps working. What you write is sent when you’re back online.'
                 : relays === 0
-                  ? 'No relay is reachable, so the others can’t find this machine right now.'
-                  : 'Every member keeps a full copy. Changes travel directly between your machines whenever you’re both online.',
+                  ? 'This machine can’t reach the servers that help members find each other, so nothing syncs right now.'
+                  : alone
+                    ? d?.open_invites
+                      ? 'Nobody has joined yet. Syncing starts when someone uses a join code you sent.'
+                      : 'Nobody else is in this context yet. Invite someone to share it with them.'
+                    : 'Every member keeps a full copy. Changes travel directly between your machines whenever you’re both online.',
             )}
             {c && (
               <Box flexDirection="row" gap="xs" flexWrap="wrap">
