@@ -379,13 +379,16 @@ test('the Contexts view turns contexts on and off, creates one in its own step, 
   expect(await desk.find({ key: 'tab-questions' })).toBeUndefined()
   expect((await desk.find({ key: 'toggle-team' }))?.text).toBe('◉ On')
   expect((await desk.find({ key: 'toggle-own' }))?.text).toBe('○ Off')
+  // A long name can push the toggle to its own line, never past the card's edge.
+  expect((await desk.find({ key: 'ctx-head-team' }))?.props.flexWrap).toBe('wrap')
   await desk.press({ key: 'toggle-own' })
   expect(calls).toContainEqual({ tool: 'add_context', args: { name: 'own' } })
   await desk.press({ key: 'toggle-team' })
   expect(calls).toContainEqual({ tool: 'remove_context', args: { name: 'team' } })
   // Each context has its own pin for the chat's folder, whose path keeps its end.
-  expect((await desk.find({ key: 'pin-team' }))?.text).toBe('📌 Turn on for new chats in …ice/work/shop/services/checkout')
-  expect((await desk.find({ key: 'pin-own' }))?.text).toBe('📌 On for new chats in …ice/work/shop/services/checkout')
+  // The folder shows as much of its path as the pane has room for.
+  expect((await desk.find({ key: 'pin-team' }))?.text).toBe('📌 Turn on for new chats in /Users/alice/work/shop/services/checkout')
+  expect((await desk.find({ key: 'pin-own' }))?.text).toBe('📌 On for new chats in /Users/alice/work/shop/services/checkout')
   expect(await desk.find({ key: 'link-folder' })).toBeUndefined()
   await desk.press({ key: 'pin-team' })
   expect(calls).toContainEqual({ tool: 'link_folder', args: { name: 'team' } })
@@ -664,6 +667,65 @@ test('the create, details and delete steps draw in the terminal too', async ($, 
   expect(await term.find({ key: 'ask-delete-team' })).toBeDefined()
   expect(acts(calls).some(c => c.tool === 'delete_context')).toBe(false)
   await term.unmount()
+})
+
+/** The pane at a width, or minimized to the desktop app's widget. */
+const sized = (bodyColumns: number, placement: 'dock' | 'inline' | 'widget' = 'dock') => ({ ...PANE, props: { ...PANE.props, bodyColumns, placement } })
+
+test('a narrow pane stacks each row’s buttons under its text, and the details’ labels over their values', async ($, on) => {
+  engine(on, [])
+  await $.session.start(START)
+  await $.command.run(RUN)
+  const narrow = await $.ui.mount({ ...sized(30), surface: 'desktop' })
+  expect((await narrow.find({ key: 'act-x2' }))?.props.flexDirection).toBe('column')
+  expect((await narrow.find({ key: 'held-x1' }))?.props.flexDirection).toBe('column')
+  // Stacked, the buttons are all still there and still work.
+  expect(await narrow.find({ key: 'open-change-x2' })).toBeDefined()
+  await narrow.press({ key: 'tab-settings' })
+  expect((await narrow.find({ key: 'detail-Your role' }))?.props.flexDirection).toBe('column')
+  // The folder keeps only the end of its path that fits.
+  expect((await narrow.find({ key: 'pin-detail-team' }))?.text).toBe('📌 Turn on for new chats in …es/checkout')
+  await narrow.unmount()
+
+  const roomy = await $.ui.mount({ ...sized(90), surface: 'desktop' })
+  expect((await roomy.find({ key: 'detail-Your role' }))?.props.flexDirection).toBe('row')
+  await roomy.press({ key: 'tab-overview' })
+  expect((await roomy.find({ key: 'act-x2' }))?.props.flexDirection).toBe('row')
+  await roomy.unmount()
+})
+
+test('a wide pane sets what needs you beside the recent activity', async ($, on) => {
+  engine(on, [])
+  await $.session.start(START)
+  await $.command.run(RUN)
+  for (const [cols, direction] of [
+    [90, 'column'],
+    [120, 'row'],
+  ] as const) {
+    const ui = await $.ui.mount({ ...sized(cols), surface: 'desktop' })
+    expect((await ui.find({ key: 'overview' }))?.props.flexDirection).toBe(direction)
+    expect(await ui.find({ key: 'overview-now' })).toBeDefined()
+    expect(await ui.find({ key: 'overview-recent' })).toBeDefined()
+    await ui.unmount()
+  }
+})
+
+test('minimized to a widget, the pane is a glance with nothing to press, and expanding it brings the view back', async ($, on) => {
+  engine(on, [])
+  await $.session.start(START)
+  await $.command.run(RUN)
+  const widget = await $.ui.mount({ ...sized(30, 'widget'), surface: 'desktop' })
+  expect(await widget.find({ key: 'glance' })).toBeDefined()
+  expect(await widget.find({ type: 'Button' })).toBeUndefined()
+  expect(await widget.find({ type: 'Text', text: /^● team$/ })).toBeDefined()
+  expect((await widget.find({ type: 'Text', text: /online/ }))?.text).toBe('1 other online · ❓ 1 open · ⚡ 1 conflict · 1 not sent yet')
+  expect((await widget.find({ key: 'glance-latest' }))?.text).toBe('you claimed: Mine, still held')
+  await widget.unmount()
+
+  const docked = await $.ui.mount({ ...sized(60), surface: 'desktop' })
+  expect(await docked.find({ key: 'glance' })).toBeUndefined()
+  expect((await docked.find({ key: 'tab-overview' }))?.text).toMatch(/^▸ /)
+  await docked.unmount()
 })
 
 test('the filter adds what the search finds close in meaning, after what shares its words, in History too', async ($, on) => {
