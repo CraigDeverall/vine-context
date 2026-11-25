@@ -23,6 +23,7 @@ import { existsSync, renameSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { McpServer, type RegisteredTool } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import type { Catalogue } from "../core/catalogue.js";
 import { RANK } from "../core/changes.js";
 import { inputShape, type Role, type Snapshot } from "../core/graph.js";
 import { fingerprint, nameSource, setName, type Identity } from "../core/identity.js";
@@ -112,6 +113,8 @@ export class Session {
   /** Where writes go unless a call names another context. */
   private writeTo?: string;
   private modelTools = new Map<string, RegisteredTool>();
+  /** The contexts on this machine, searchable: opened on the first find_context. */
+  private catalogue?: Promise<Catalogue>;
   /** Notices not yet shown to the agent: they ride on its next tool result. */
   private news: string[] = [];
   /** Sync digests not yet shown to the agent. The agent hook may show one first: see withNews. */
@@ -130,6 +133,7 @@ export class Session {
           "Use it during ordinary work, not only when asked: when this chat reaches a decision, establishes a fact or leaves a question open that fits its context's purpose, record it (add_claim, ask_question; search first), " +
           "and look there (search, open_questions) before answering what the group may already know. context_info says which context this chat uses and what it is for. " +
           "Every member keeps a full copy, so it works offline. A chat usually uses one context; use_context switches it, add_context adds another, remove_context drops one, and the chat keeps them when reopened. " +
+          "find_context searches this machine's contexts by what they are for: use it to pick one, and before starting a new one. " +
           "Call model_guide once before you first write, and follow it. " +
           "To invite someone, use share_context: it makes a join code for one person. To join someone else's context, call join_context with the vine1_ code they sent.",
       },
@@ -560,6 +564,13 @@ export class Session {
     return { deleted: name, id: id ?? null, contexts: this.list(), write_to: this.writeTo ?? null, your_contexts: this.localNames() };
   }
 
+  /** The catalogue of this machine's contexts. Relate and the embedder load on the first search, not when the chat starts. */
+  private openCatalogue(): Promise<Catalogue> {
+    this.catalogue ??= import("../core/catalogue.js").then(({ Catalogue }) => Catalogue.open(this.dataDir, { log: this.o.log }));
+    this.catalogue.catch(() => (this.catalogue = undefined)); // a failed open is tried again next time
+    return this.catalogue;
+  }
+
   private localNames(): string[] {
     return localContexts(this.dataDir).map((c) => c.name);
   }
@@ -640,6 +651,35 @@ export class Session {
           next: this.many
             ? "Reads search every context in this chat; put each write in the one whose description fits (the `context` argument), else it goes to write_to."
             : "use_context switches this chat to another context; add_context adds one alongside (the chat keeps them when reopened).",
+        };
+      }),
+    );
+
+    this.server.registerTool(
+      "find_context",
+      {
+        title: "Find a context",
+        description:
+          "Search the contexts on this machine (yours and ones you joined, whether or not this chat uses them) by name and what they are for, ranked by hybrid search (meaning plus keywords). " +
+          "Use it to find the context a topic belongs in, and before starting a new one, so it isn't a duplicate. It searches contexts, not what's in them: for claims and questions, use search.",
+        inputSchema: {
+          query: z.string().min(1).max(500).describe("What the context would be about"),
+          limit: z.number().int().min(1).max(50).default(10).describe("How many contexts"),
+        },
+        annotations: ro,
+      },
+      wrap(async ({ query, limit }: { query: string; limit?: number }) => {
+        const names = this.localNames();
+        if (!names.length) return { found: [], your_contexts: [], next: this.noContext() };
+        const cat = await this.openCatalogue();
+        await cat.sync(names);
+        const found = (await cat.find(query, limit ?? 10)).map((h) => ({ ...h, in_chat: this.contexts.has(h.name), writes_here: this.writeTo === h.name }));
+        return {
+          found,
+          searched: names.length,
+          next: found.length
+            ? "Scores rank, they don't judge: read the descriptions. use_context switches this chat to one, add_context adds it alongside; if none fits, ask the person before starting a new one."
+            : "No context here matches. If the person wants one for this, ask what it's for and start it with use_context or add_context and a description.",
         };
       }),
     );
