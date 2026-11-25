@@ -18,6 +18,7 @@ import { Graph, type Caller } from "../src/core/graph.ts";
 import { fingerprint, loadIdentity, type Identity } from "../src/core/identity.ts";
 import { packageRoot } from "../src/core/package-root.ts";
 import { b64u } from "../src/p2p/link.ts";
+import { GRAPH_DESCRIPTION, playScenario, storyTime } from "../src/demo/scenario.ts";
 
 type Row = Record<string, any>;
 const out = join(packageRoot(), "examples", "data");
@@ -55,54 +56,9 @@ class Writer {
   }
 }
 
-async function incident(w: Writer, alice: Caller, bob: Caller, carol: Caller) {
-  const call = (who: Caller, when: string, tool: string, args: Row) => w.call(who, when, tool, args);
-  const latency = await call(alice, at(10, "14:20"), "add_claim", {
-    text: "Checkout p95 latency rose from 300 ms to 4 s at 13:58 on 10 Nov",
-    source: "Grafana: checkout dashboard",
-    about_from: "2026-11-10",
-    about_to: "2026-11-10",
-  });
-  const whatChanged = await call(alice, at(10, "14:25"), "ask_question", { text: "What changed around 13:58 on 10 Nov?", about: [latency.id] });
-  const deploy = await call(bob, at(10, "14:40"), "add_claim", {
-    text: "The 14:05 deploy of payments-api caused the checkout slowdown",
-    source: "#incident-2211",
-  });
-  await call(carol, at(10, "15:10"), "add_claim", {
-    text: "The slowdown started at 13:58, seven minutes before the 14:05 deploy",
-    source: "load balancer access logs",
-    supports: [latency.id],
-    contradicts: [deploy.id],
-  });
-  const pool = await call(bob, at(10, "15:30"), "add_claim", {
-    text: "The orders database connection pool hit its limit of 50 connections at 13:57",
-    source: "pg_stat_activity snapshot",
-  });
-  const whyPool = await call(alice, at(10, "15:45"), "ask_question", { text: "Why did the orders connection pool run out?", about: [pool.id] });
-  const mobile = await call(carol, at(10, "16:30"), "add_claim", {
-    text: "Mobile app 5.12, released at 13:50, retries failed requests immediately and without limit",
-    source: "mobile release notes 5.12",
-  });
-  const retries = await call(carol, at(10, "16:50"), "add_claim", {
-    text: "Retries from mobile 5.12 held orders database connections open until the pool ran out",
-    supports: [pool.id],
-    answers: [whyPool.id],
-  });
-  await call(carol, at(10, "16:51"), "link", { from: mobile.id, relation: "SUPPORTS", to: retries.id });
-  const redis = await call(bob, at(10, "17:05"), "add_claim", { text: "The Redis cache was down during the incident" });
-  await call(bob, at(10, "17:20"), "withdraw", { id: redis.id, reason: "Wrong incident: that was the staging cluster" });
-  await call(bob, at(10, "17:40"), "add_claim", {
-    text: "Mobile retries exhausting the orders database pool caused the checkout slowdown, not the 14:05 deploy",
-    replaces: [deploy.id],
-    supports: [retries.id],
-    answers: [whatChanged.id],
-  });
-  await call(alice, at(10, "18:00"), "ask_question", { text: "Should the API gateway rate-limit each client?" });
-  await call(alice, at(11, "09:15"), "add_claim", {
-    text: "Per-client rate limiting at the gateway would have contained the retry storm within a minute",
-    source: "replay of 10 Nov traffic in staging",
-    supports: [retries.id],
-  });
+/** Plays the story through the writer, backdated to when each step happened. */
+async function incident(w: Writer, callers: Record<string, Caller>) {
+  await playScenario((step, args) => w.call(callers[step.who]!, storyTime(step), step.tool, args));
 }
 
 async function build() {
@@ -118,10 +74,10 @@ async function build() {
   const g = await Graph.open({ dataDir: scratch, name: "incident" });
   const w = new Writer(graphId, g, ids);
   const alice = ids.get("alice")!;
-  w.member(alice, "create", at(10, "14:00"), { name: "incident", creator_name: "alice", description: "The checkout slowdown of 10 Nov 2026: what we found, what we still don't know, and what we disagreed about" }, graphId);
+  w.member(alice, "create", at(10, "14:00"), { name: "incident", creator_name: "alice", description: GRAPH_DESCRIPTION }, graphId);
   for (const name of ["bob", "carol"])
     w.member(alice, "add_member", at(10, "14:01"), { key: ids.get(name)!.publicKey, name, role: "contributor", invite: { id: `inv_${name}`, label: `for ${name}` }, about: { agent: "claude-code", platform: "macOS arm64" } });
-  await incident(w, callers.alice!, callers.bob!, callers.carol!);
+  await incident(w, callers);
 
   const hostDir = join(out, "hosts", "incident");
   mkdirSync(hostDir, { recursive: true });

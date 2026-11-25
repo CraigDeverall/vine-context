@@ -14,7 +14,7 @@ That installs the `vine` command and the Claude Code plugin. Then tell your agen
 vine demo
 ```
 
-`demo` opens an example context in your browser: three people investigating a checkout slowdown. It works on a copy, so nothing is changed. You need Node 20 or later, and no account, API key, compiler or model download.
+`demo` runs three members in one process: alice creates the example context, bob and carol join it with codes, and the three replay an investigation of a checkout slowdown, each writing through their own host and syncing peer to peer. Your browser shows alice's view of it, live. Nothing of yours is touched, and no network is needed. You need Node 20 or later, and no account, API key, compiler or model download.
 
 ![The graph explorer on the example incident graph](docs/images/explorer.jpg)
 
@@ -102,11 +102,13 @@ Codex and other MCP agents: see [the guide](docs/GUIDE.md#install-by-hand).
 vine demo
 ```
 
-In the browser page that opens:
+Three hosts start in this process, one each for alice, bob and carol: alice creates the context, the other two join it with codes, and the story plays through them, one step every few seconds. Every write is signed by its author's host, held for undo, then carried to the other two over WebRTC, and the terminal says when each one arrives. In the browser page that opens, which is alice's view:
 
-1. **Explore the graph.** Drag the time slider back to 10 Nov. A conflict between Bob's claim and Carol's claim appears, then settles when Bob replaces his claim.
-2. **Conflicts** shows two claims side by side when they contradict each other.
-3. **Sharing console** shows the three members, with their keys and roles.
+1. **Sharing console** shows the three members, their keys, roles and live links.
+2. **Explore the graph** fills in as the changes arrive. Once the story is over, drag the time slider back to replay it: a conflict between bob's claim and carol's appears, then settles when bob replaces his claim.
+3. **Conflicts** shows the two claims side by side while they contradict each other.
+
+`--pace 1` runs it faster, `--pace 0` all at once. `--join` finds the members through the public Nostr relays instead of in this process, and prints a join code at the end, so your own agent (on this machine or another) can join as a fourth member and write into the same graph.
 
 ### 3. Use it from your agent
 

@@ -16,7 +16,7 @@ Back to the [README](../README.md).
    vine demo
    ```
 
-   In the browser: open *Explore the graph* and drag the time slider back to 10 Nov.
+   Three members start in one process, join with codes, and replay the investigation through their own hosts, syncing peer to peer; the terminal narrates each step as it reaches the others. In the browser (alice's view): *Sharing console* for the three members and their links, *Explore the graph* to watch it grow, then drag the time slider back to replay it.
 2. **Open the Relate store yourself.** It is a directory store that ships in the package and the repo, at [`examples/data/graphs/incident`](../examples/data/graphs/incident). [Six queries to try](RELATE.md#explore-the-example-store), from *where did the team disagree?* to *what did they believe at 3:15 pm?*
 3. **Read how Relate is used:** [README](../README.md#how-it-uses-relate) for the short form, [RELATE.md](RELATE.md) for each feature and its Cypher.
 4. **Watch the demo video:** link to be added with the Devpost submission.
