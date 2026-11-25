@@ -179,12 +179,13 @@ flowchart LR
 - **A write is a signed change.** It is checked, applied locally, held for 10 seconds so *Undo* can truly remove it, then signed with the author's key and sent.
 - **Machines swap what each is missing** over WebRTC. Changes are forwarded, so members who are never online together still get each other's writes.
 - **Agents are told what a sync means for their person:** your claim was replaced, your question was answered, a new conflict appeared.
+- **Agents are told without asking.** In Claude Code and Codex the plugin's hooks run `vine hook`: at the start of a session it tells the agent what the chat's context is for, and beside each prompt it passes on what other members' changes meant and a one-line reminder of where the chat records. Set `VINE_HOOKS=quiet` to drop the reminder, or `off` for none of it. Codex asks you to trust the hooks once (`/hooks`). Other agents get the same news in front of their next vine tool result.
 
 The full account is in [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md), and the design reasoning in [docs/REPLICATION.md](docs/REPLICATION.md).
 
 ## Limits
 
-- **Search matches words, not meaning, by default.** A semantic embedder is optional and not yet published as a package.
+- **Search matches meaning with a small model that installs with vine,** on the CPU, offline. It has only been run on macOS arm64 so far; where its package isn't available or doesn't run, search matches words and word fragments instead, and `vine doctor` says which is in use.
 - **Strict networks need a TURN server, on your own account.** Vine ships no shared TURN server or key. `vine setup` sets up Cloudflare's on your own Cloudflare account in a few steps (free up to 1,000 GB a month, far more than Vine uses), or you can use one you run. Only one machine in a pair needs one ([do I need a TURN server?](docs/GUIDE.md#do-i-need-a-turn-server)). Replication has been tested between processes on one machine and over real public relays.
 - **Removing someone can't recall the copy they already have.**
 - **Clocks are assumed correct,** and a context is sized for about 20 members and 100,000 changes.

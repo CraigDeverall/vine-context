@@ -261,7 +261,7 @@ The panel never writes a claim or question itself: your agent does, from what yo
 | `VINE_ICE` | STUN and TURN servers, replacing the defaults and the `vine turn` setting ([strict networks](#strict-networks-turn-and-stun)) |
 | `VINE_TURN_PASSWORD` | The TURN server's password, when it was set with `--store env` |
 | `VINE_CLOUDFLARE_TURN_SECRET` | The Cloudflare TURN key's secret, when it was set with `--store env` |
-| `VINE_EMBEDDER` | The search embedder ([limits](HOW-IT-WORKS.md#limits)) |
+| `VINE_EMBEDDER` | The search embedder: `auto` (default: the sentence model when installed, else the built-in), `hash` or a model name ([limits](HOW-IT-WORKS.md#limits)) |
 
 ## Trying it with two identities on one machine
 

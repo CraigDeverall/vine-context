@@ -63,7 +63,7 @@ The documentation is one page per audience: the [README](../README.md) to a firs
 
 ## AI tools
 
-The code and documentation were written with the help of Claude Code (Anthropic's AI coding agent), directed and reviewed by the author. The product itself calls no AI model: the default search embedder is a local hash of words, and the optional semantic embedder runs a small open sentence model on the CPU.
+The code and documentation were written with the help of Claude Code (Anthropic's AI coding agent), directed and reviewed by the author. The product itself calls no AI service: search embeddings come from a small open sentence model (bge-small) run on the CPU, installed with vine, with a local hash of words as the fallback.
 
 ## What is new, and what was reused
 

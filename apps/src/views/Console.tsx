@@ -42,7 +42,7 @@ interface State {
   relays: Record<string, string>;
   people: Person[];
   log: { changes: number; held: number; refused: number };
-  you: { name: string; role: Role | null; fingerprint: string; name_from: "VINE_USER" | "set_my_name" | "git" | "login" };
+  you: { name: string; role: Role | null; fingerprint: string; name_from: "VINE_USER" | "set_my_name" | "git" | "os" | "login" | "generated" };
 }
 
 const ROLES: Role[] = ["reader", "contributor", "admin"];
@@ -168,7 +168,7 @@ export function Console({ b }: { b: Bridge }) {
             )}
             <span className="faint">
               {" "}
-              {state.you.name_from === "git" ? "(from git's user.name)" : state.you.name_from === "login" ? "(your login name)" : state.you.name_from === "VINE_USER" ? "(set by VINE_USER)" : ""}
+              {{ git: "(from git's user.name)", os: "(from your computer account)", login: "(your login name: set your own)", generated: "(made up: set your own)", VINE_USER: "(set by VINE_USER)", set_my_name: "" }[state.you.name_from] ?? ""}
             </span>
           </p>
         ) : (
@@ -190,7 +190,7 @@ export function Console({ b }: { b: Bridge }) {
               Save
             </button>
             <button type="button" onClick={() => setNaming(undefined)}>
-              Cancel
+              ‹ Cancel
             </button>
           </div>
         )}

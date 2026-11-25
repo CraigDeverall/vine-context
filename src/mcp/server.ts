@@ -23,14 +23,16 @@ import { existsSync, renameSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { McpServer, type RegisteredTool } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import type { Catalogue } from "../core/catalogue.js";
 import { RANK } from "../core/changes.js";
 import { inputShape, type Role, type Snapshot } from "../core/graph.js";
-import { fingerprint, nameSource, setName, type Identity } from "../core/identity.js";
+import { fingerprint, isGuessedName, nameSource, setName, type Identity } from "../core/identity.js";
 import { claimsPack } from "../core/pack.js";
 import { packageInfo } from "../core/package-root.js";
 import { autoShare, defaultDataDir } from "../core/paths.js";
 import { LocalHost } from "../host/client.js";
 import { hostAlive, placeReplica, readGroup } from "../host/host.js";
+import { chatMarks, markSeen } from "../host/news.js";
 import { socketPath } from "../host/state.js";
 import { checkStoredTurn, clearTurn, readCloudflare, readTurn, saveTurn, type IceSource } from "../p2p/ice.js";
 import { joinWithCode } from "../p2p/join.js";
@@ -111,8 +113,12 @@ export class Session {
   /** Where writes go unless a call names another context. */
   private writeTo?: string;
   private modelTools = new Map<string, RegisteredTool>();
+  /** The contexts on this machine, searchable: opened on the first find_context. */
+  private catalogue?: Promise<Catalogue>;
   /** Notices not yet shown to the agent: they ride on its next tool result. */
   private news: string[] = [];
+  /** Sync digests not yet shown to the agent. The agent hook may show one first: see withNews. */
+  private digests: { context: string; at?: string; lines: string[] }[] = [];
   /** Where the contexts came from when the chat started. */
   private origin: Origin | null = null;
 
@@ -121,9 +127,13 @@ export class Session {
       { name: "vine-context", version: packageInfo().version },
       {
         capabilities: { tools: { listChanged: true }, resources: {}, prompts: {} },
+        // Some agents read only the start of this (Codex: the first 512 characters), so that much stands alone.
         instructions:
-          "This server holds context graphs (contexts): what a group knows, as claims and questions, shared peer to peer. Every member keeps a full copy, so it works offline. " +
-          "A chat usually uses one context (context_info says which); use_context switches it, add_context adds another, remove_context drops one, and the chat keeps them when reopened. " +
+          "Vine Context holds shared contexts: what a group knows, as dated claims and open questions, synced peer to peer between its members' agents. " +
+          "Use it during ordinary work, not only when asked: when this chat reaches a decision, establishes a fact or leaves a question open that fits its context's purpose, record it (add_claim, ask_question; search first), " +
+          "and look there (search, open_questions) before answering what the group may already know. context_info says which context this chat uses and what it is for. " +
+          "Every member keeps a full copy, so it works offline. A chat usually uses one context; use_context switches it, add_context adds another, remove_context drops one, and the chat keeps them when reopened. " +
+          "find_context searches this machine's contexts by what they are for: use it to pick one, and before starting a new one. " +
           "Call model_guide once before you first write, and follow it. " +
           "To invite someone, use share_context: it makes a join code for one person. To join someone else's context, call join_context with the vine1_ code they sent.",
       },
@@ -220,13 +230,17 @@ export class Session {
     this.contexts.get(name)?.host.close();
     this.contexts.set(name, { name, host, d });
     this.writeTo ??= name;
+    // News starts from when the chat first has the context: whichever of this server and the agent hook tells it first moves the marker on.
+    if (this.o.chat && !chatMarks(this.dataDir, this.o.chat).seen[name]) markSeen(this.dataDir, this.o.chat, name, new Date().toISOString());
     host.on("close", () => this.o.log?.(`local host connection for '${name}' closed`));
     host.on("event", (e: { event: string; data: any }) => {
       if (this.contexts.get(name)?.host !== host) return;
       const where = this.where(name);
       const tag = this.contexts.size > 1 ? ` (${name})` : "";
       if (e.event === "joined") this.news.push(joinNotice(e.data, where));
-      if (e.event === "digest" && Array.isArray(e.data?.lines)) for (const l of e.data.lines) this.news.push(`News${tag}: ${l}`);
+      if (e.event === "digest" && Array.isArray(e.data?.lines)) {
+        this.digests.push({ context: name, at: typeof e.data.at === "string" ? e.data.at : undefined, lines: e.data.lines.map((l: string) => `News${tag}: ${l}`) });
+      }
       if (e.event === "unreachable" && typeof e.data?.message === "string") this.news.push(`News${tag}: ${e.data.message}`);
       if (e.event === "removed") {
         this.news.push(`News: ${e.data?.by ?? "An admin"} removed you from ${where}. You keep your copy to read, but can't write to it any more.`);
@@ -446,10 +460,30 @@ export class Session {
 
   /** Puts any notices in front of a tool result, once. */
   private withNews(out: Content): Content {
-    if (!this.news.length) return out;
-    const lines = this.news.splice(0);
+    const lines = [...this.news.splice(0), ...this.freshDigests()];
+    if (!lines.length) return out;
     out.content.unshift({ type: "text", text: `${lines.join("\n")}\nTell the person this, briefly.` });
     return out;
+  }
+
+  /**
+   * The digest lines the agent hasn't been given yet. The agent hook (`vine hook`)
+   * gives the same digests beside the person's next prompt, so each one is
+   * checked against the chat's marker, and the marker is moved past the ones
+   * given here.
+   */
+  private freshDigests(): string[] {
+    const waiting = this.digests.splice(0);
+    if (!waiting.length) return [];
+    const chat = this.o.chat;
+    const seen = chat ? chatMarks(this.dataDir, chat).seen : {};
+    const lines: string[] = [];
+    for (const d of waiting) {
+      if (d.at && seen[d.context] && d.at <= seen[d.context]!) continue;
+      lines.push(...d.lines);
+      if (chat && d.at) markSeen(this.dataDir, chat, d.context, d.at);
+    }
+    return lines;
   }
 
   /** One of this machine's contexts in full, whether or not the chat uses it: what the panel's details show. */
@@ -528,6 +562,13 @@ export class Session {
     if (process.platform !== "win32" && existsSync(sock)) rmSync(sock, { force: true });
     forgetContext(this.dataDir, name, id);
     return { deleted: name, id: id ?? null, contexts: this.list(), write_to: this.writeTo ?? null, your_contexts: this.localNames() };
+  }
+
+  /** The catalogue of this machine's contexts. Relate and the embedder load on the first search, not when the chat starts. */
+  private openCatalogue(): Promise<Catalogue> {
+    this.catalogue ??= import("../core/catalogue.js").then(({ Catalogue }) => Catalogue.open(this.dataDir, { log: this.o.log }));
+    this.catalogue.catch(() => (this.catalogue = undefined)); // a failed open is tried again next time
+    return this.catalogue;
   }
 
   private localNames(): string[] {
@@ -610,6 +651,35 @@ export class Session {
           next: this.many
             ? "Reads search every context in this chat; put each write in the one whose description fits (the `context` argument), else it goes to write_to."
             : "use_context switches this chat to another context; add_context adds one alongside (the chat keeps them when reopened).",
+        };
+      }),
+    );
+
+    this.server.registerTool(
+      "find_context",
+      {
+        title: "Find a context",
+        description:
+          "Search the contexts on this machine (yours and ones you joined, whether or not this chat uses them) by name and what they are for, ranked by hybrid search (meaning plus keywords). " +
+          "Use it to find the context a topic belongs in, and before starting a new one, so it isn't a duplicate. It searches contexts, not what's in them: for claims and questions, use search.",
+        inputSchema: {
+          query: z.string().min(1).max(500).describe("What the context would be about"),
+          limit: z.number().int().min(1).max(50).default(10).describe("How many contexts"),
+        },
+        annotations: ro,
+      },
+      wrap(async ({ query, limit }: { query: string; limit?: number }) => {
+        const names = this.localNames();
+        if (!names.length) return { found: [], your_contexts: [], next: this.noContext() };
+        const cat = await this.openCatalogue();
+        await cat.sync(names);
+        const found = (await cat.find(query, limit ?? 10)).map((h) => ({ ...h, in_chat: this.contexts.has(h.name), writes_here: this.writeTo === h.name }));
+        return {
+          found,
+          searched: names.length,
+          next: found.length
+            ? "Scores rank, they don't judge: read the descriptions. use_context switches this chat to one, add_context adds it alongside; if none fits, ask the person before starting a new one."
+            : "No context here matches. If the person wants one for this, ask what it's for and start it with use_context or add_context and a description.",
         };
       }),
     );
@@ -1181,6 +1251,20 @@ export class Session {
   }
 
   /** What share_context says about a new invite. */
+  /** What to tell the person about the name others see, when they didn't choose it themselves. */
+  private nameNote(): { your_name?: string } {
+    const source = nameSource(this.dataDir);
+    const { name } = this.o.identity();
+    if (source === "VINE_USER" || source === "set_my_name") return {};
+    if (isGuessedName(source))
+      return {
+        your_name: `Others see this person as '${name}', which is ${source === "login" ? "only their login name" : "a made-up name"}. If this chat hasn't asked yet, ask what name they want and save it with set_my_name; if they'd rather not say, '${name}' stays.`,
+      };
+    return {
+      your_name: `Others see this person as '${name}' (${source === "git" ? "from git's user.name" : "the full name on their computer account"}). If this chat hasn't told them yet, do, and offer set_my_name if they want another.`,
+    };
+  }
+
   private invited(r: Record<string, any>, context: string) {
     const identity = this.o.identity();
     return {
@@ -1189,6 +1273,7 @@ export class Session {
       send: `Join my context graph: /vine-context:join ${r.code}`,
       invite: { id: r.id, label: r.label, role: r.role, expires_at: r.expires_at },
       shared_as: { name: identity.name, fingerprint: fingerprint(identity.publicKey) },
+      ...this.nameNote(),
       next:
         "Give the person the 'send' line to pass on privately (not in a public channel). Agents without the plugin command can be told: join the context with this code. " +
         "This machine answers the code, so it must be online when they use it. Whoever uses it first is let in at once and gets a full copy, and everyone in the context is told who joined (name, key fingerprint, agent). " +
@@ -1234,6 +1319,7 @@ export class Session {
       role: c.d.you.role,
       as: c.d.you.id,
       your_fingerprint: fingerprint(identity.publicKey),
+      ...this.nameNote(),
       contexts: this.list(),
       copy: `You have your own full copy (${welcome.changes.length} changes), kept in step with the other members whenever you're both online. It works offline too.`,
       briefing: brief,

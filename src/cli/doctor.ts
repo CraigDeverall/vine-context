@@ -74,11 +74,12 @@ export async function runDoctor(o: { print?: (line: string) => void; network?: b
     return `${p.model.title}: ${p.tools.length} tools`;
   });
   await check("search embedder", async () => {
-    const { makeEmbedder } = await import("../core/embed.js");
-    const e = makeEmbedder();
+    const { chooseEmbedder } = await import("../core/embed.js");
+    const { embedder: e, why } = chooseEmbedder();
     const v = e.embed("hello graph");
     if (v?.length !== e.dim) throw new Error(`${e.name} returned ${v?.length ?? "no"} numbers, not ${e.dim}`);
-    return e.name === "hash-256" ? `${e.name} (built in; matches words, not meaning)` : `${e.name} (${e.dim} dimensions, matches meaning)`;
+    if (why) return why;
+    return e.name === "hash-256" ? `${e.name} (VINE_EMBEDDER=hash; matches words, not meaning)` : `${e.name} (VINE_EMBEDDER; ${e.dim} dimensions, matches meaning)`;
   });
   await check("data directory", async () => {
     const { defaultDataDir } = await import("../core/graph.js");

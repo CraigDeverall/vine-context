@@ -1,7 +1,8 @@
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { embedderDir, HashEmbedder, makeEmbedder, ModelEmbedder, MODELS, platformPackage, type Embedder } from "../src/core/embed.js";
+import { chooseEmbedder, embedderDir, HashEmbedder, makeEmbedder, ModelEmbedder, MODELS, platformPackage, type Embedder } from "../src/core/embed.js";
 import { Graph } from "../src/core/graph.js";
 import { act, alice, reader, tempDir } from "./helpers.js";
 
@@ -30,10 +31,37 @@ async function seed(g: Graph) {
 }
 
 describe("embedders", () => {
-  it("defaults to the hash embedder and names the ones it knows", () => {
-    expect(makeEmbedder(undefined)).toBeInstanceOf(HashEmbedder);
+  it("takes the hash embedder by name, and names the ones it knows", () => {
     expect(makeEmbedder("hash").name).toBe("hash-256");
-    expect(() => makeEmbedder("nope")).toThrow(/Unknown embedder 'nope'. Available: hash, bge-small, minilm\./);
+    expect(chooseEmbedder("hash").why).toBeUndefined();
+    expect(() => makeEmbedder("nope")).toThrow(/Unknown embedder 'nope'. Available: auto, hash, bge-small, minilm\./);
+  });
+
+  it("by default takes the sentence model when its package is installed, else the hash, and says which", () => {
+    const before = process.env.VINE_EMBEDDER_DIR;
+    try {
+      // Nowhere to find the model: the hash, with the reason.
+      process.env.VINE_EMBEDDER_DIR = tempDir();
+      const warned: string[] = [];
+      const fallback = makeEmbedder("auto", (w) => warned.push(w)); // the tests run with VINE_EMBEDDER=hash
+      expect(fallback).toBeInstanceOf(HashEmbedder);
+      expect(warned).toEqual([expect.stringMatching(/package isn't installed, so search matches words, not meaning/)]);
+      expect(chooseEmbedder("auto").why).toMatch(new RegExp(`the ${platformPackage()} package isn't installed`));
+
+      // The model, where this machine has it (npm installs the platform package as an optional dependency).
+      delete process.env.VINE_EMBEDDER_DIR;
+      const spec = MODELS["bge-small"]!;
+      const installed = existsSync(join(embedderDir(), "models", spec.dir, spec.file));
+      const c = chooseEmbedder("auto");
+      if (installed) {
+        expect(c.embedder).toBeInstanceOf(ModelEmbedder);
+        expect(c.embedder.name).toBe(spec.name);
+        expect(c.why).toMatch(/installed with vine: search matches meaning/);
+      } else expect(c.embedder).toBeInstanceOf(HashEmbedder);
+    } finally {
+      if (before === undefined) delete process.env.VINE_EMBEDDER_DIR;
+      else process.env.VINE_EMBEDDER_DIR = before;
+    }
   });
 
   it("says how to install a model embedder that is not on this machine", () => {
@@ -42,14 +70,19 @@ describe("embedders", () => {
     );
   });
 
-  it("looks in VINE_EMBEDDER_DIR first, else a checkout's build folder when no platform package is installed", () => {
+  it("looks in VINE_EMBEDDER_DIR first, then the installed platform package, then a checkout's build folder", () => {
     expect(platformPackage()).toBe(`vine-context-embedder-${process.platform}-${process.arch}`);
     const before = process.env.VINE_EMBEDDER_DIR;
     try {
       process.env.VINE_EMBEDDER_DIR = "/somewhere/else";
       expect(embedderDir()).toBe("/somewhere/else");
       delete process.env.VINE_EMBEDDER_DIR;
-      expect(embedderDir()).toBe(join(process.cwd(), "native", "embedder", "dist"));
+      // npm installs the platform package as an optional dependency where one is published for this machine.
+      let installed: string | undefined;
+      try {
+        installed = dirname(createRequire(join(process.cwd(), "package.json")).resolve(`${platformPackage()}/package.json`));
+      } catch {}
+      expect(embedderDir()).toBe(installed ?? join(process.cwd(), "native", "embedder", "dist"));
     } finally {
       if (before === undefined) delete process.env.VINE_EMBEDDER_DIR;
       else process.env.VINE_EMBEDDER_DIR = before;
@@ -113,5 +146,19 @@ describe.each(Object.keys(MODELS))("the %s model embedder", (short) => {
     // Shares no content word with any claim, so the full-text half of the hybrid search stays out of it.
     const found = (await act(g, "search", { query: "When does it launch?" }, reader)) as Row[];
     expect(found[0]).toMatchObject({ id: release.id });
+  });
+});
+
+describe("searching what has ended", () => {
+  it("leaves out withdrawn claims unless include_ended, and says which rows are current", async () => {
+    const g = await Graph.open({ dataDir: tempDir(), name: "ended", embedder: new TopicEmbedder() });
+    const release = await seed(g);
+    await act(g, "withdraw", { id: release.id, reason: "The date moved" }, alice);
+    // No word in common with the claim: only its vector can find it.
+    const now = (await act(g, "search", { query: "ship" }, reader)) as Row[];
+    expect(now.map((r) => r.id)).not.toContain(release.id);
+    expect(now.every((r) => r.current === true)).toBe(true);
+    const all = (await act(g, "search", { query: "ship", include_ended: true }, reader)) as Row[];
+    expect(all[0]).toMatchObject({ id: release.id, current: false });
   });
 });

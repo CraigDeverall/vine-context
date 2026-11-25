@@ -89,7 +89,7 @@ MATCH (n:Claim|Question) SEARCH n IN (COMBINE (
 ) USING WRRF WITH CONSTANT 60 LIMIT 100) SCORE AS score
 ```
 
-The default embedder turns text into a 256-number vector from its words and word fragments, with no model download. A semantic one is optional ([limits](HOW-IT-WORKS.md#limits)).
+The embedder is a small sentence model (bge-small, 384 numbers) that installs with vine and runs on the CPU; where it isn't available, a built-in one makes a 256-number vector from words and word fragments ([limits](HOW-IT-WORKS.md#limits)).
 
 ## Explore the example store
 
