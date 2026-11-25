@@ -93,7 +93,7 @@ The default embedder turns text into a 256-number vector from its words and word
 
 ## Explore the example store
 
-The example is a bit of office life in miniature: Alice, Bob and Carol planning the Christmas party over three days in November 2026. It holds 8 claims (one withdrawn), 3 questions, 1 reply and 11 relationships, one of every kind.
+The example is a bit of office life in miniature: Alice, Bob and Carol planning the Christmas party over three days in November 2026. It holds 8 claims (one withdrawn), 3 questions, 3 replies and 14 relationships, of every kind.
 
 Install [Relate's CLI](https://relatedb.ai/docs/get-started/install/), then work on a copy, because Relate tidies a store's files when it opens one.
 
@@ -103,7 +103,7 @@ cp -R "$(npm root -g)/vine-context/examples/data/graphs/party" /tmp/party
 
 In a clone of this repo, copy `examples/data/graphs/party` instead.
 
-**What's in it?** Two `ABOUT`, four `SUPPORTS`, one `CONTRADICTS`, two `ANSWERS`, one `REPLACES` and one `REPLIES_TO`.
+**What's in it?** Two `ABOUT`, five `SUPPORTS`, one `CONTRADICTS`, two `ANSWERS`, one `REPLACES` and three `REPLIES_TO`.
 
 ```bash
 relate -d /tmp/party --mode table "MATCH ()-[r]->() RETURN type(r) AS relationship, count(*) AS n"
@@ -127,16 +127,16 @@ relate -d /tmp/party --mode table "MATCH (new:Claim)-[r:REPLACES]->(old:Claim) R
 relate -d /tmp/party --mode table "MATCH (q:Question) OPTIONAL MATCH (c:Claim)-[:ANSWERS]->(q) RETURN q.text AS question, c.text AS answer"
 ```
 
-**What has been said about the open question?** A reply is a message in the question's thread, not an answer, so the question stays open.
+**What was said in the threads?** A reply is a message in a question's thread, not an answer. Two of these threads were closed by a claim that answers the question; the partners question has only its reply, so it stays open.
 
 ```bash
 relate -d /tmp/party --mode table "MATCH (m:Reply)-[:REPLIES_TO]->(q:Question) RETURN q.text AS question, m.recorded_by AS who, m.text AS reply"
 ```
 
-**What is the decision based on?** Follow `SUPPORTS` back to the evidence: the Orangery's availability, its hire-fee waiver, the budget.
+**What is the decision based on?** Follow `SUPPORTS` back to the evidence: the Orangery's availability, its hire-fee waiver, the budget. The withdrawn claim's link is still in the graph (nothing is deleted), so leave it out by its `withdrawn_at`.
 
 ```bash
-relate -d /tmp/party --mode table "MATCH p=(a:Claim)-[:SUPPORTS*1..3]->(b:Claim) RETURN [n IN nodes(p) | n.text] AS chain"
+relate -d /tmp/party --mode table "MATCH p=(a:Claim)-[:SUPPORTS*1..3]->(b:Claim) WHERE a.withdrawn_at IS NULL RETURN [n IN nodes(p) | n.text] AS chain"
 ```
 
 **What did the team believe on Monday afternoon?** Only what had been recorded by then, and not yet replaced or withdrawn. At 16:00 on Monday 17 Nov, Bob's Riverside Room claim and Carol's contradicting one were both current.

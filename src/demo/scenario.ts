@@ -1,7 +1,8 @@
 // The example story, in one place: three people (alice, bob, carol) planning
 // the office Christmas party, 17 to 19 Nov 2026. A contradiction appears and
 // is settled, a mistaken claim is withdrawn, two questions are answered, and
-// a third gets a reply in its thread but stays open.
+// a third stays open. Three replies show a question's thread: messages that
+// are not answers.
 //
 // Two things play it: `scripts/make-examples.ts` writes it, backdated, into
 // the example store that ships with the package, and `vine demo` runs it live
@@ -32,6 +33,11 @@ export const STEPS: Step[] = [
   },
   { who: "alice", day: 17, time: "09:15", tool: "ask_question", as: "whichVenue", args: { text: "Which venue can take all of us on a Friday in December?", about: ["@headcount"] }, note: "asks which venue can take all of them on a Friday" },
   {
+    who: "bob", day: 17, time: "10:40", tool: "reply",
+    args: { question: "@whichVenue", text: "Riverside said yes on the phone. I'll get it in writing before we book." },
+    note: "replies in the thread: Riverside said yes on the phone, and he'll get it in writing. A reply is a message to the thread, not an answer, so the question stays open",
+  },
+  {
     who: "bob", day: 17, time: "11:30", tool: "add_claim", as: "riverside",
     args: { text: "The Riverside Room can take the whole party on Friday 12 Dec", source: "phone call with the Riverside Room", about_from: "2026-12-12", about_to: "2026-12-12" },
     note: "claims the Riverside Room can take the whole party on Friday 12 Dec",
@@ -44,6 +50,11 @@ export const STEPS: Step[] = [
   { who: "bob", day: 17, time: "15:20", tool: "add_claim", as: "budget", args: { text: "The budget is £2,400, which is £50 a head for 48", source: "finance: events budget 2026" }, note: "records the budget: £2,400, which is £50 a head" },
   { who: "alice", day: 17, time: "15:40", tool: "ask_question", as: "coversHire", args: { text: "Does the budget cover a venue hire fee as well as food?", about: ["@budget"] }, note: "asks whether that covers a venue hire fee as well as food" },
   {
+    who: "bob", day: 18, time: "09:30", tool: "reply",
+    args: { question: "@coversHire", text: "Checking each venue's terms now. Hire fees are the sticking point; food alone fits." },
+    note: "replies: he's checking each venue's terms, and hire fees are the sticking point",
+  },
+  {
     who: "carol", day: 18, time: "10:00", tool: "add_claim", as: "orangery",
     args: { text: "The Orangery holds 60 and is free on Friday 19 Dec", source: "the Orangery's bookings page", about_from: "2026-12-19", about_to: "2026-12-19" },
     note: "finds the Orangery holds 60 and is free on Friday 19 Dec",
@@ -51,11 +62,18 @@ export const STEPS: Step[] = [
   {
     who: "carol", day: 18, time: "10:20", tool: "add_claim", as: "waiver",
     args: { text: "The Orangery waives its hire fee at a £1,800 minimum spend on food and drink, which fits the £2,400 budget", source: "the Orangery's events pack", supports: ["@budget"], answers: ["@coversHire"] },
-    note: "claims the Orangery waives its hire fee at a £1,800 minimum spend, which fits the budget. That answers alice's second question",
+    note: "claims the Orangery waives its hire fee at a £1,800 minimum spend, which fits the budget. That answers alice's second question, and closes its thread",
   },
   { who: "carol", day: 18, time: "10:21", tool: "link", args: { from: "@orangery", relation: "SUPPORTS", to: "@waiver" }, note: "links the Orangery's availability as support for that" },
-  { who: "bob", day: 18, time: "12:05", tool: "add_claim", as: "lastYear", args: { text: "Last year's party cost £3,100" }, note: "claims last year's party cost £3,100" },
-  { who: "bob", day: 18, time: "12:30", tool: "withdraw", args: { id: "@lastYear", reason: "Wrong party: that was the summer party" }, note: "withdraws it: that was the summer party. It stays in the history, marked as ended" },
+  {
+    who: "bob", day: 18, time: "12:05", tool: "add_claim", as: "lastYear",
+    args: { text: "Last year's party cost £2,300, so £2,400 is plenty", source: "finance: events spend 2025", about_from: "2025-12-01", about_to: "2025-12-31", supports: ["@budget"] },
+    note: "claims last year's party cost £2,300, as support for the budget",
+  },
+  {
+    who: "bob", day: 18, time: "12:30", tool: "withdraw", args: { id: "@lastYear", reason: "That figure was the summer party" },
+    note: "withdraws it: that figure was the summer party. Nothing is deleted: the claim and its link stay in the history, marked as ended, and drop out of the current view",
+  },
   {
     who: "bob", day: 18, time: "16:45", tool: "add_claim",
     args: { text: "The party is at the Orangery on Friday 19 Dec, not the Riverside Room", about_from: "2026-12-19", about_to: "2026-12-19", replaces: ["@riverside"], supports: ["@waiver"], answers: ["@whichVenue"] },
@@ -65,7 +83,7 @@ export const STEPS: Step[] = [
   {
     who: "carol", day: 19, time: "09:40", tool: "reply",
     args: { question: "@partners", text: "Finance can't stretch to partners this year. A January drinks evening for partners might work; I'll ask." },
-    note: "replies in the thread: not within this year's budget, but a January drinks evening might work. A reply is a message, not an answer, so the question stays open",
+    note: "replies in the thread: not within this year's budget, but a January drinks evening might work. Still a reply, not an answer: the question stays open",
   },
 ];
 

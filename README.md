@@ -134,7 +134,7 @@ Join codes, roles, undo, working offline and removing someone are covered in [th
 
 ## Where the data lives
 
-**The example store is in this repo**, at [`examples/data/graphs/party`](examples/data/graphs/party): 8 claims (one withdrawn), 3 questions, 1 reply and 11 relationships. It is an ordinary Relate directory store, so [Relate's CLI](https://relatedb.ai/docs/get-started/install/) opens it:
+**The example store is in this repo**, at [`examples/data/graphs/party`](examples/data/graphs/party): 8 claims (one withdrawn), 3 questions, 3 replies and 14 relationships. It is an ordinary Relate directory store, so [Relate's CLI](https://relatedb.ai/docs/get-started/install/) opens it:
 
 ```bash
 cp -R "$(npm root -g)/vine-context/examples/data/graphs/party" /tmp/party

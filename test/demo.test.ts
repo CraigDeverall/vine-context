@@ -30,7 +30,7 @@ describe("vine demo", () => {
     expect(a).toEqual(await texts(carol));
     expect(a).toContain("The party is at the Orangery on Friday 19 Dec, not the Riverside Room");
     expect(a).not.toContain("The Riverside Room can take the whole party on Friday 12 Dec");
-    expect(a).not.toContain("Last year's party cost £3,100");
+    expect(a).not.toContain("Last year's party cost £2,300, so £2,400 is plenty");
 
     // The conflict settled, one question still open (replied to, not answered), on every copy.
     for (const m of [alice, bob, carol]) {
@@ -39,6 +39,7 @@ describe("vine demo", () => {
       expect(open.map((q) => q.text)).toEqual(["Should partners be invited, and is there budget for them?"]);
       const thread = (await m.call<Row>("thread", { question: open[0]!.id })) as Row;
       expect(JSON.stringify(thread)).toContain("January drinks evening");
+      expect(await m.call<Row[]>("beliefs", {})).toHaveLength(6);
     }
 
     // Every step was narrated, and alice's agent was told what bob's and carol's writes meant for her.

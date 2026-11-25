@@ -6,7 +6,7 @@
   "commit_ts": 6,
   "node_parts": [
     {
-      "path": "nodes/0-262144-43f94135d85186c87a3b22c9ccb38b01.parquet",
+      "path": "nodes/0-262144-7987dd27c85668d4810609133f705907.parquet",
       "id_lo": 0,
       "id_hi": 262144,
       "rows": 1,
