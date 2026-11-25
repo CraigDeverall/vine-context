@@ -1541,6 +1541,11 @@ export const register: Register = on => {
       const mineOpen = t.open.filter(th => isMine(th.q) && th.replies.length)
       const digest = a.digest?.at(-1)
       const feed = a.recent
+      // The "you claimed:" part of an activity line is who-did-what metadata: drawn dim so the claim itself reads first.
+      const lead = (c: Change) => {
+        const i = /^(claim|question|reply|describe)$/.test(c.kind) ? c.summary.indexOf(': ') : -1
+        return i < 0 ? { head: '', body: c.summary } : { head: c.summary.slice(0, i + 2), body: c.summary.slice(i + 2) }
+      }
       const ICON: Record<string, string> = { claim: '📌', question: '❓', reply: '↳', link: '🔗', withdraw: '✕', add_member: '👋', remove_member: '🚪', set_role: '🔑', rename: '✎', describe: '✎', create: '✦' }
       const need = (key: string, tone: string, text: unknown, button: unknown) =>
         card(
@@ -1637,11 +1642,10 @@ export const register: Register = on => {
             <Box key={`act-${c.id}`} flexDirection="row" gap={1} justifyContent="space-between" alignItems="flex-start">
               <Box flexDirection="column" flexShrink={1}>
                 <Text wrap="wrap">
-                  <Text dimColor>{ICON[c.kind] ?? '·'} </Text>
-                  <Text weight="semibold" bold>
-                    {c.mine ? 'you' : c.by}
-                  </Text>{' '}
-                  {short(c.summary, 200)}
+                  <Text dimColor>
+                    {ICON[c.kind] ?? '·'} {c.mine ? 'you' : c.by} {lead(c).head}
+                  </Text>
+                  {short(lead(c).body, 200)}
                 </Text>
                 <Text size="footnote" dimColor>
                   {ago(c.at, now)}

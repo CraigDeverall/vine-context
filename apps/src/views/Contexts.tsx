@@ -55,6 +55,11 @@ const TABS: { tab: Tab; label: string }[] = [
 ];
 /** How many recent changes the Overview shows before "Show more". */
 const RECENT = 5;
+// The "you claimed:" part of an activity line is who-did-what metadata: drawn muted so the claim itself reads first.
+const lead = (c: Change) => {
+  const i = /^(claim|question|reply|describe)$/.test(c.kind) ? c.summary.indexOf(": ") : -1;
+  return i < 0 ? { head: "", body: c.summary } : { head: c.summary.slice(0, i + 2), body: c.summary.slice(i + 2) };
+};
 const ICON: Record<string, string> = { claim: "📌", question: "❓", reply: "↳", link: "🔗", withdraw: "✕", add_member: "👋", remove_member: "🚪", set_role: "🔑", rename: "✎", describe: "✎", create: "✦" };
 const ROLES: Role[] = ["reader", "contributor", "admin"];
 
@@ -1326,8 +1331,10 @@ export function Contexts({ b }: { b: Bridge }) {
             <div key={c.id} className="item">
               <div className="grow">
                 <p className="wrap">
-                  <span className="muted">{ICON[c.kind] ?? "·"} </span>
-                  <strong>{c.mine ? "you" : c.by}</strong> {short(c.summary, 200)}
+                  <span className="muted">
+                    {ICON[c.kind] ?? "·"} {c.mine ? "you" : c.by} {lead(c).head}
+                  </span>
+                  {short(lead(c).body, 200)}
                 </p>
                 <Meta>
                   {ago(c.at, now)}
