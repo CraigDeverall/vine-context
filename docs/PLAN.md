@@ -468,6 +468,9 @@ Step 4 is the large one. It changes the "no server" claim to "no server
 needed, an optional gateway you own", and it adds sign-in, so its design is
 agreed before any code.
 
+Steps 2 and 4 are planned in full, for every assistant other than Claude Code
+and Codex, in [PLATFORMS.md](PLATFORMS.md).
+
 ### 10.3 Rules this sets for other work
 
 - **Native code is the main cost.** Each native dependency must ship a
