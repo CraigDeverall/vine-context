@@ -99,6 +99,21 @@ Codex and other MCP agents: see [the guide](docs/GUIDE.md#install-by-hand).
 
 </details>
 
+<details><summary>From a clone of this repo (no npm registry needed)</summary>
+
+```bash
+git clone https://github.com/CraigDeverall/vine-context.git
+cd vine-context
+npm ci
+npm run build
+npm link
+vine demo
+```
+
+`npm link` puts this clone's `vine` command on your PATH, so the plugin steps above work with it too. `npm run check` runs the typecheck, the tests and the build, as CI does.
+
+</details>
+
 ### 2. See it (about two minutes)
 
 ```bash
