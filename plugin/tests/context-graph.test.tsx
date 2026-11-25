@@ -432,7 +432,8 @@ test('the Contexts view turns contexts on and off, creates one in its own step, 
 
 test('a context opens from the list on its tabs or its Settings tab, an off one has a page of its own, and either is deleted only once its name is typed', async ($, on) => {
   const calls: Calls = []
-  engine(on, calls)
+  const prompts: string[] = []
+  engine(on, calls, prompts)
   await $.session.start(START)
   await $.command.run(RUN)
   const desk = await $.ui.mount({ ...PANE, surface: 'desktop' })
@@ -463,6 +464,11 @@ test('a context opens from the list on its tabs or its Settings tab, an off one 
   expect(await desk.find({ type: 'Text', text: /Syncing · 3 members · 1 of the others online now · 2 join codes not used yet/ })).toBeDefined()
   // The id every member shares sits under this machine's name for it.
   expect(await desk.find({ type: 'Text', text: '0193-aaaa' })).toBeDefined()
+  // Each has a copy button at its end, drawn hidden and shown on hover of its line.
+  await desk.press({ key: 'context-name-team-copy' })
+  await desk.press({ key: 'context-id-team-copy' })
+  expect(prompts).toContain('copied: team')
+  expect(prompts).toContain('copied: 0193-aaaa')
   // Storage and history are behind a link.
   expect(await desk.find({ type: 'Text', text: '/data/graphs/team' })).toBeUndefined()
   await desk.press({ key: 'fold-about-team' })
