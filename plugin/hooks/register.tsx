@@ -640,7 +640,7 @@ export const register: Register = on => {
 
     /** A label over a field as wide as the panel, with a line of help under it. */
     const field = (label: string, input: unknown, help?: string) => (
-      <Box flexDirection="column" gap="xs">
+      <Box flexDirection="column" gap="xs" width="100%" alignItems="stretch">
         <Text weight="semibold" bold>
           {label}
         </Text>
@@ -1217,14 +1217,16 @@ export const register: Register = on => {
               onSelect={(r: string) => void update($, inviting, () => r as Invite['role'])}
             />
           )}
-          <Input
-            key="invite-note"
-            label="Who is it for? (optional)"
-            placeholder="e.g. Sam: shown when they join, so a code used by someone else stands out"
-            autoFocus
-            onInput={(v: string) => (inviteNote = v)}
-            onSubmit={make}
-          />
+          {field(
+            'Who is it for? (optional)',
+            <Input
+              key="invite-note"
+              placeholder="e.g. Sam: shown when they join, so a code used by someone else stands out"
+              autoFocus
+              onInput={(v: string) => (inviteNote = v)}
+              onSubmit={make}
+            />,
+          )}
           <Box flexDirection="row">
             <Button key="make-code" label="Make join code" variant="primary" onPress={() => make(inviteNote)} />
           </Box>
