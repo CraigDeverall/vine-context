@@ -16,6 +16,8 @@ import { NoToolCalls, asks, copyText, usePoll, type Bridge } from "../bridge";
 import {
   ago,
   answerPrompt,
+  filtered,
+  ids,
   matches,
   newContextProblem,
   prompts,
@@ -28,6 +30,7 @@ import {
   type Activity,
   type Change,
   type ContextDetails,
+  type Found,
   type Filters,
   type GraphNode,
   type Invite,
@@ -52,6 +55,15 @@ const TABS: { tab: Tab; label: string }[] = [
 ];
 /** How many recent changes the Overview shows before "Show more". */
 const RECENT = 5;
+// The header names at most this many members (you, then who's online); the People tab has everyone.
+const HEADER_PEOPLE = 6;
+// The "you claimed:" part of an activity line is who-did-what metadata: drawn muted so the claim itself reads first.
+const lead = (c: Change) => {
+  const i = /^(claim|question|reply|describe)$/.test(c.kind) ? c.summary.indexOf(": ") : -1;
+  return i < 0 ? { head: "", body: c.summary } : { head: c.summary.slice(0, i + 2), body: c.summary.slice(i + 2) };
+};
+/** A way out of a step (Cancel, Done, Back) leads with a ‹ caret, so it reads as going back. */
+const caret = (label: string) => (label.startsWith("‹") ? label : `‹ ${label}`);
 const ICON: Record<string, string> = { claim: "📌", question: "❓", reply: "↳", link: "🔗", withdraw: "✕", add_member: "👋", remove_member: "🚪", set_role: "🔑", rename: "✎", describe: "✎", create: "✦" };
 const ROLES: Role[] = ["reader", "contributor", "admin"];
 
@@ -178,6 +190,8 @@ export function Contexts({ b }: { b: Bridge }) {
   const [notice, setNotice] = useState<string | null>(null);
   const [tab, setTabState] = useState<Tab>("overview");
   const [filters, setFilters] = useState<Filters>({ text: "", claims: "current", questions: "open" });
+  /** The search behind the filter's text: the lists add its best matches to those that share its words. */
+  const [found, setFound] = useState<Found | null>(null);
   /** How many more items than the first page a list shows. */
   const [more, setMore] = useState(0);
   /** The item (a claim's or question's key) shown on its own. */
@@ -363,7 +377,7 @@ export function Contexts({ b }: { b: Bridge }) {
       <div className="stack sm">
         <div className="spread">
           <h1 className="title wrap">{title}</h1>
-          {close && <button onClick={close.onClick}>{close.label}</button>}
+          {close && <button onClick={close.onClick}>{caret(close.label)}</button>}
         </div>
         {about && <p className="wrap">{about}</p>}
       </div>
@@ -412,7 +426,7 @@ export function Contexts({ b }: { b: Bridge }) {
         aria-pressed={pinned}
         onClick={() => void act("link_folder", pinned ? { name: n, off: true } : { name: n }, pinned ? `New chats in this folder no longer start with '${n}'.` : `New chats in this folder start with '${n}'.`)}
       >
-        {pinned ? "📌 Pinned to " : "📌 Pin to "}
+        {pinned ? "📌 On for new chats in " : "📌 Turn on for new chats in "}
         <span className="faint">{tail(f.folder, 32)}</span>
       </button>
     );
@@ -431,25 +445,29 @@ export function Contexts({ b }: { b: Bridge }) {
     const sharing = d?.sharing ?? (inTab ? a?.sharing : undefined);
     const relays = inTab ? a?.relays_up : undefined;
     const count = (k: string, one: string, plural: string) => `${d?.items[k] ?? 0} ${(d?.items[k] ?? 0) === 1 ? one : plural}`;
+    /** No one else has joined, so there is nobody to sync with. */
+    const alone = d?.members === 1;
     return (
       <div className="stack lg">
         <div className="stack sm">
           <Heading>This chat</Heading>
-          <div className="row">
-            <Chip active={!!c} onClick={() => toggle(n)}>
-              {c ? "◉ On" : "○ Off"}
-            </Chip>
-            {c && severalOn && !c.writes_here && <button onClick={() => writeHere(n)}>✎ Write here</button>}
-            {c && !inTab && <button onClick={() => void show(n)}>Open</button>}
+          <div className="spread">
+            <div className="row">
+              <Chip active={!!c} onClick={() => toggle(n)}>
+                {c ? "◉ On" : "○ Off"}
+              </Chip>
+              {c && severalOn && !c.writes_here && <button onClick={() => writeHere(n)}>✎ Write here</button>}
+            </div>
+            {c && !inTab && <button onClick={() => void show(n)}>Open ›</button>}
           </div>
           <Meta>
             {c
               ? severalOn
                 ? c.writes_here
-                  ? "Your agent reads it, and writes here when no other context clearly fits."
-                  : "Your agent reads it, and writes here when its description fits."
-                : "Your agent reads and writes here. Turning it off leaves it on this machine."
-              : "Off for this chat. Turn it on to open it here, share it or change its settings."}
+                  ? "Your agent looks things up in this context, and records new items in it unless another context clearly fits better."
+                  : "Your agent looks things up in this context, and records a new item in it only when the item fits its description."
+                : "This chat uses this context: your agent looks things up in it and records new claims and questions in it. Turning it off only affects this chat. Your copy stays on this machine."
+              : "This chat isn’t using this context. Turn it on to open it here, share it or change its settings."}
           </Meta>
           {pin(n)}
         </div>
@@ -460,19 +478,12 @@ export function Contexts({ b }: { b: Bridge }) {
           ) : (
             <p className="wrap">
               <span className={sharing ? "t-ok" : "t-warn"}>● </span>
-              {sharing ? "Syncing" : "Offline"}
+              {!sharing ? "Offline" : alone ? "Only you so far" : "Syncing"}
               {d && (
                 <span className="muted">
-                  {" "}
-                  · {d.members} member{d.members === 1 ? "" : "s"}
-                  {d.members > 1 ? ` · ${d.online} of the others online` : ""}
-                  {d.open_invites ? ` · ${d.open_invites} join code${d.open_invites === 1 ? "" : "s"} waiting` : ""}
-                </span>
-              )}
-              {sharing && relays !== undefined && (
-                <span className="muted">
-                  {" "}
-                  · {relays} signalling relay{relays === 1 ? "" : "s"} reachable
+                  {!sharing && alone ? " · only you so far" : ""}
+                  {!alone ? ` · ${d.members} members · ${d.online} of the others online now` : ""}
+                  {d.open_invites ? ` · ${d.open_invites} join code${d.open_invites === 1 ? "" : "s"} not used yet` : ""}
                 </span>
               )}
             </p>
@@ -481,8 +492,12 @@ export function Contexts({ b }: { b: Bridge }) {
             {sharing === false
               ? "Your copy keeps working. What you write is sent when you’re back online."
               : relays === 0
-                ? "No relay is reachable, so the others can’t find this machine right now."
-                : "Every member keeps a full copy. Changes travel directly between your machines whenever you’re both online."}
+                ? "This machine can’t reach the servers that help members find each other, so nothing syncs right now."
+                : alone
+                  ? d?.open_invites
+                    ? "Nobody has joined yet. Syncing starts when someone uses a join code you sent."
+                    : "Nobody else is in this context yet. Invite someone to share it with them."
+                  : "Every member keeps a full copy. Changes travel directly between your machines whenever you’re both online."}
           </Meta>
           {c && (
             <div className="row">
@@ -652,7 +667,7 @@ export function Contexts({ b }: { b: Bridge }) {
           <button className="primary" onClick={create}>
             Create
           </button>
-          <button onClick={close}>Cancel</button>
+          <button onClick={close}>‹ Cancel</button>
         </div>
         <Meta>It’s yours: you’re its admin, and it’s added to this chat. Invite people from its People tab, or with Share in the list.</Meta>
       </div>,
@@ -727,17 +742,13 @@ export function Contexts({ b }: { b: Bridge }) {
                   </Chip>
                 </div>
                 {c && <p className="faint wrap">{c.description ?? "No description yet"}</p>}
-                <div className="row">
-                  {c ? (
-                    <>
-                      <button onClick={() => void show(n)}>Open</button>
-                      <button onClick={() => void settingsTab(n)}>Settings</button>
-                    </>
-                  ) : (
-                    <button onClick={() => void manage(n)}>Settings</button>
-                  )}
-                  {c?.role === "admin" && <button onClick={() => void share(n)}>Share</button>}
-                  {c && many && !c.writes_here && <button onClick={() => writeHere(n)}>✎ Write here</button>}
+                <div className="spread">
+                  <div className="row">
+                    <button onClick={() => void (c ? settingsTab(n) : manage(n))}>Settings</button>
+                    {c?.role === "admin" && <button onClick={() => void share(n)}>Share</button>}
+                    {c && many && !c.writes_here && <button onClick={() => writeHere(n)}>✎ Write here</button>}
+                  </div>
+                  {c && <button onClick={() => void show(n)}>Open ›</button>}
                 </div>
                 {pin(n)}
               </div>
@@ -936,7 +947,7 @@ export function Contexts({ b }: { b: Bridge }) {
             {byline(n)} · {n.key}
           </Meta>
         </div>
-        <button onClick={() => openItem(n.key)}>Open</button>
+        <button onClick={() => openItem(n.key)}>Open ›</button>
       </div>
     );
     const group = (title: string, label: string, tone: Tone, list: GraphNode[]) =>
@@ -1062,11 +1073,39 @@ export function Contexts({ b }: { b: Bridge }) {
     setFilters((v) => ({ ...v, ...(x === tab ? {} : { text: "" }), ...patch }));
     setTabState(x);
   };
+  /**
+   * Asks the server's search for what the filter's text is close to, in the
+   * context shown, ended items included so History can use it too. A server
+   * from before `include_ended` is asked again without it.
+   */
+  const findRelated = async (text: string) => {
+    if (!text || !b.canCall) return setFound(null);
+    const context = a.context;
+    setFound({ text, context, ids: null });
+    const ask = { query: text, kind: "any", limit: 50, ...ctx };
+    const settle = (next: Found) => setFound((v) => (v?.text === text && v.context === context ? next : v));
+    try {
+      const rows = await b.call("search", { ...ask, include_ended: true }).catch((e) => {
+        if (e instanceof NoToolCalls) throw e;
+        return b.call("search", ask);
+      });
+      settle({ text, context, ids: ids(rows) });
+    } catch {
+      settle({ text, context, ids: [], failed: true });
+    }
+  };
   const setFilter = (patch: Partial<Filters>) => {
     setMore(0);
     setFilters((v) => ({ ...v, ...patch }));
+    if (patch.text !== undefined) void findRelated(patch.text);
   };
+  /** The search behind the filter's text, once it has answered for this text in this context. */
+  const near = f.text && found && found.text === f.text && found.context === a.context ? found : null;
   const members = a.people.filter((p) => p.role);
+  const rank = (p: Person) => (p.you ? 0 : p.online ? 1 : 2);
+  const shown = [...members].sort((x, y) => rank(x) - rank(y)).slice(0, HEADER_PEOPLE);
+  const unshown = members.length - shown.length;
+  const unshownOnline = members.filter((p) => p.online).length - shown.filter((p) => p.online).length;
   const counts: Record<Tab, number | undefined> = { overview: undefined, questions: t?.open.length, claims: t?.claims.length, people: members.length, settings: undefined };
   const goOnline = (
     <button className="primary" onClick={() => void act("start_sharing", { ...ctx }, "Back online: syncing with the other members.")}>
@@ -1112,7 +1151,7 @@ export function Contexts({ b }: { b: Bridge }) {
         <span className="faint" aria-hidden="true">
           |
         </span>
-        {members.map((p) => (
+        {shown.map((p) => (
           <span
             key={p.fingerprint}
             className={p.online ? "on" : ""}
@@ -1122,6 +1161,11 @@ export function Contexts({ b }: { b: Bridge }) {
             {p.you ? " (you)" : ""}
           </span>
         ))}
+        {unshown > 0 && (
+          <button className="link" onClick={() => setTab("people")}>
+            +{unshown} more{unshownOnline ? ` · ${unshownOnline} online` : ""}
+          </button>
+        )}
       </div>
       {news && <Meta>Latest: {news}</Meta>}
       <div className="tabs" role="tablist">
@@ -1137,14 +1181,23 @@ export function Contexts({ b }: { b: Bridge }) {
     </div>
   );
 
-  /** The filter box above a list, and what it's filtering by. */
-  const filterBox = (what: string) => (
+  /** The filter box above a list, and what it's filtering by: its words, and how many more are close in meaning. */
+  const filterBox = (what: string, byMeaning: number) => (
     <div className="stack sm">
-      <Field key={`filter-${tab}-${f.text}`} value={f.text} placeholder={`Filter ${what} by words, a person or an id`} submit="Filter" onSubmit={(v) => setFilter({ text: v.trim() })} />
+      <Field key={`filter-${tab}-${f.text}`} value={f.text} placeholder={`Search ${what} by meaning, words, a person or an id`} submit="Search" onSubmit={(v) => setFilter({ text: v.trim() })} />
       {f.text && (
         <div className="row">
           <span className="faint">
             Showing {what} matching “{short(f.text, 40)}”
+            {!b.canCall
+              ? ""
+              : !near || near.ids === null
+                ? " · looking for ones close in meaning…"
+                : near.failed
+                  ? " · search by meaning isn’t available, so only words match"
+                  : byMeaning
+                    ? `, then ${byMeaning} close in meaning`
+                    : ""}
           </span>
           <button className="link" onClick={() => setFilter({ text: "" })}>
             × Clear
@@ -1289,15 +1342,17 @@ export function Contexts({ b }: { b: Bridge }) {
             <div key={c.id} className="item">
               <div className="grow">
                 <p className="wrap">
-                  <span className="muted">{ICON[c.kind] ?? "·"} </span>
-                  <strong>{c.mine ? "you" : c.by}</strong> {short(c.summary, 200)}
+                  <span className="muted">
+                    {ICON[c.kind] ?? "·"} {c.mine ? "you" : c.by} {lead(c).head}
+                  </span>
+                  {short(lead(c).body, 200)}
                 </p>
                 <Meta>
                   {ago(c.at, now)}
                   {c.held && <span className="t-warn"> · still only on this machine</span>}
                 </Meta>
               </div>
-              {c.node && rel.byKey.has(c.node) && <button onClick={() => openItem(c.node)}>Open</button>}
+              {c.node && rel.byKey.has(c.node) && <button onClick={() => openItem(c.node)}>Open ›</button>}
             </div>
           )}
         />
@@ -1310,7 +1365,12 @@ export function Contexts({ b }: { b: Bridge }) {
   } else if (tab === "questions") {
     const scopes = { open: t.open, answered: t.answered, mine: [...t.open, ...t.answered].filter((th) => isMine(th.q)) };
     const scope = f.questions in scopes ? f.questions : "open";
-    const list = scopes[scope].filter((th) => matches(th.q, f.text) || th.replies.some((r) => matches(r, f.text)) || th.answers.some((c) => matches(c, f.text)));
+    const { list, byMeaning } = filtered(
+      scopes[scope],
+      (th) => th.q.key,
+      (th) => matches(th.q, f.text) || th.replies.some((r) => matches(r, f.text)) || th.answers.some((c) => matches(c, f.text)),
+      near?.ids,
+    );
     const question = (th: Thread) => {
       const q = th.q;
       const answered = th.answers.length > 0;
@@ -1325,13 +1385,14 @@ export function Contexts({ b }: { b: Bridge }) {
                 <Meta>
                   asked by {byline(q)}
                   {th.replies.length ? ` · ${th.replies.length} repl${th.replies.length === 1 ? "y" : "ies"}` : ""}
+                  {byMeaning.has(q.key) ? " · close in meaning" : ""}
                   {held(q)}
                 </Meta>
               </div>
               <div className="row">
                 {undo(q)}
                 {answered || !canWrite ? (
-                  <button onClick={() => openItem(q.key)}>Open</button>
+                  <button onClick={() => openItem(q.key)}>Open ›</button>
                 ) : (
                   <button className="primary" onClick={() => openItem(q.key)}>
                     Answer
@@ -1384,7 +1445,7 @@ export function Contexts({ b }: { b: Bridge }) {
             Mine {scopes.mine.length}
           </Chip>
         </div>
-        {filterBox("questions")}
+        {filterBox("questions", byMeaning.size)}
         {!list.length && (
           <p className="empty">
             {f.text
@@ -1406,7 +1467,7 @@ export function Contexts({ b }: { b: Bridge }) {
   } else if (tab === "claims") {
     const scopes = { current: t.claims, mine: t.claims.filter(isMine), conflicts: t.claims.filter((n) => rel.inConflict.has(n.id)), history: rel.history };
     const scope = f.claims in scopes ? f.claims : "current";
-    const list = scopes[scope].filter((n) => matches(n, f.text));
+    const { list, byMeaning } = filtered(scopes[scope], (n) => n.key, (n) => matches(n, f.text), near?.ids);
     const pairs = scope === "history" ? [] : rel.conflicts.filter(([x, y]) => matches(x, f.text) || matches(y, f.text));
     const side = (keep: GraphNode, drop: GraphNode) => (
       <div className="item">
@@ -1418,7 +1479,7 @@ export function Contexts({ b }: { b: Bridge }) {
         </div>
         <div className="row">
           {canWrite && <button onClick={() => void ask(prompts.settle(keep, drop, named))}>Keep this one</button>}
-          <button onClick={() => openItem(keep.key)}>Open</button>
+          <button onClick={() => openItem(keep.key)}>Open ›</button>
         </div>
       </div>
     );
@@ -1452,7 +1513,7 @@ export function Contexts({ b }: { b: Bridge }) {
             History {rel.history.length}
           </Chip>
         </div>
-        {filterBox("claims")}
+        {filterBox("claims", byMeaning.size)}
         {pairs.map(([x, y]) => (
           <Card key={`${x.key}-${y.key}`} tone="warn">
             <div className="stack sm">
@@ -1492,6 +1553,7 @@ export function Contexts({ b }: { b: Bridge }) {
                     </p>
                     <Meta>
                       {byline(n)}
+                      {byMeaning.has(n.key) ? " · close in meaning" : ""}
                       {scope === "history"
                         ? n.ended
                           ? ` · withdrawn${prop(n, "withdrawn_by") ? ` by ${prop(n, "withdrawn_by")}` : ""}${prop(n, "withdraw_reason") ? `: ${short(prop(n, "withdraw_reason"), 80)}` : ""}`
@@ -1504,7 +1566,7 @@ export function Contexts({ b }: { b: Bridge }) {
                   </div>
                   <div className="row">
                     {undo(n)}
-                    <button onClick={() => openItem(n.key)}>Open</button>
+                    <button onClick={() => openItem(n.key)}>Open ›</button>
                   </div>
                 </div>
               </Card>

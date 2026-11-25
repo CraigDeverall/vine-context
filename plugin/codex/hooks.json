@@ -1,4 +1,11 @@
 {
-  "description": "Vine Context has no Codex hooks. This file is here so Codex does not read hooks/hooks.json, which is the Claude Code mod's.",
-  "hooks": {}
+  "description": "Vine Context's Codex hooks: tell the agent what the chat's context is for, and what other members' changes meant, beside the person's prompt. Codex reads this file rather than hooks/hooks.json, which also holds the Claude Code mod.",
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [{ "type": "command", "command": "node \"${PLUGIN_ROOT}/hooks/vine-hook.mjs\" session-start", "timeout": 5 }] }
+    ],
+    "UserPromptSubmit": [
+      { "hooks": [{ "type": "command", "command": "node \"${PLUGIN_ROOT}/hooks/vine-hook.mjs\" prompt", "timeout": 5 }] }
+    ]
+  }
 }

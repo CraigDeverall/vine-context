@@ -63,7 +63,7 @@ export interface SetupDeps {
   version: string;
   doctor(): Promise<import("./doctor.js").DoctorResult>;
   network(): Promise<import("../p2p/netcheck.js").NetCheck>;
-  name: { current(): { name: string; source: string }; set(name: string): void };
+  name: { current(): { name: string; source: import("../core/identity.js").NameSource }; set(name: string): void };
   turn: {
     summary(): import("../p2p/ice.js").IceSummary;
     check(): Promise<{ ok: boolean; error?: string; relay?: string }>;
@@ -188,10 +188,15 @@ export async function runSetup(o: SetupOptions, d: SetupDeps): Promise<{ steps: 
     const cur = d.name.current();
     if (cur.source === "VINE_USER") record({ step: "name", status: "ok", detail: `${cur.name} (from VINE_USER)` });
     else {
-      const from = { set_my_name: "set before", git: "from git", login: "your login name" }[cur.source] ?? cur.source;
-      const name = (await d.prompt.ask(`  The name others see you as (${from})`, cur.name)).trim().slice(0, 60);
+      const from = { set_my_name: "set before", git: "from git", os: "from your computer account", login: "your login name", generated: "made up" }[cur.source] ?? cur.source;
+      // A found name is offered to keep or change; a guess is only the fallback, so ask for theirs.
+      const guessed = cur.source === "login" || cur.source === "generated";
+      const question = guessed ? `  Your name, as others will see it (Enter keeps ${cur.name}, ${from})` : `  The name others see you as (${from})`;
+      const name = (await d.prompt.ask(question, cur.name)).trim().slice(0, 60);
       if (cur.source === "set_my_name" && name === cur.name) record({ step: "name", status: "ok", detail: `${name}` });
       else if (!name) record({ step: "name", status: "skipped", detail: `kept ${cur.name}` });
+      // A kept guess isn't saved, so a better name found later (or given here next time) replaces it.
+      else if (guessed && name === cur.name) record({ step: "name", status: "skipped", detail: `using ${cur.name} for now (${from}); set your own with \`vine setup\`` });
       else {
         if (!dry) d.name.set(name);
         record({ step: "name", status: dry ? "would" : "done", detail: dry ? `would save ${name} as your name` : `saved ${name} as your name` });
@@ -355,7 +360,7 @@ export async function realDeps(o: SetupOptions, prompt: Prompter): Promise<Setup
       return checkNetwork();
     },
     name: {
-      current: () => ({ name: identity.defaultName(dataDir), source: identity.nameSource(dataDir) }),
+      current: () => identity.resolveName(dataDir),
       set: (n) => void identity.setName(dataDir, n),
     },
     turn: {

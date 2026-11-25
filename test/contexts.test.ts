@@ -367,3 +367,24 @@ describe("question threads", () => {
     expect((await c.call("context_activity")).recent.map((x: any) => x.summary)).toContainEqual(expect.stringMatching(/^replied to q_/));
   });
 });
+
+describe("finding a context", () => {
+  it("searches every context on this machine by name and description, and says which this chat uses", async () => {
+    const me = machine("alice");
+    const c = await me.chat({ id: "chat-find", cwd: tempDir("vine-empty-") });
+    expect(await c.call("find_context", { query: "lunch" })).toMatchObject({ found: [], your_contexts: [] });
+
+    await c.call("use_context", { name: "lunch", description: "Where and when the team has lunch" });
+    await c.call("add_context", { name: "ops", description: "Runbooks, deploys and on-call notes" });
+    await c.call("use_context", { name: "lunch" }); // ops stays on the machine, out of the chat
+
+    const r = await c.call("find_context", { query: "on-call runbooks" });
+    expect(r.searched).toBe(2);
+    expect(r.found[0]).toMatchObject({ name: "ops", description: "Runbooks, deploys and on-call notes", in_chat: false, writes_here: false, members: 1 });
+    expect((await c.call("find_context", { query: "team lunch", limit: 1 })).found).toEqual([expect.objectContaining({ name: "lunch", in_chat: true, writes_here: true })]);
+
+    // A description set later is found on the next search.
+    await c.call("describe_context", { description: "Friday lunch spots and the dietary list" });
+    expect((await c.call("find_context", { query: "dietary", limit: 1 })).found[0]).toMatchObject({ name: "lunch", description: "Friday lunch spots and the dietary list" });
+  });
+});
