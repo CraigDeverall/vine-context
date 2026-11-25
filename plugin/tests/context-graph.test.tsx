@@ -126,7 +126,7 @@ function engine(on: any, calls: Calls, prompts: string[] = [], state: unknown = 
       const d = { ...DETAILS, name: e.args.name, in_chat: e.args.name === 'team', writes_here: e.args.name === 'team' }
       return { value: { content: [{ type: 'text', text: JSON.stringify(d) }], isError: false, structuredContent: d } }
     }
-    if (e.tool === 'share_context') return { value: { content: [{ type: 'text', text: '{}' }], isError: false, structuredContent: { send: 'Join my context graph: /vine-context:join vine1_x.y', invite: { id: 'inv_1' } } } }
+    if (e.tool === 'share_context') return { value: { content: [{ type: 'text', text: '{}' }], isError: false, structuredContent: { context: e.args.context ?? 'team', code: 'vine1_x.y', send: 'Join my context graph: /vine-context:join vine1_x.y', invite: { id: 'inv_1', label: e.args.label ?? null, role: e.args.role ?? 'contributor' } } } }
     return { value: { content: [{ type: 'text', text: '{}' }], isError: false } }
   })
 }
@@ -271,7 +271,7 @@ test('editing the description takes the whole panel; claims show conflicts and h
   await desk.press({ key: 'edit-description' })
   expect(await desk.find({ key: 'tab-claims' })).toBeUndefined()
   await desk.input({ key: 'describe', text: 'What the team knows about checkout', kind: 'submit' })
-  expect(calls).toContainEqual({ tool: 'describe_context', args: { description: 'What the team knows about checkout' } })
+  expect(calls).toContainEqual({ tool: 'describe_context', args: { description: 'What the team knows about checkout', context: 'team' } })
 
   await desk.press({ key: 'tab-claims' })
   expect((await desk.find({ key: 'tab-claims' }))?.text).toMatch(/^▸ /)
@@ -338,11 +338,11 @@ test('the people tab confirms a removal on its own, and invites to this context'
   await desk.select({ key: 'invite-role', value: 'reader' })
   await desk.input({ key: 'invite-note', text: 'Dan', kind: 'change' })
   await desk.press({ key: 'make-code' })
-  expect(calls).toContainEqual({ tool: 'share_context', args: { label: 'Dan', role: 'reader' } })
+  expect(calls).toContainEqual({ tool: 'share_context', args: { label: 'Dan', role: 'reader', context: 'team' } })
   expect(await desk.find({ type: 'Text', text: /new: send it now/ })).toBeDefined()
   await desk.press({ key: 'invite' })
   await desk.input({ key: 'invite-note', text: '', kind: 'submit' })
-  expect(calls).toContainEqual({ tool: 'share_context', args: {} })
+  expect(calls).toContainEqual({ tool: 'share_context', args: { context: 'team' } })
   // Each member's key and agent are behind a link; syncing is the header's, not a card here.
   expect(await desk.find({ type: 'Text', text: /^bbbb-cccc-dddd · claude-code/ })).toBeUndefined()
   await desk.press({ key: 'fold-key-bbbb-cccc-dddd' })
@@ -430,7 +430,7 @@ test('a context opens from the list on its tabs or its Settings tab, an off one 
   await desk.press({ key: 'share-team' })
   expect(await desk.find({ type: 'Text', text: /Invite someone to team/ })).toBeDefined()
   await desk.press({ key: 'make-code' })
-  expect(calls).toContainEqual({ tool: 'share_context', args: {} })
+  expect(calls).toContainEqual({ tool: 'share_context', args: { context: 'team' } })
 
   // A context that's on opens by its name or Open; its Settings button opens it on its Settings tab.
   await desk.press({ key: 'switch' })
@@ -466,7 +466,33 @@ test('a context opens from the list on its tabs or its Settings tab, an off one 
   await desk.press({ key: 'settings-own' })
   expect(calls).toContainEqual({ tool: 'context_details', args: { name: 'own' } })
   expect(await desk.find({ key: 'tab-settings' })).toBeUndefined()
-  expect(await desk.find({ key: 'detail-invite-own' })).toBeUndefined()
+  // Its page is the same Settings as an open context's: its name and description change here, and it can be shared.
+  expect(await desk.find({ key: 'name-row-own' })).toBeDefined()
+  await desk.press({ key: 'describe-own' })
+  expect(await desk.find({ type: 'Text', text: /Describe own/ })).toBeDefined()
+  await desk.input({ key: 'describe', text: 'My own notes', kind: 'submit' })
+  expect(calls).toContainEqual({ tool: 'describe_context', args: { description: 'My own notes', context: 'own' } })
+  expect(await desk.find({ key: 'ask-delete-own' })).toBeDefined() // back on its page
+  await desk.press({ key: 'detail-offline-own' })
+  expect(calls).toContainEqual({ tool: 'stop_sharing', args: { context: 'own' } })
+  await desk.press({ key: 'detail-invite-own' })
+  expect(await desk.find({ type: 'Text', text: /Invite someone to own/ })).toBeDefined()
+  await desk.input({ key: 'invite-note', text: 'Sam', kind: 'submit' })
+  expect(calls).toContainEqual({ tool: 'share_context', args: { label: 'Sam', context: 'own' } })
+  // With no People tab to wait in, the new code shows on its page, to copy.
+  expect(await desk.find({ key: 'copy-made-own' })).toBeDefined()
+  expect(await desk.find({ type: 'Text', text: /For Sam/ })).toBeDefined()
+  expect(await desk.find({ key: 'tab-settings' })).toBeUndefined()
+  // Renaming checks the name first.
+  await desk.press({ key: 'rename-context-own' })
+  expect(await desk.find({ type: 'Text', text: /Rename own/ })).toBeDefined()
+  await desk.input({ key: 'rename-context-own', text: 'team', kind: 'submit' })
+  expect(await desk.find({ type: 'Text', text: /already a context 'team'/ })).toBeDefined()
+  expect(calls.some(c => c.tool === 'rename_context')).toBe(false)
+  await desk.input({ key: 'rename-context-own', text: 'My Notes', kind: 'submit' })
+  expect(calls).toContainEqual({ tool: 'rename_context', args: { name: 'own', to: 'my-notes' } })
+  // (This fake server keeps calling it 'own', so the page closes back to the list.)
+  await desk.press({ key: 'settings-own' })
 
   // Deleting: says what goes, and does nothing until the name is typed exactly.
   await desk.press({ key: 'ask-delete-own' })
@@ -674,6 +700,14 @@ test('a narrow pane stacks each row’s buttons under its text, and the details�
   // The folder keeps only the end of its path that fits.
   expect((await narrow.find({ key: 'pin-detail-team' }))?.text).toBe('📌 Pin to …es/checkout')
   await narrow.unmount()
+
+  // On the desktop, which cuts text only at its end, a path too long for the room loses its start instead.
+  const mid = await $.ui.mount({ ...sized(50), surface: 'desktop' })
+  await mid.press({ key: 'tab-settings' })
+  const path = (await mid.find({ key: 'pin-detail-team' }))?.text.replace('📌 Pin to ', '')
+  expect(path).toMatch(/^….*\/services\/checkout$/)
+  expect(path?.length).toBe(28)
+  await mid.unmount()
 
   const roomy = await $.ui.mount({ ...sized(90), surface: 'desktop' })
   expect((await roomy.find({ key: 'detail-Your role' }))?.props.flexDirection).toBe('row')

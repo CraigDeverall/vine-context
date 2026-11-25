@@ -98,6 +98,21 @@ function writeGroup(dataDir: string, graph: string, g: GroupInfo) {
 }
 
 /**
+ * Moves a stopped context to a new local name: its store, its host folder
+ * (group, change log, invites, peers) and the name in its group file. The name
+ * is this machine's label: the id, which the other members know it by, stays.
+ */
+export function moveContext(dataDir: string, from: string, to: string): void {
+  const graphs = join(dataDir, "graphs");
+  const hosts = join(dataDir, "hosts");
+  if (existsSync(join(graphs, to)) || existsSync(join(hosts, to))) throw new Error(`There's already a context '${to}' on this machine.`);
+  renameSync(join(graphs, from), join(graphs, to));
+  if (existsSync(join(hosts, from))) renameSync(join(hosts, from), join(hosts, to));
+  const g = readGroup(dataDir, to);
+  if (g) writeGroup(dataDir, to, { ...g, name: to });
+}
+
+/**
  * Puts a graph someone shared with us on this machine, before its host starts:
  * the group details and the change log from the welcome. Returns false if this
  * machine already has a different graph under that name.
