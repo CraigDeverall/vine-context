@@ -185,12 +185,101 @@ export function relations(nodes: GraphNode[], edges: GraphEdge[]) {
   return { byId, byKey, replacedBy, current, linked, conflicts, inConflict, history };
 }
 
+/**
+ * What the server's search (meaning plus keywords) found for the filter's text
+ * in a context, best first: item ids, or null while it's looking.
+ */
+export type Found = { text: string; context: string; ids: string[] | null; failed?: boolean };
+
+/** How many items a filter adds because they're close in meaning, past those that share its words. */
+export const RELATED = 5;
+
+/**
+ * A list under the filter: the items that match its words, then up to RELATED
+ * more that the search found close in meaning (`near`, best first), which are
+ * marked so the list can say so.
+ */
+export function filtered<T>(items: T[], key: (x: T) => string, words: (x: T) => boolean, near: string[] | null | undefined): { list: T[]; byMeaning: Set<string> } {
+  const list = items.filter(words);
+  const byMeaning = new Set<string>();
+  if (!near?.length) return { list, byMeaning };
+  const shown = new Set(list.map(key));
+  const byKey = new Map(items.map((x) => [key(x), x] as const));
+  for (const id of near) {
+    if (byMeaning.size >= RELATED) break;
+    const x = byKey.get(id);
+    if (x !== undefined && !shown.has(id)) {
+      byMeaning.add(id);
+      list.push(x);
+    }
+  }
+  return { list, byMeaning };
+}
+
+/** The item ids in a search tool's rows. */
+export const ids = (rows: unknown): string[] =>
+  (Array.isArray(rows) ? rows : []).map((r: any) => r?.id).filter((id: unknown): id is string => typeof id === "string");
+
 /** Whether an item matches the filter's words: all of them, anywhere in its text, author, source or id. */
 export function matches(n: GraphNode, text: string): boolean {
   const words = text.toLowerCase().split(/\s+/).filter(Boolean);
   if (!words.length) return true;
   const hay = `${n.title} ${prop(n, "recorded_by")} ${prop(n, "source")} ${n.key}`.toLowerCase();
   return words.every((w) => hay.includes(w));
+}
+
+/**
+ * What a button says to the agent, in the person's name, where the app shows
+ * the views but can't run their tools: the request as the person would put it.
+ * It appears in the chat as their own message, so it reads like one.
+ */
+export function asks(tool: string, args: Record<string, unknown>): string {
+  const s = (k: string) => (typeof args[k] === "string" && args[k] ? String(args[k]) : "");
+  const name = s("name");
+  const ctx = s("context");
+  const there = ctx ? ` in the context '${ctx}'` : "";
+  const of = ctx ? ` the context '${ctx}'` : " this chat's context";
+  switch (tool) {
+    case "explore_context":
+      return s("at") ? `Open the context explorer as it was at ${s("at")}.` : "Open the context explorer.";
+    case "open_console":
+      return "Open the Vine console.";
+    case "open_contexts":
+      return "Open this chat's contexts.";
+    case "use_context":
+      return s("description") ? `Create a context called '${name}' and use it in this chat. It's for: ${s("description")}` : `Use the context '${name}' in this chat.`;
+    case "add_context":
+      if (s("description")) return `Create a context called '${name}' and add it to this chat. It's for: ${s("description")}`;
+      return args.write_here ? `Record new items in the context '${name}' unless another of this chat's contexts fits better.` : `Add the context '${name}' to this chat.`;
+    case "remove_context":
+      return `Stop using the context '${name}' in this chat.`;
+    case "link_folder":
+      return args.off ? `Stop starting new chats in this folder with the context '${name}'.` : `Start new chats in this folder with the context '${name}'.`;
+    case "describe_context":
+      return `Change the description of${of} to: ${s("description")}`;
+    case "delete_context":
+      return `Delete this machine's copy of the context '${name}' for good. I typed its name to confirm.`;
+    case "set_my_name":
+      return `Change my name in Vine Context to '${name}'.`;
+    case "share_context":
+      return `Make a join code${s("label") ? ` for ${s("label")}` : ""}${s("role") ? ` with the role ${s("role")}` : ""}${there}.`;
+    case "revoke_invite":
+      return `Cancel the join code ${s("id")}${there}.`;
+    case "set_peer_role":
+      return `Change ${name}'s role to ${s("role")}${there}.`;
+    case "remove_peer":
+      return `Remove ${name} from${of}.`;
+    case "start_sharing":
+      return `Go back online with${of}.`;
+    case "stop_sharing":
+      return `Go offline with${of}.`;
+    case "take_back":
+      return `Take back the change ${s("id")}${there}, before it's sent to the other members.`;
+    case "withdraw":
+      return `Withdraw ${s("id")}${there}.`;
+    default:
+      return `Run the Vine Context tool ${tool}${Object.keys(args).length ? ` with ${JSON.stringify(args)}` : ""}.`;
+  }
 }
 
 /** What the agent is asked from the view's buttons: the person steers, the agent records. */

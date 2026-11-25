@@ -6,18 +6,16 @@ Back to the [README](../README.md).
 
 ## Judge it in five minutes
 
-1. **Run it.** Two commands, no account or API key ([README](../README.md#setup-and-run)):
+1. **Run it.** One command, with Node 20 or later. Nothing to install (npx fetches a copy), no account or API key, and it touches nothing of yours:
 
    ```bash
-   npm install -g vine-context
+   npx vine-context demo
    ```
 
-   ```bash
-   vine demo
-   ```
+   Three members start in one process, join with codes, and replay the story (three colleagues planning the office Christmas party) through their own hosts, syncing peer to peer; the terminal narrates each step as it reaches the others. In the browser (alice's view): *Sharing console* for the three members and their links, *Explore the graph* to watch it grow, then drag the time slider back to replay it. `--pace 1` runs it faster.
 
-   In the browser: open *Explore the graph* and drag the time slider back to 10 Nov.
-2. **Open the Relate store yourself.** It is a directory store that ships in the package and the repo, at [`examples/data/graphs/incident`](../examples/data/graphs/incident). [Six queries to try](RELATE.md#explore-the-example-store), from *where did the team disagree?* to *what did they believe at 3:15 pm?*
+   To use it with your own agent, `npx vine-context setup` installs the `vine` command and the plugin for Claude Code or Codex, printing each command before it runs it ([README](../README.md#setup-and-run)).
+2. **Open the Relate store yourself.** It is a directory store that ships in the package and the repo, at [`examples/data/graphs/party`](../examples/data/graphs/party). [Seven queries to try](RELATE.md#explore-the-example-store), from *where did the team disagree?* to *what did they believe on Monday afternoon?*
 3. **Read how Relate is used:** [README](../README.md#how-it-uses-relate) for the short form, [RELATE.md](RELATE.md) for each feature and its Cypher.
 4. **Watch the demo video:** link to be added with the Devpost submission.
 
@@ -25,18 +23,19 @@ Back to the [README](../README.md).
 
 Relate gives one agent a connected memory. Vine Context gives a team of agents the same one. Each person's agent keeps a full Relate graph of the team's claims and questions on its own machine, and the machines keep each other in step peer to peer, with no server. Because the graph records how statements relate (`SUPPORTS`, `CONTRADICTS`, `REPLACES`, `ANSWERS`) and when each was recorded, an agent can say what the team believes, where it disagrees and what is still open, now or as of any past moment, by following relationships instead of guessing.
 
-## Against the judging criteria
+## What there is to look at
 
-The [official rules](https://relate.devpost.com/rules) list five criteria, weighted equally. The [announcement](https://neo4j.com/blog/graph-database/announcing-the-relate-by-neo4j-hackathon-2026-build-ai-agents-on-an-embedded-graph-database/) adds a sixth, on AI and agentic capabilities.
+The [rules](https://relate.devpost.com/rules) ask about creativity, usefulness, completeness, clarity and the use of connected context, and the [announcement](https://neo4j.com/blog/graph-database/announcing-the-relate-by-neo4j-hackathon-2026-build-ai-agents-on-an-embedded-graph-database/) about agents. Rather than score the entry against each, here is what it does, and where to see it.
 
-| Criterion | What Vine Context offers | Where to see it |
-|---|---|---|
-| **Creativity** | An embedded database is one process on one machine. Here every teammate has their own embedded Relate store, and a log of signed changes makes them all the same graph, with no server in between | [How it works](HOW-IT-WORKS.md) |
-| **Usefulness** | Teams' AI sessions are silos: what one person's agent learns, nobody else's sees. A shared graph of claims and questions fixes that for any small group working on one problem | [Use case](../README.md#use-case); the incident example |
-| **Completeness** | Create, invite, join, record, link, search, sync, undo, withdraw, roles and removal all work end to end. 70 automated tests, and CI on Linux, macOS and Windows | [Guide](GUIDE.md); `npm test` |
-| **Clarity** | A README that reaches a first result in two commands, a sample store with queries, and a page per audience | [README](../README.md#more-documentation) |
-| **Effective use of connected context** | The relationships are the answers: current beliefs, conflicts, open questions and evidence chains are each a traversal. Hybrid search (vector plus full text), temporal reads and transactions all run on Relate | [RELATE.md](RELATE.md) |
-| **AI and agentic capabilities** | See the next section | |
+An embedded database is one process on one machine. Vine Context keeps it that way and still gives a team one graph: every member has their own embedded Relate store, built from the same log of signed changes, so every copy is the same graph with no server between them. [How it works](HOW-IT-WORKS.md) explains the log, the mesh and the join codes, and [the replication design](REPLICATION.md) the decisions behind them.
+
+The problem it is for is the one most teams using AI agents have now: each person's sessions are a silo, and what one agent learns nobody else's sees. A shared graph of claims and questions is a small fix for any group working on one problem, and the [party example](../README.md#use-case) is a worked case of that: nothing technical, just three people who need to agree on a venue, a date and a budget.
+
+The relationships do the answering. What the team believes now, where it disagrees, what is still open and what a claim rests on are each a traversal (`REPLACES`, `CONTRADICTS`, `ANSWERS`, `SUPPORTS`), and because every node and relationship carries its time, the same questions can be asked as of any past moment. Search is hybrid, vector plus full text, on Relate's own indexes. [RELATE.md](RELATE.md) lists each feature used, with its Cypher.
+
+It works end to end: create, invite, join, record, link, search, sync, undo, withdraw, roles and removal, and `vine demo` runs the whole path between three members in one process. There are over 120 automated tests, run in CI on Linux, macOS and Windows ([guide](GUIDE.md); `npm test`).
+
+The documentation is one page per audience: the [README](../README.md) to a first result in one command, the [guide](GUIDE.md) for day-to-day use, [RELATE.md](RELATE.md) for the graph and its queries, and [HOW-IT-WORKS.md](HOW-IT-WORKS.md) for the design. What agents get is the next section.
 
 ## What agents get
 
