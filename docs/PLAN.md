@@ -48,7 +48,7 @@ must be able to clone, run and see the graph without asking us anything.
 |---|---|---|---|---|
 | **Relate and connected context** | 30 | Relate's relationships carry the main use case; judges can follow the instructions, run it, and explore with Relate working as described | Relationships *are* the answers: SUPPORTS/CONTRADICTS/REPLACES give `beliefs` and `conflicts`; RESTS_ON/DEPENDS_ON/SUPERSEDES give `needs_review`. Hybrid search (`COMBINE` vector + full-text), record-time queries ("what did we believe on 1 Dec?"), the explorer's time slider, and a persistent directory store judges can open with Relate's own CLI | README "How it uses Relate" lists each feature with the query that uses it; a sample store in the repo |
 | **Functionality and completeness** | 25 | How much of the core use case works | Host, share, join codes, join notices, roles, two model packs, five views, the localhost page; CI on every push | A judge reaches a first result from the README in under 5 minutes |
-| **Usefulness** | 20 | A real problem for a clear user, and the project shows it | Teams' AI sessions are silos: what one person's agent learns, nobody else's sees. The shared graph keeps claims, questions, decisions and contradictions across people and over time | A realistic scenario in the video: people investigating one incident |
+| **Usefulness** | 20 | A real problem for a clear user, and the project shows it | Teams' AI sessions are silos: what one person's agent learns, nobody else's sees. The shared graph keeps claims, questions, decisions and contradictions across people and over time | A realistic scenario in the video: people planning one event together |
 | **Documentation and reproducibility** | 15 | The README explains the project and how to try it | The devpost README template, followed section by section; one install command; `doctor`; no account, API key or model download | README Quickstart ≤ 10 lines |
 | **Creativity** | 10 | A fresh idea or an inventive use of Relate | Agents on different machines share one embedded graph peer to peer, with no server; the graph's model is a pluggable pack the skill helps write | The demo opens with two machines and no cloud |
 
@@ -58,7 +58,7 @@ must be able to clone, run and see the graph without asking us anything.
 - [x] Open-source licence: Apache-2.0, the same as Relate.
 - [ ] Project description on devpost: the use case, and what connects to what.
 - [ ] README following the template: one-line pitch; Use case (which relationships matter); How it uses Relate (**mode: directory**, why, what the graph models); Setup and run; Where the data lives (path to the store in the repo).
-- [ ] **A persistent Relate store in the repo** (a directory judges can inspect, e.g. `examples/incident-graph/`), made by a script from the demo scenario, plus how to open it with the `relate` CLI.
+- [ ] **A persistent Relate store in the repo** (a directory judges can inspect: `examples/data/graphs/party`), made by a script from the demo scenario, plus how to open it with the `relate` CLI.
 - [ ] Working code with Relate actually running (not prompts only).
 - [ ] A demo video of 1–2 minutes, made by us and viewable without a login, plus screenshots.
 - [ ] A statement of the Relate capabilities, third-party tools and **AI tools** used.
