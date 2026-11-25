@@ -346,16 +346,14 @@ Decided:
   (see [spikes.md](spikes.md)). nostr-tools is used only for signing.
 - **npm:** the unscoped `vine-context` package.
 
-Open:
-
-- Whether the semantic embedder becomes the default. To make it so:
-  `makeEmbedder` picks the model when its package is installed and `hash-256`
-  otherwise; the first open of each graph
-  then re-embeds, which wants a progress line; and the hybrid search needs its
-  full-text half tuned first (a match on a common word such as "we" outranks
-  the best match by meaning).
-
 Decided 25 Nov:
+
+- **The semantic embedder is the default** (`VINE_EMBEDDER=auto`): `makeEmbedder`
+  takes bge-small when its package is installed and runs here, else `hash-256`,
+  and `vine doctor` says which and why. The first open of a graph made with
+  another embedder re-embeds it, with a log line. Still open: the hybrid
+  search's full-text half (a match on a common word such as "we" can outrank
+  the best match by meaning).
 
 - **Embedder packages published:** the five `vine-context-embedder-<os>-<arch>`
   packages are on npm at 0.1.0, built by `embedder` workflow run 45054183954,
@@ -475,7 +473,8 @@ agreed before any code.
 - **Native code is the main cost.** Each native dependency must ship a
   prebuilt binary for macOS arm64 and x64, Windows x64, and Linux x64 and
   arm64. A new one needs a reason, and a fallback that works without it.
-- **The semantic embedder stays optional.** The offline `hash-256` embedder
-  remains the default on every platform.
+- **The semantic embedder is the default where its package runs** (25 Nov,
+  reversing the line above); the offline `hash-256` embedder is the fallback
+  on every platform.
 - **Nothing is called supported until it has been run there.** The README
   lists a platform or assistant only after a real setup on it.

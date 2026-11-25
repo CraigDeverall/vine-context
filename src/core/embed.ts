@@ -145,10 +145,48 @@ export class ModelEmbedder implements Embedder {
   }
 }
 
-/** The embedder named by VINE_EMBEDDER: `hash` (the default), or a model's short or recorded name. */
-export function makeEmbedder(name = process.env.VINE_EMBEDDER): Embedder {
-  if (!name || name === "hash" || name === "hash-256") return new HashEmbedder();
+/** The model `auto` picks when its package is installed. */
+export const DEFAULT_MODEL = "bge-small";
+
+export interface EmbedderChoice {
+  embedder: Embedder;
+  /** Why this one, when it wasn't named outright: the words `vine doctor` shows. */
+  why?: string;
+}
+
+/**
+ * The embedder named by VINE_EMBEDDER: `auto` (the default) takes the sentence
+ * model when its package is installed and works here, else the built-in hash;
+ * `hash`, or a model's short or recorded name, takes that one and nothing else.
+ */
+export function chooseEmbedder(name = process.env.VINE_EMBEDDER): EmbedderChoice {
+  if (!name || name === "auto") {
+    const spec = MODELS[DEFAULT_MODEL]!;
+    const dir = embedderDir();
+    let model: ModelEmbedder;
+    try {
+      model = new ModelEmbedder(spec, dir);
+    } catch {
+      return { embedder: new HashEmbedder(), why: `the ${platformPackage()} package isn't installed, so search matches words, not meaning` };
+    }
+    // Loads the addon now, so a build that doesn't run on this machine is found here, not on the first write.
+    try {
+      const v = model.embed("hello graph");
+      if (v?.length !== spec.dim) throw new Error(`gave ${v?.length ?? "no"} numbers, not ${spec.dim}`);
+    } catch (e) {
+      return { embedder: new HashEmbedder(), why: `the ${platformPackage()} package is installed but doesn't run here (${(e as Error).message}), so search matches words, not meaning` };
+    }
+    return { embedder: model, why: `${spec.name}, installed with vine: search matches meaning` };
+  }
+  if (name === "hash" || name === "hash-256") return { embedder: new HashEmbedder() };
   const spec = MODELS[name] ?? Object.values(MODELS).find((m) => m.name === name);
-  if (spec) return new ModelEmbedder(spec);
-  throw new Error(`Unknown embedder '${name}'. Available: hash, ${Object.keys(MODELS).join(", ")}.`);
+  if (spec) return { embedder: new ModelEmbedder(spec) };
+  throw new Error(`Unknown embedder '${name}'. Available: auto, hash, ${Object.keys(MODELS).join(", ")}.`);
+}
+
+/** The embedder named by VINE_EMBEDDER (see chooseEmbedder). `warn` hears why `auto` fell back to the hash. */
+export function makeEmbedder(name = process.env.VINE_EMBEDDER, warn?: (why: string) => void): Embedder {
+  const c = chooseEmbedder(name);
+  if (c.why && c.embedder instanceof HashEmbedder) warn?.(`search embedder: ${c.why}`);
+  return c.embedder;
 }
