@@ -46,6 +46,19 @@ Environment:
   VINE_TURN_PASSWORD  The TURN server's password, when it was set with --store env
   VINE_CLOUDFLARE_TURN_SECRET  The Cloudflare TURN key's secret, when it was set with --store env`;
 
+// USAGE's lines for one command: the line that starts with its name, and the lines that continue it.
+function commandUsage(cmd: string): string | undefined {
+  const lines = USAGE.split("\n");
+  const out: string[] = [];
+  let inCmd = false;
+  for (const line of lines.slice(lines.indexOf("Commands:") + 1)) {
+    if (line === "") break;
+    if (/^  \S/.test(line)) inCmd = line.startsWith(`  ${cmd} `);
+    if (inCmd) out.push(line);
+  }
+  return out.length ? `Usage: vine <command> [options]\n\n${out.join("\n")}\n\nRun \`vine help\` for every command and the environment variables.` : undefined;
+}
+
 const graphOpts = { graph: { type: "string" }, context: { type: "string" } } as const;
 const graphName = (v?: string): string => {
   const name = v ?? process.env.VINE_CONTEXT ?? process.env.VINE_GRAPH;
@@ -459,6 +472,25 @@ async function autostart(args: string[]): Promise<number> {
   return 0;
 }
 
+const helpFlag = (a: string) => a === "--help" || a === "-h";
+const isParseArgsError = (e: unknown) => String((e as { code?: unknown })?.code ?? "").startsWith("ERR_PARSE_ARGS");
+
+// `vine setup` prints its own, longer help.
+const help = command && command !== "setup" && rest.some(helpFlag) ? commandUsage(command) : undefined;
+if (help) {
+  console.log(help);
+} else {
+  try {
+    await run();
+  } catch (e) {
+    if (!isParseArgsError(e)) throw e;
+    // A mistyped option: say which, and how the command is used, without a stack trace.
+    console.error(`${(e as Error).message}\n\n${(command && commandUsage(command)) ?? USAGE}`);
+    process.exitCode = 2;
+  }
+}
+
+async function run(): Promise<void> {
 switch (command) {
   case "--version":
   case "-v":
@@ -512,5 +544,6 @@ switch (command) {
     break;
   default:
     console.log(USAGE);
-    if (command && command !== "help" && command !== "--help") process.exitCode = 2;
+    if (command && command !== "help" && !helpFlag(command)) process.exitCode = 2;
+}
 }
