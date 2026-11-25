@@ -24,23 +24,25 @@ describe("vine demo", () => {
 
     await demo.story;
 
-    // The same beliefs everywhere, and the story's ending: the deploy claim replaced, the Redis claim gone.
+    // The same beliefs everywhere, and the story's ending: the Riverside claim replaced, last year's cost withdrawn.
     const a = await texts(alice);
     expect(a).toEqual(await texts(bob));
     expect(a).toEqual(await texts(carol));
-    expect(a).toContain("Mobile retries exhausting the orders database pool caused the checkout slowdown, not the 14:05 deploy");
-    expect(a).not.toContain("The 14:05 deploy of payments-api caused the checkout slowdown");
-    expect(a).not.toContain("The Redis cache was down during the incident");
+    expect(a).toContain("The party is at the Orangery on Friday 19 Dec, not the Riverside Room");
+    expect(a).not.toContain("The Riverside Room can take the whole party on Friday 12 Dec");
+    expect(a).not.toContain("Last year's party cost £3,100");
 
-    // The conflict settled, one question still open, on every copy.
+    // The conflict settled, one question still open (replied to, not answered), on every copy.
     for (const m of [alice, bob, carol]) {
       expect(await m.call<Row[]>("conflicts", {})).toHaveLength(0);
       const open = (await m.call<Row[]>("open_questions", {})) as Row[];
-      expect(open.map((q) => q.text)).toEqual(["Should the API gateway rate-limit each client?"]);
+      expect(open.map((q) => q.text)).toEqual(["Should partners be invited, and is there budget for them?"]);
+      const thread = (await m.call<Row>("thread", { question: open[0]!.id })) as Row;
+      expect(JSON.stringify(thread)).toContain("January drinks evening");
     }
 
     // Every step was narrated, and alice's agent was told what bob's and carol's writes meant for her.
-    expect(lines.filter((l) => /^\d+\/14 /.test(l))).toHaveLength(STEPS.length);
+    expect(lines.filter((l) => new RegExp(`^\\d+/${STEPS.length} `).test(l))).toHaveLength(STEPS.length);
     expect(lines.some((l) => l.includes("alice's agent is told"))).toBe(true);
     expect(lines.some((l) => l.includes("reached bob"))).toBe(true);
   }, 90_000);

@@ -20,7 +20,7 @@ import type { IceSource } from "../p2p/ice.js";
 import { joinWithCode } from "../p2p/join.js";
 import { parseCode } from "../p2p/link.js";
 import { memorySignaller, type SignalFactory } from "../p2p/signal.js";
-import { GRAPH_DESCRIPTION, GRAPH_NAME, playScenario, type Step } from "./scenario.js";
+import { GRAPH_DESCRIPTION, GRAPH_NAME, playScenario, STEPS, type Step } from "./scenario.js";
 
 export type Name = "alice" | "bob" | "carol";
 export const NAMES: Name[] = ["alice", "bob", "carol"];
@@ -142,7 +142,7 @@ export async function startDemo(o: DemoOptions = {}): Promise<Demo> {
         first = false;
         // A step may answer or contradict what another member wrote: wait until that has reached its author.
         await waitFor("the last change to reach everyone", settled, 30_000 + holdMs);
-        say(`${i + 1}/14  ${step.who} ${step.note}: ${step.tool}${"text" in step.args ? ` “${String(step.args.text)}”` : ""}`);
+        say(`${i + 1}/${STEPS.length}  ${step.who} ${step.note}: ${step.tool}${"text" in step.args ? ` “${String(step.args.text)}”` : ""}`);
       },
     );
     await waitFor("the last changes to reach everyone", settled, 30_000 + holdMs);
