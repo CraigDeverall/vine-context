@@ -26,7 +26,7 @@ import { z } from "zod";
 import type { Catalogue } from "../core/catalogue.js";
 import { RANK } from "../core/changes.js";
 import { inputShape, type Role, type Snapshot } from "../core/graph.js";
-import { fingerprint, nameSource, setName, type Identity } from "../core/identity.js";
+import { fingerprint, isGuessedName, nameSource, setName, type Identity } from "../core/identity.js";
 import { claimsPack } from "../core/pack.js";
 import { packageInfo } from "../core/package-root.js";
 import { autoShare, defaultDataDir } from "../core/paths.js";
@@ -1251,6 +1251,20 @@ export class Session {
   }
 
   /** What share_context says about a new invite. */
+  /** What to tell the person about the name others see, when they didn't choose it themselves. */
+  private nameNote(): { your_name?: string } {
+    const source = nameSource(this.dataDir);
+    const { name } = this.o.identity();
+    if (source === "VINE_USER" || source === "set_my_name") return {};
+    if (isGuessedName(source))
+      return {
+        your_name: `Others see this person as '${name}', which is ${source === "login" ? "only their login name" : "a made-up name"}. If this chat hasn't asked yet, ask what name they want and save it with set_my_name; if they'd rather not say, '${name}' stays.`,
+      };
+    return {
+      your_name: `Others see this person as '${name}' (${source === "git" ? "from git's user.name" : "the full name on their computer account"}). If this chat hasn't told them yet, do, and offer set_my_name if they want another.`,
+    };
+  }
+
   private invited(r: Record<string, any>, context: string) {
     const identity = this.o.identity();
     return {
@@ -1259,6 +1273,7 @@ export class Session {
       send: `Join my context graph: /vine-context:join ${r.code}`,
       invite: { id: r.id, label: r.label, role: r.role, expires_at: r.expires_at },
       shared_as: { name: identity.name, fingerprint: fingerprint(identity.publicKey) },
+      ...this.nameNote(),
       next:
         "Give the person the 'send' line to pass on privately (not in a public channel). Agents without the plugin command can be told: join the context with this code. " +
         "This machine answers the code, so it must be online when they use it. Whoever uses it first is let in at once and gets a full copy, and everyone in the context is told who joined (name, key fingerprint, agent). " +
@@ -1304,6 +1319,7 @@ export class Session {
       role: c.d.you.role,
       as: c.d.you.id,
       your_fingerprint: fingerprint(identity.publicKey),
+      ...this.nameNote(),
       contexts: this.list(),
       copy: `You have your own full copy (${welcome.changes.length} changes), kept in step with the other members whenever you're both online. It works offline too.`,
       briefing: brief,
