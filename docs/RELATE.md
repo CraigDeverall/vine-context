@@ -93,65 +93,71 @@ The embedder is a small sentence model (bge-small, 384 numbers) that installs wi
 
 ## Explore the example store
 
-The example is a bit of office life in miniature: Alice, Bob and Carol planning the Christmas party over three days in November 2026. It holds 8 claims (one withdrawn), 3 questions, 3 replies and 14 relationships, of every kind.
+The example is the building of this project: four people, 15 to 25 Nov 2026, and the decisions, changes of mind and breakages the project really went through. The cast is made up (all four are versions of the one Craig who built it with his agents). It holds 23 claims (one withdrawn), 7 questions, 2 replies and 27 relationships, of every kind.
 
 Install [Relate's CLI](https://relatedb.ai/docs/get-started/install/), then work on a copy, because Relate tidies a store's files when it opens one.
 
 ```bash
-cp -R "$(npm root -g)/vine-context/examples/data/graphs/party" /tmp/party
+cp -R "$(npm root -g)/vine-context/examples/data/graphs/vine-entry" /tmp/vine-entry
 ```
 
-In a clone of this repo, copy `examples/data/graphs/party` instead.
+In a clone of this repo, copy `examples/data/graphs/vine-entry` instead.
 
-**What's in it?** Two `ABOUT`, five `SUPPORTS`, one `CONTRADICTS`, two `ANSWERS`, one `REPLACES` and three `REPLIES_TO`.
+**What's in it?** Seven `REPLACES`, six `ANSWERS`, six `ABOUT`, four `SUPPORTS`, two `CONTRADICTS` and two `REPLIES_TO`.
 
 ```bash
-relate -d /tmp/party --mode table "MATCH ()-[r]->() RETURN type(r) AS relationship, count(*) AS n"
+relate -d /tmp/vine-entry --mode table "MATCH ()-[r]->() RETURN type(r) AS relationship, count(*) AS n"
 ```
 
-**Where did the team disagree?** Carol's reading of the Riverside Room's licence (40 seated) contradicts Bob's claim that it takes the whole party of 48.
+**Where did the team disagree?** Twice. Craigslist's reading of the rules (five criteria, weighted equally) contradicts the 100-point weights Craig recorded on the first day. And Craigslist's finding that the month's CI allowance was used up contradicts Craiginator's claim that a payment failed.
 
 ```bash
-relate -d /tmp/party --mode table "MATCH (a:Claim)-[:CONTRADICTS]->(b:Claim) RETURN a.recorded_by AS who, a.text AS claim, b.recorded_by AS against, b.text AS other"
+relate -d /tmp/vine-entry --mode table "MATCH (a:Claim)-[:CONTRADICTS]->(b:Claim) RETURN a.recorded_by AS who, a.text AS claim, b.recorded_by AS against, b.text AS other"
 ```
 
-**How was it settled?** Bob replaced his own claim on Tuesday at 16:45: the party is at the Orangery on 19 Dec.
+**Which disagreement is still open?** The one where neither claim has been replaced. Craiginator gave way on CI and replaced his claim, so that one is settled. Nobody could tell which judging weights hold, so that one is not.
 
 ```bash
-relate -d /tmp/party --mode table "MATCH (new:Claim)-[r:REPLACES]->(old:Claim) RETURN old.text AS was, new.text AS now, new.recorded_by AS by, r.recorded_at AS at"
+relate -d /tmp/vine-entry --mode table "MATCH (a:Claim)-[:CONTRADICTS]->(b:Claim) WHERE NOT EXISTS { MATCH (:Claim)-[:REPLACES]->(a) } AND NOT EXISTS { MATCH (:Claim)-[:REPLACES]->(b) } RETURN a.text AS claim, b.text AS against"
 ```
 
-**Which questions are answered, and which is still open?** The venue and the budget questions have answers; whether partners are invited has none.
+**What did the team change its mind about, and who changed it?** Seven claims were replaced, four of them by someone other than their author. The biggest is the design itself: Craigosaurus Rex's one machine that hosts the graph gave way to Craig's full copy for every member.
 
 ```bash
-relate -d /tmp/party --mode table "MATCH (q:Question) OPTIONAL MATCH (c:Claim)-[:ANSWERS]->(q) RETURN q.text AS question, c.text AS answer"
+relate -d /tmp/vine-entry --mode table "MATCH (new:Claim)-[r:REPLACES]->(old:Claim) RETURN old.recorded_by AS theirs, old.text AS was, new.recorded_by AS by, new.text AS now, r.recorded_at AS at"
 ```
 
-**What was said in the threads?** A reply is a message in a question's thread, not an answer. Two of these threads were closed by a claim that answers the question; the partners question has only its reply, so it stays open.
+**What changed more than once?** Follow `REPLACES` further. The search embedder went from hash-256, to a semantic one that could be switched on, to semantic by default.
 
 ```bash
-relate -d /tmp/party --mode table "MATCH (m:Reply)-[:REPLIES_TO]->(q:Question) RETURN q.text AS question, m.recorded_by AS who, m.text AS reply"
+relate -d /tmp/vine-entry --mode table "MATCH p=(:Claim)-[:REPLACES*2..]->(:Claim) RETURN [n IN nodes(p) | n.text] AS newest_first"
 ```
 
-**What is the decision based on?** Follow `SUPPORTS` back to the evidence: the Orangery's availability, its hire-fee waiver, the budget. The withdrawn claim's link is still in the graph (nothing is deleted), so leave it out by its `withdrawn_at`.
+**Which questions are answered, and which are still open?** Four have answers. Three have none: which judging weights hold, who records the demo video, and whether one person's two machines should count as one member.
 
 ```bash
-relate -d /tmp/party --mode table "MATCH p=(a:Claim)-[:SUPPORTS*1..3]->(b:Claim) WHERE a.withdrawn_at IS NULL RETURN [n IN nodes(p) | n.text] AS chain"
+relate -d /tmp/vine-entry --mode table "MATCH (q:Question) OPTIONAL MATCH (c:Claim)-[:ANSWERS]->(q) RETURN q.text AS question, collect(c.text) AS answers"
 ```
 
-**What did the team believe on Monday afternoon?** Only what had been recorded by then, and not yet replaced or withdrawn. At 16:00 on Monday 17 Nov, Bob's Riverside Room claim and Carol's contradicting one were both current.
+**What was said in the threads?** A reply is a message in a question's thread, not an answer. One of these threads was later closed by a claim that answers its question. The other has only its reply, so the question stays open.
 
 ```bash
-relate -d /tmp/party --mode table "WITH datetime('2026-11-17T16:00:00Z') AS T MATCH (c:Claim) WHERE c.recorded_at <= T AND (c.withdrawn_at IS NULL OR c.withdrawn_at > T) AND NOT EXISTS { MATCH (:Claim)-[r:REPLACES]->(c) WHERE r.recorded_at <= T } RETURN c.recorded_by AS who, c.text AS believed ORDER BY c.recorded_at"
+relate -d /tmp/vine-entry --mode table "MATCH (m:Reply)-[:REPLIES_TO]->(q:Question) RETURN q.text AS question, m.recorded_by AS who, m.text AS reply"
 ```
 
-Change the time to `2026-11-19T10:00:00Z` and the answer changes: the Riverside Room is gone, the Orangery has taken its place, and last year's cost (recorded and withdrawn on Tuesday) never shows.
+**What did the team believe on the Monday evening, before it changed its mind?** Only what had been recorded by then, and not yet replaced or withdrawn. At 18:00 on Monday 16 Nov, the graph still said one machine hosts the graph, search used hash-256, and a team could install its own model pack.
+
+```bash
+relate -d /tmp/vine-entry --mode table "WITH datetime('2026-11-16T18:00:00Z') AS T MATCH (c:Claim) WHERE c.recorded_at <= T AND (c.withdrawn_at IS NULL OR c.withdrawn_at > T) AND NOT EXISTS { MATCH (:Claim)-[r:REPLACES]->(c) WHERE r.recorded_at <= T } RETURN c.recorded_by AS who, c.text AS believed ORDER BY c.recorded_at"
+```
+
+Change the time to `2026-11-17T18:00:00Z` and the answer changes: every member keeps a full copy, and the model packs claim, withdrawn that afternoon, is gone.
 
 The same store, seen in the explorer with `vine demo`:
 
-![The graph explorer on the example party graph](images/explorer.jpg)
+![The graph explorer on the example graph](images/explorer.jpg)
 
-The store was built by [`scripts/make-examples.ts`](../scripts/make-examples.ts) from the signed change log in [`examples/data/hosts/party/changes.jsonl`](../examples/data/hosts/party/changes.jsonl). `npm run examples` rebuilds both.
+The store was built by [`scripts/make-examples.ts`](../scripts/make-examples.ts) from the signed change log in [`examples/data/hosts/vine-entry/changes.jsonl`](../examples/data/hosts/vine-entry/changes.jsonl). The story itself is in [`src/demo/scenario.ts`](../src/demo/scenario.ts). `npm run examples` rebuilds both.
 
 ## How agents reach the graph
 

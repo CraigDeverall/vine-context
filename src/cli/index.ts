@@ -118,15 +118,18 @@ async function demo(args: string[]): Promise<number> {
     args,
     options: { port: { type: "string" }, "no-open": { type: "boolean" }, pace: { type: "string" }, join: { type: "boolean" }, verbose: { type: "boolean" } },
   });
-  const [{ startDemo }, { GRAPH_NAME }, { nostrSignaller }, { storedIce }, { defaultDataDir }] = await Promise.all([import("../demo/live.js"), import("../demo/scenario.js"), import("../p2p/signal.js"), import("../p2p/ice.js"), import("../core/graph.js")]);
-  const pace = values.pace === undefined ? 4 : Number(values.pace);
+  const [{ startDemo }, { GRAPH_NAME, CREATOR, NAMES }, { nostrSignaller }, { storedIce }, { defaultDataDir }] = await Promise.all([import("../demo/live.js"), import("../demo/scenario.js"), import("../p2p/signal.js"), import("../p2p/ice.js"), import("../core/graph.js")]);
+  const pace = values.pace === undefined ? 3 : Number(values.pace);
   if (!Number.isFinite(pace) || pace < 0) {
     console.error("--pace is seconds between steps, 0 or more.");
     return 2;
   }
-  console.log(`vine-context demo: three people, three hosts, one process
-  alice, bob and carol plan the office Christmas party, each from their own copy of the context 'party'.
-  Every write goes through its author's host: signed, held for undo, then carried to the other two over WebRTC.
+  const rest = NAMES.filter((n) => n !== CREATOR);
+  console.log(`vine-context demo: four people, four hosts, one process
+  ${CREATOR}, ${rest.slice(0, -1).join(", ")} and ${rest.at(-1)} build this project for the Relate hackathon, each from their own copy of the context '${GRAPH_NAME}'.
+  The decisions are the ones the project really made; the cast is one Craig, four ways.
+  Every write goes through its author's host: signed, held for undo, then carried to the others over WebRTC.
+  Part way through, ${CREATOR} goes offline, writes to his own copy, and catches up when he is back.
   ${values.join ? "They find each other through the public Nostr relays, so your agent can join too." : "They find each other in this process: no network is needed, and nothing leaves this machine."}
 `);
   const demo = await startDemo({
@@ -136,19 +139,19 @@ async function demo(args: string[]): Promise<number> {
     // With --join the members use the relays and this machine's STUN/TURN setting, as any host does.
     ...(values.join ? { signal: nostrSignaller, ice: storedIce(defaultDataDir()) } : {}),
   });
-  const alice = demo.members.alice;
+  const viewer = demo.members[CREATOR];
 
-  // The browser shows alice's point of view: her console, explorer and conflicts.
-  process.env.VINE_DATA_DIR = alice.dataDir;
-  process.env.VINE_USER = "alice";
+  // The browser shows the creator's point of view: his console, explorer and conflicts.
+  process.env.VINE_DATA_DIR = viewer.dataDir;
+  process.env.VINE_USER = CREATOR;
   const { make, log } = await sessionFactory({ graph: GRAPH_NAME });
   const { startUi } = await import("../ui/server.js");
   const server = await startUi({ session: () => make(false), port: values.port ? Number(values.port) : undefined, log });
   console.log(`
-Open this on this machine (it acts as alice; don't share it):
+Open this on this machine (it acts as ${CREATOR}; don't share it):
 ${server.url}
 
-Sharing console: the three members and their live links. Explore a context: the graph as it grows; drag the time slider back to replay it. Conflicts: bob and carol, until bob gives way.
+Sharing console: the four members and their live links. Explore a context: the graph as it grows; drag the time slider back to replay it. Conflicts: the judging weights, which stay open, and why CI was blocked, until Craiginator gives way.
 `);
   if (!values["no-open"]) {
     const { spawn } = await import("node:child_process");
@@ -175,12 +178,12 @@ Sharing console: the three members and their live links. Explore a context: the 
     return 1;
   }
   console.log(`
-The story is over, and the three hosts stay up. To point an agent at alice's copy:
-  VINE_DATA_DIR=${alice.dataDir} vine mcp --context ${GRAPH_NAME}`);
+The story is over, and the four hosts stay up. To point an agent at ${CREATOR}'s copy:
+  VINE_DATA_DIR=${viewer.dataDir} vine mcp --context ${GRAPH_NAME}`);
   if (values.join) {
-    const { code } = await alice.local.request<{ code: string }>("share", { label: "demo guest", role: "contributor" });
+    const { code } = await viewer.local.request<{ code: string }>("share", { label: "demo guest", role: "contributor" });
     console.log(`
-To join as a fourth member from any machine, tell your agent:
+To join as a fifth member from any machine, tell your agent:
   /vine-context:join ${code}`);
   }
   console.log("\nCtrl-C stops the demo.");

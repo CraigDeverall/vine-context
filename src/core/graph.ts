@@ -448,7 +448,11 @@ export class Graph {
         this.conn.commit();
         return out;
       } catch (e) {
-        this.conn.rollback();
+        try {
+          this.conn.rollback();
+        } catch {
+          // The store has already ended the transaction (a failed write, such as a full disk): report the first error, not this one.
+        }
         if (e instanceof this.R.RelateError) throw new QueryError(`The graph refused a change: ${e.message}`);
         throw e;
       }

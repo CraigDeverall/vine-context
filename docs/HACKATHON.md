@@ -12,12 +12,13 @@ Back to the [README](../README.md).
    npx vine-context demo
    ```
 
-   Three members start in one process, join with codes, and replay the story (three colleagues planning the office Christmas party) through their own hosts, syncing peer to peer; the terminal narrates each step as it reaches the others. In the browser (alice's view): *Sharing console* for the three members and their links, *Explore the graph* to watch it grow, then drag the time slider back to replay it. `--pace 1` runs it faster.
+   Four members start in one process, join with codes, and replay the story through their own hosts, syncing peer to peer; the terminal narrates each step as it reaches the others. The story is the building of this entry: its real decisions, changes of mind and breakages, told by an invented cast of four Craigs. Part way through, the member who created the context goes offline, and the other three carry on without him. In the browser (Craig's view): *Sharing console* for the four members and their links, *Explore the graph* to watch it grow, then drag the time slider back to replay it. `--pace 1` runs it faster.
 
    To use it with your own agent, `npx vine-context setup` installs the `vine` command and the plugin for Claude Code or Codex, printing each command before it runs it ([README](../README.md#setup-and-run)).
-2. **Open the Relate store yourself.** It is a directory store that ships in the package and the repo, at [`examples/data/graphs/party`](../examples/data/graphs/party). [Seven queries to try](RELATE.md#explore-the-example-store), from *where did the team disagree?* to *what did they believe on Monday afternoon?*
-3. **Read how Relate is used:** [README](../README.md#how-it-uses-relate) for the short form, [RELATE.md](RELATE.md) for each feature and its Cypher.
-4. **Watch the demo video:** link to be added with the Devpost submission.
+2. **Open the Relate store yourself.** It is a directory store that ships in the package and the repo, at [`examples/data/graphs/vine-entry`](../examples/data/graphs/vine-entry). [Eight queries to try](RELATE.md#explore-the-example-store), from *where did the team disagree?* to *what did they believe before they changed their mind?*
+3. **See what was measured:** [MEASURED.md](MEASURED.md) has two measurements you can rerun, and what they don't show.
+4. **Read how Relate is used:** [README](../README.md#how-it-uses-relate) for the short form, [RELATE.md](RELATE.md) for each feature and its Cypher.
+5. **Watch the demo video:** link to be added with the Devpost submission.
 
 ## The idea in one paragraph
 
@@ -29,11 +30,13 @@ The [rules](https://relate.devpost.com/rules) ask about creativity, usefulness, 
 
 An embedded database is one process on one machine. Vine Context keeps it that way and still gives a team one graph: every member has their own embedded Relate store, built from the same log of signed changes, so every copy is the same graph with no server between them. [How it works](HOW-IT-WORKS.md) explains the log, the mesh and the join codes, and [the replication design](REPLICATION.md) the decisions behind them.
 
-The problem it is for is the one most teams using AI agents have now: each person's sessions are a silo, and what one agent learns nobody else's sees. A shared graph of claims and questions is a small fix for any group working on one problem, and the [party example](../README.md#use-case) is a worked case of that: nothing technical, just three people who need to agree on a venue, a date and a budget.
+The problem it is for is the one most teams using AI agents have now: each person's sessions are a silo, and what one agent learns nobody else's sees. A shared graph of claims and questions is a small fix for any group working on one problem, and the [example](../README.md#use-case) is a worked case of that: four people building this entry, who change their minds about the design, disagree about why CI broke, and still don't know which judging weights hold.
+
+Nothing the team writes goes to a service that stores or searches it. Each member's copy is on their own machine, search runs there, and the relays that help machines find each other only carry sealed handshakes. [Who can read it](../README.md#who-can-read-it) says exactly what each party sees, and what Vine does not protect.
 
 The relationships do the answering. What the team believes now, where it disagrees, what is still open and what a claim rests on are each a traversal (`REPLACES`, `CONTRADICTS`, `ANSWERS`, `SUPPORTS`), and because every node and relationship carries its time, the same questions can be asked as of any past moment. Search is hybrid, vector plus full text, on Relate's own indexes. [RELATE.md](RELATE.md) lists each feature used, with its Cypher.
 
-It works end to end: create, invite, join, record, link, search, sync, undo, withdraw, roles and removal, and `vine demo` runs the whole path between three members in one process. There are over 120 automated tests, run in CI on Linux, macOS and Windows ([guide](GUIDE.md); `npm test`).
+It works end to end: create, invite, join, record, link, search, sync, undo, withdraw, roles and removal, and `vine demo` runs the whole path between four members in one process, one of them offline for part of it. There are over 120 automated tests, run in CI on Linux, macOS and Windows ([guide](GUIDE.md); `npm test`).
 
 The documentation is one page per audience: the [README](../README.md) to a first result in one command, the [guide](GUIDE.md) for day-to-day use, [RELATE.md](RELATE.md) for the graph and its queries, and [HOW-IT-WORKS.md](HOW-IT-WORKS.md) for the design. What agents get is the next section.
 
@@ -79,7 +82,7 @@ Work done during the contest: the embedded Relate graph and its model, the chang
 ## Submission checklist
 
 - [x] Repository is public
-- [ ] `vine-context` is published to npm (the README's install steps depend on it)
+- [x] `vine-context` is published to npm (the README's install steps depend on it)
 - [x] GitHub topics `relate` and `relate-neo4j-hackathon`
 - [x] Open-source licence (Apache-2.0)
 - [x] README with setup instructions a judge can follow
