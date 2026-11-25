@@ -77,8 +77,10 @@ answer for the person: if it isn't settled, reply instead, or ask.
 
 ## News: what others' changes mean for you
 
-Your tool results may start with `News:` lines. Tell the person briefly. They
-come from:
+Your tool results may start with `News:` lines. Tell the person briefly. In
+Claude Code and Codex the same news about others' changes can instead arrive
+beside the person's prompt, as a note starting `Vine Context, new from other
+members`; each item arrives one way or the other, not both. They come from:
 
 - **Joins:** someone joined a context: their name, role, the invite they used,
   who let them in, key fingerprint, agent and operating system. If the person

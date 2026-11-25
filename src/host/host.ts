@@ -31,6 +31,7 @@ import { prepareIce, resolveIce, storedIce, type IceSource } from "../p2p/ice.js
 import { unreachableAdvice } from "../p2p/advice.js";
 import { nostrSignaller, type SignalFactory } from "../p2p/signal.js";
 import { briefing, digest } from "./digest.js";
+import { appendNews } from "./news.js";
 import { InviteStore, hostDir, inviteLink, isLive, socketPath } from "./state.js";
 
 /** How long a write stays on this machine, where Undo removes it without trace, before it is sent. */
@@ -301,9 +302,16 @@ export class Host {
     if (!data.length) return;
     const lines = await digest(data, { graph: this.graph, me: this.me, name: (k) => this.members.displayName(k), reader: this.readCaller() });
     if (!lines.length) return;
-    this.digests.push({ at: new Date().toISOString(), lines });
+    const entry = { at: new Date().toISOString(), lines };
+    this.digests.push(entry);
     this.digests = this.digests.slice(-20);
-    this.broadcastLocal({ t: "evt", event: "digest", data: { context: this.o.graph, lines } });
+    // Kept on disk too, for the agent hook, which reads it without a host.
+    try {
+      appendNews(this.o.dataDir, this.o.graph, entry);
+    } catch (e) {
+      this.say(`couldn't keep the digest: ${(e as Error).message}`);
+    }
+    this.broadcastLocal({ t: "evt", event: "digest", data: { context: this.o.graph, lines, at: entry.at } });
   }
 
   private receiveNow(changes: unknown[], from?: string): Promise<Change[]> {

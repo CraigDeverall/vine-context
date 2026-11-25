@@ -27,6 +27,7 @@ Commands:
                                       Set a TURN server of your own, for members whose networks block direct connections (asks for the password)
   turn show | test | clear            Show, check or remove the TURN server
   whoami                              Show your name and key fingerprint
+  hook session-start|prompt           What an agent's hook runs: reads the hook's JSON on stdin, prints the chat's context and other members' news for the model
   doctor                              Check that this machine can run vine
   --version                           Print the version
 
@@ -37,6 +38,7 @@ Environment:
   VINE_DATA_DIR    Where contexts live (default: ~/.local/share/vine-context)
   VINE_EMBEDDER    How search turns text into vectors: hash (default), bge-small (its package installs with vine), or minilm once built with \`npm run build:embedder\`
   VINE_AUTO_SHARE  off: new contexts don't sync until you share them
+  VINE_HOOKS       off: the agent hooks say nothing; quiet: no reminder beside each prompt (the session's briefing and others' news stay)
   VINE_HOLD_MS     How long a write stays on this machine (Undo) before it is sent (default 10000)
   VINE_RELAYS      Nostr relays for signalling, comma-separated
   VINE_ICE         STUN/TURN servers, comma-separated; replaces the defaults and the \`vine turn\` setting
@@ -477,6 +479,11 @@ switch (command) {
   case "doctor":
     process.exitCode = await doctor();
     break;
+  case "hook": {
+    const { hookCommand } = await import("./hook.js");
+    process.exitCode = await hookCommand(rest);
+    break;
+  }
   case "turn":
     process.exitCode = await turn(rest);
     break;

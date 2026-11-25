@@ -43,7 +43,10 @@ tools:
     undo: { tool: withdraw }
     description: >-
       Record one statement you or the person believe is true, in one or two
-      sentences. Link it to existing claims it supports, contradicts or replaces,
+      sentences. Use it in the course of ordinary work, without being asked:
+      when the chat reaches a decision, establishes a fact or settles how
+      something works, and it fits what the context is for.
+      Link it to existing claims it supports, contradicts or replaces,
       and to questions it answers. Use replaces to correct or update an earlier
       claim rather than withdrawing it. Returns the new claim's id.
     input:
@@ -81,7 +84,9 @@ tools:
     view: receipt
     undo: { tool: withdraw }
     description: >-
-      Record something the group needs to find out. Link it to the claims or
+      Record something the group needs to find out. Use it in the course of
+      ordinary work, without being asked: when the chat leaves a question open
+      that someone else in the context may be able to answer. Link it to the claims or
       questions it is about. It stays open until a current claim answers it
       (add_claim with answers, or link with ANSWERS). Search first: the question
       may already be asked or answered.
