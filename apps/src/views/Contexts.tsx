@@ -55,6 +55,8 @@ const TABS: { tab: Tab; label: string }[] = [
 ];
 /** How many recent changes the Overview shows before "Show more". */
 const RECENT = 5;
+// The header names at most this many members (you, then who's online); the People tab has everyone.
+const HEADER_PEOPLE = 6;
 // The "you claimed:" part of an activity line is who-did-what metadata: drawn muted so the claim itself reads first.
 const lead = (c: Change) => {
   const i = /^(claim|question|reply|describe)$/.test(c.kind) ? c.summary.indexOf(": ") : -1;
@@ -1100,6 +1102,10 @@ export function Contexts({ b }: { b: Bridge }) {
   /** The search behind the filter's text, once it has answered for this text in this context. */
   const near = f.text && found && found.text === f.text && found.context === a.context ? found : null;
   const members = a.people.filter((p) => p.role);
+  const rank = (p: Person) => (p.you ? 0 : p.online ? 1 : 2);
+  const shown = [...members].sort((x, y) => rank(x) - rank(y)).slice(0, HEADER_PEOPLE);
+  const unshown = members.length - shown.length;
+  const unshownOnline = members.filter((p) => p.online).length - shown.filter((p) => p.online).length;
   const counts: Record<Tab, number | undefined> = { overview: undefined, questions: t?.open.length, claims: t?.claims.length, people: members.length, settings: undefined };
   const goOnline = (
     <button className="primary" onClick={() => void act("start_sharing", { ...ctx }, "Back online: syncing with the other members.")}>
@@ -1145,7 +1151,7 @@ export function Contexts({ b }: { b: Bridge }) {
         <span className="faint" aria-hidden="true">
           |
         </span>
-        {members.map((p) => (
+        {shown.map((p) => (
           <span
             key={p.fingerprint}
             className={p.online ? "on" : ""}
@@ -1155,6 +1161,11 @@ export function Contexts({ b }: { b: Bridge }) {
             {p.you ? " (you)" : ""}
           </span>
         ))}
+        {unshown > 0 && (
+          <button className="link" onClick={() => setTab("people")}>
+            +{unshown} more{unshownOnline ? ` · ${unshownOnline} online` : ""}
+          </button>
+        )}
       </div>
       {news && <Meta>Latest: {news}</Meta>}
       <div className="tabs" role="tablist">

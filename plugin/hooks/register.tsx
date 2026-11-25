@@ -40,6 +40,8 @@ const NOTICE_MS = 6000
 const PAGE = 20
 /** How many recent changes the Overview shows before "N more". */
 const RECENT = 5
+// The header names at most this many members (you, then who's online); the People tab has everyone.
+const HEADER_PEOPLE = 6
 const SERVERS = ['plugin_vine-context_vine-context', 'plugin:vine-context:vine-context', 'vine-context']
 const NAME_RE = /^[a-z0-9][a-z0-9-]{0,62}$/
 
@@ -1407,6 +1409,10 @@ export const register: Register = on => {
         .then(() => update($, filters, (v: Filters): Filters => ({ ...v, ...patch })))
         .then(() => (patch.text !== undefined ? findRelated($, patch.text, a.context, ctx) : undefined))
     const members = a.people.filter((p: Person) => p.role)
+    const rank = (p: Person) => (p.you ? 0 : p.online ? 1 : 2)
+    const shown = [...members].sort((x, y) => rank(x) - rank(y)).slice(0, HEADER_PEOPLE)
+    const unshown = members.length - shown.length
+    const unshownOnline = members.filter((p: Person) => p.online).length - shown.filter((p: Person) => p.online).length
     const counts: Record<Tab, number | undefined> = { overview: undefined, questions: t?.open.length, claims: t?.claims.length, people: members.length, settings: undefined }
     const goOnline = <Button key="go-online" label="Go online" variant="primary" onPress={() => void act($, 'start_sharing', { ...ctx }, 'Back online: syncing with the other members.')} />
 
@@ -1463,7 +1469,7 @@ export const register: Register = on => {
           {admin && <Button key="edit-description" label="✎" plain dimColor onPress={() => void update($, editing, () => true)} />}
         </Box>
         <Box flexDirection="row" gap="sm" flexWrap="wrap" alignItems="center">
-          {members.map((p: Person) => (
+          {shown.map((p: Person) => (
             <Box key={`who-${p.fingerprint}`} hover={{ scope: `who-${p.fingerprint}` }}>
               <Text size="footnote" dimColor={!p.online} hover={{ underline: true }}>
                 <Text color={p.online ? 'success' : undefined}>●</Text> {p.name}
@@ -1472,9 +1478,10 @@ export const register: Register = on => {
               </Text>
             </Box>
           ))}
+          {unshown > 0 && <Button key="who-more" label={`+${unshown} more${unshownOnline ? ` · ${unshownOnline} online` : ''}`} plain dimColor onPress={() => setTab('people')} />}
         </Box>
         {graphical &&
-          members.map((p: Person) => (
+          shown.map((p: Person) => (
             <Box key={`who-card-${p.fingerprint}`} display="none" hover={{ scope: `who-${p.fingerprint}`, display: 'flex' }}>
               <Text size="footnote" dimColor>
                 {p.name} · {p.role}
