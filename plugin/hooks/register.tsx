@@ -1512,7 +1512,7 @@ export const register: Register = on => {
     const near = search && search.text === f.text && search.context === a.context ? search : null
     /** The filter box above a list, and what it's filtering by: its words, and how many more are close in meaning. */
     const filterBox = (what: string, byMeaning: number) => (
-      <Box flexDirection="column" gap="xs">
+      <Box flexDirection="column" gap="xs" width="100%" alignItems="stretch">
         <Input key="filter" value={f.text} placeholder={`Search ${what} by meaning, words, a person or an id`} submitLabel="Search" onSubmit={(v: string) => setFilter({ text: v.trim() })} />
         {f.text && (
           <Box flexDirection="row" gap="xs" alignItems="center" flexWrap="wrap">
