@@ -107,6 +107,12 @@ export type Filters = {
   questions: 'open' | 'answered' | 'mine'
 }
 
+/**
+ * What the server's search (meaning plus keywords) found for the filter's text
+ * in a context, best first: item ids, or null while it's looking.
+ */
+export type Found = { text: string; context: string; ids: string[] | null; failed?: boolean }
+
 /** The latest line from someone else, for the band. */
 export type Latest = { by: string; summary: string; at: string }
 
@@ -144,6 +150,8 @@ declare module 'claude-code' {
       /** Whether your name is being changed (the panel shows only that). */
       renaming: boolean
       filters: Filters
+      /** The search behind the filter's text: the lists add its best matches to those that share its words. */
+      found: Found | null
       /** How many more items than the first page a list shows. */
       more: number
       /** The folded parts the person has opened ("3 more ▾"), by id: everything else shows only its first few. */

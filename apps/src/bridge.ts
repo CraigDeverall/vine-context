@@ -49,9 +49,7 @@ export class NoToolCalls extends Error {}
 
 const NO_RELAY = /IPC not available|-32601|method not found|not supported|serverTools/i;
 
-/** What the person would type to have the agent run a tool for them. */
-export const asks = (tool: string, args: Record<string, unknown>): string =>
-  `Please run the vine-context tool ${tool}${Object.keys(args).length ? ` with ${JSON.stringify(args)}` : ""} (from the view, which can't run tools in this app).`;
+export { asks } from "./contexts/logic";
 
 export function useBridge(): Bridge | { error: string } | undefined {
   const [state, setState] = useState<{ app: App; input?: Record<string, unknown>; data?: unknown; failed?: string } | { error: string }>();
