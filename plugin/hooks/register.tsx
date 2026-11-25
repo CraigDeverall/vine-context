@@ -767,10 +767,12 @@ export const register: Register = on => {
         <Box key={`settings-${n}`} flexDirection="column" gap="md">
           <Box flexDirection="column" gap="xs">
             {heading('This chat')}
-            <Box flexDirection="row" gap="xs" flexWrap="wrap" alignItems="center">
-              <Button key={`detail-toggle-${n}`} label={c ? '◉ On' : '○ Off'} variant={c ? 'primary' : 'secondary'} dimColor={!c} onPress={() => toggle(n)} />
-              {c && severalOn && !c.writes_here && <Button key={`detail-write-${n}`} label="✎ Write here" variant="secondary" onPress={() => writeHere(n)} />}
-              {c && !inTab && <Button key={`detail-open-${n}`} label="Open" variant="secondary" onPress={() => void show(n)} />}
+            <Box flexDirection="row" gap="xs" justifyContent="space-between" alignItems="center">
+              <Box flexDirection="row" gap="xs" flexWrap="wrap" alignItems="center">
+                <Button key={`detail-toggle-${n}`} label={c ? '◉ On' : '○ Off'} variant={c ? 'primary' : 'secondary'} dimColor={!c} onPress={() => toggle(n)} />
+                {c && severalOn && !c.writes_here && <Button key={`detail-write-${n}`} label="✎ Write here" variant="secondary" onPress={() => writeHere(n)} />}
+              </Box>
+              {c && !inTab && <Button key={`detail-open-${n}`} label="Open ›" variant="secondary" onPress={() => void show(n)} />}
             </Box>
             {meta(
               c
@@ -1087,11 +1089,13 @@ export const register: Register = on => {
                     {c.description ?? 'No description yet'}
                   </Text>
                 )}
-                <Box flexDirection="row" gap="xs" flexWrap="wrap" alignItems="center">
-                  {c && <Button key={`open-${n}`} label="Open" variant="secondary" onPress={() => show(n)} />}
-                  <Button key={`settings-${n}`} label="Settings" variant="secondary" dimColor onPress={() => (c ? settingsTab(n) : manage($, n))} />
-                  {c?.role === 'admin' && <Button key={`share-${n}`} label="Share" variant="secondary" dimColor onPress={() => share(n)} />}
-                  {c && many && !c.writes_here && <Button key={`write-${n}`} label="✎ Write here" variant="secondary" dimColor onPress={() => writeHere(n)} />}
+                <Box flexDirection="row" gap="xs" justifyContent="space-between" alignItems="center">
+                  <Box flexDirection="row" gap="xs" flexWrap="wrap" alignItems="center">
+                    <Button key={`settings-${n}`} label="Settings" variant="secondary" dimColor onPress={() => (c ? settingsTab(n) : manage($, n))} />
+                    {c?.role === 'admin' && <Button key={`share-${n}`} label="Share" variant="secondary" dimColor onPress={() => share(n)} />}
+                    {c && many && !c.writes_here && <Button key={`write-${n}`} label="✎ Write here" variant="secondary" dimColor onPress={() => writeHere(n)} />}
+                  </Box>
+                  {c && <Button key={`open-${n}`} label="Open ›" variant="secondary" onPress={() => show(n)} />}
                 </Box>
                 {pin(n, '')}
               </Box>,
@@ -1280,7 +1284,7 @@ export const register: Register = on => {
               {byline(n)} · {n.key}
             </Text>
           </Box>
-          <Button key={`open-${n.key}`} label="Open" variant="secondary" dimColor onPress={() => void openItem($, n.key)} />
+          <Button key={`open-${n.key}`} label="Open ›" variant="secondary" dimColor onPress={() => void openItem($, n.key)} />
         </Box>
       )
       const group = (title: string, label: string, tone: string | undefined, list: GraphNode[]) =>
@@ -1664,7 +1668,7 @@ export const register: Register = on => {
                   {c.held ? <Text color="warning"> · still only on this machine</Text> : ''}
                 </Text>
               </Box>
-              {c.node && rel.byKey.has(c.node) && <Button key={`open-change-${c.id}`} label="Open" variant="secondary" dimColor onPress={() => void openItem($, c.node)} />}
+              {c.node && rel.byKey.has(c.node) && <Button key={`open-change-${c.id}`} label="Open ›" variant="secondary" dimColor onPress={() => void openItem($, c.node)} />}
             </Box>
           ))}
           {meta(
@@ -1707,7 +1711,7 @@ export const register: Register = on => {
               <Box flexDirection="row" gap="xs">
                 {undo(q)}
                 {answered || !canWrite ? (
-                  <Button key={`open-${q.key}`} label="Open" variant="secondary" dimColor onPress={() => void openItem($, q.key)} />
+                  <Button key={`open-${q.key}`} label="Open ›" variant="secondary" dimColor onPress={() => void openItem($, q.key)} />
                 ) : (
                   <Button key={`answer-${q.key}`} label="Answer" variant="primary" onPress={() => void openItem($, q.key)} />
                 )}
@@ -1796,7 +1800,7 @@ export const register: Register = on => {
           </Box>
           <Box flexDirection="row" gap="xs">
             {canWrite && <Button key={`keep-${keep.key}-over-${drop.key}`} label="Keep this one" variant="secondary" onPress={() => void ask($, prompts.settle(keep, drop, named))} />}
-            <Button key={`open-${keep.key}-vs-${drop.key}`} label="Open" variant="secondary" dimColor onPress={() => void openItem($, keep.key)} />
+            <Button key={`open-${keep.key}-vs-${drop.key}`} label="Open ›" variant="secondary" dimColor onPress={() => void openItem($, keep.key)} />
           </Box>
         </Box>
       )
@@ -1879,7 +1883,7 @@ export const register: Register = on => {
                   </Box>
                   <Box flexDirection="row" gap="xs">
                     {undo(n)}
-                    <Button key={`open-${n.key}`} label="Open" variant="secondary" dimColor onPress={() => void openItem($, n.key)} />
+                    <Button key={`open-${n.key}`} label="Open ›" variant="secondary" dimColor onPress={() => void openItem($, n.key)} />
                   </Box>
                 </Box>,
                 heldByNode.has(n.key) ? 'warning' : rel.inConflict.has(n.id) ? 'warning' : undefined,
