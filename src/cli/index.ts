@@ -103,14 +103,14 @@ async function demo(args: string[]): Promise<number> {
     args,
     options: { port: { type: "string" }, "no-open": { type: "boolean" }, pace: { type: "string" }, join: { type: "boolean" }, verbose: { type: "boolean" } },
   });
-  const [{ startDemo }, { nostrSignaller }, { storedIce }, { defaultDataDir }] = await Promise.all([import("../demo/live.js"), import("../p2p/signal.js"), import("../p2p/ice.js"), import("../core/graph.js")]);
+  const [{ startDemo }, { GRAPH_NAME }, { nostrSignaller }, { storedIce }, { defaultDataDir }] = await Promise.all([import("../demo/live.js"), import("../demo/scenario.js"), import("../p2p/signal.js"), import("../p2p/ice.js"), import("../core/graph.js")]);
   const pace = values.pace === undefined ? 4 : Number(values.pace);
   if (!Number.isFinite(pace) || pace < 0) {
     console.error("--pace is seconds between steps, 0 or more.");
     return 2;
   }
   console.log(`vine-context demo: three people, three hosts, one process
-  alice, bob and carol investigate a checkout slowdown, each from their own copy of the context 'incident'.
+  alice, bob and carol plan the office Christmas party, each from their own copy of the context 'party'.
   Every write goes through its author's host: signed, held for undo, then carried to the other two over WebRTC.
   ${values.join ? "They find each other through the public Nostr relays, so your agent can join too." : "They find each other in this process: no network is needed, and nothing leaves this machine."}
 `);
@@ -126,7 +126,7 @@ async function demo(args: string[]): Promise<number> {
   // The browser shows alice's point of view: her console, explorer and conflicts.
   process.env.VINE_DATA_DIR = alice.dataDir;
   process.env.VINE_USER = "alice";
-  const { make, log } = await sessionFactory({ graph: "incident" });
+  const { make, log } = await sessionFactory({ graph: GRAPH_NAME });
   const { startUi } = await import("../ui/server.js");
   const server = await startUi({ session: () => make(false), port: values.port ? Number(values.port) : undefined, log });
   console.log(`
@@ -161,7 +161,7 @@ Sharing console: the three members and their live links. Explore a context: the 
   }
   console.log(`
 The story is over, and the three hosts stay up. To point an agent at alice's copy:
-  VINE_DATA_DIR=${alice.dataDir} vine mcp --context incident`);
+  VINE_DATA_DIR=${alice.dataDir} vine mcp --context ${GRAPH_NAME}`);
   if (values.join) {
     const { code } = await alice.local.request<{ code: string }>("share", { label: "demo guest", role: "contributor" });
     console.log(`

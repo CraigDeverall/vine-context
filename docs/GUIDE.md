@@ -271,4 +271,4 @@ Each `VINE_DATA_DIR` is a separate person, so two MCP servers side by side can p
 claude mcp add vine-bob -e VINE_DATA_DIR="$HOME/.local/share/vine-bob" -e VINE_USER=bob -- vine mcp
 ```
 
-To point an agent at a live replicated graph, run `vine demo` and use the `VINE_DATA_DIR=… vine mcp --context incident` line it prints (that is alice's copy), or run `vine demo --join` and give your agent the join code it prints at the end.
+To point an agent at a live replicated graph, run `vine demo` and use the `VINE_DATA_DIR=… vine mcp --context party` line it prints (that is alice's copy), or run `vine demo --join` and give your agent the join code it prints at the end.

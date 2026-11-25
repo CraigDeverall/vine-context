@@ -53,7 +53,7 @@ After each sync, every agent is told what the changes mean for its person: your 
 - **Relate features in use:** uniqueness constraints, a vector index and a full-text index, hybrid search with `SEARCH … COMBINE`, temporal values with `EXISTS {}` subqueries for the "as of" reads, pattern comprehensions, and a transaction around every read and every applied change.
 - **Peer to peer:** WebRTC data channels between members, with public Nostr relays carrying sealed handshakes only. Join codes are single use.
 - **For agents:** an MCP server with twelve model tools (agents never write Cypher), a plugin for Claude Code and Codex with skills and a join command, and four MCP Apps views that show in the chat.
-- **A sample store in the repo:** three people investigating a checkout slowdown, with queries to run on it.
+- **A sample store in the repo:** three people planning the office Christmas party, with queries to run on it.
 
 ### Challenges
 
@@ -67,7 +67,7 @@ After each sync, every agent is told what the changes mean for its person: your 
 ### Accomplishments I'm proud of
 
 - A judge can run two commands and see a real graph with a time slider, with no account, API key or model download.
-- The example store opens in Relate's own CLI, and one Cypher query shows what the team believed at any minute of the incident.
+- The example store opens in Relate's own CLI, and one Cypher query shows what the team believed at any minute of the story.
 - It was used to coordinate its own development.
 
 **Confirm:** the last line is only true if you did. Remove it otherwise.

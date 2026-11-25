@@ -1,10 +1,12 @@
-// The example story, in one place: three people (alice, bob, carol)
-// investigating a checkout slowdown on 10 Nov 2026. A contradiction appears
-// and is settled, a mistaken claim is withdrawn, and a question is answered.
+// The example story, in one place: three people (alice, bob, carol) planning
+// the office Christmas party, 17 to 19 Nov 2026. A contradiction appears and
+// is settled, a mistaken claim is withdrawn, two questions are answered, and
+// a third stays open. Three replies show a question's thread: messages that
+// are not answers.
 //
 // Two things play it: `scripts/make-examples.ts` writes it, backdated, into
 // the example store that ships with the package, and `vine demo` runs it live
-// through three replicating hosts.
+// through three replicating hosts. The project site tells the same story.
 
 export interface Step {
   who: "alice" | "bob" | "carol";
@@ -20,43 +22,68 @@ export interface Step {
   note: string;
 }
 
-export const GRAPH_NAME = "incident";
-export const GRAPH_DESCRIPTION = "The checkout slowdown of 10 Nov 2026: what we found, what we still don't know, and what we disagreed about";
+export const GRAPH_NAME = "party";
+export const GRAPH_DESCRIPTION = "The office Christmas party 2026: who is coming, where it is, what it costs, and what we still have to decide";
 
 export const STEPS: Step[] = [
   {
-    who: "alice", day: 10, time: "14:20", tool: "add_claim", as: "latency",
-    args: { text: "Checkout p95 latency rose from 300 ms to 4 s at 13:58 on 10 Nov", source: "Grafana: checkout dashboard", about_from: "2026-11-10", about_to: "2026-11-10" },
-    note: "records what the dashboard shows",
+    who: "alice", day: 17, time: "09:10", tool: "add_claim", as: "headcount",
+    args: { text: "48 people are coming to the Christmas party, from the RSVP sheet that closed on 14 Nov", source: "RSVP sheet (closed 14 Nov)", about_from: "2026-11-14", about_to: "2026-11-14" },
+    note: "records that 48 people are coming, from the RSVP sheet",
   },
-  { who: "alice", day: 10, time: "14:25", tool: "ask_question", as: "whatChanged", args: { text: "What changed around 13:58 on 10 Nov?", about: ["@latency"] }, note: "asks the first question" },
-  { who: "bob", day: 10, time: "14:40", tool: "add_claim", as: "deploy", args: { text: "The 14:05 deploy of payments-api caused the checkout slowdown", source: "#incident-2211" }, note: "blames the deploy" },
+  { who: "alice", day: 17, time: "09:15", tool: "ask_question", as: "whichVenue", args: { text: "Which venue can take all of us on a Friday in December?", about: ["@headcount"] }, note: "asks which venue can take all of them on a Friday" },
   {
-    who: "carol", day: 10, time: "15:10", tool: "add_claim",
-    args: { text: "The slowdown started at 13:58, seven minutes before the 14:05 deploy", source: "load balancer access logs", supports: ["@latency"], contradicts: ["@deploy"] },
-    note: "contradicts bob: the graph now holds a conflict",
+    who: "bob", day: 17, time: "10:40", tool: "reply",
+    args: { question: "@whichVenue", text: "Riverside said yes on the phone. I'll get it in writing before we book." },
+    note: "replies in the thread: Riverside said yes on the phone, and he'll get it in writing. A reply is a message to the thread, not an answer, so the question stays open",
   },
-  { who: "bob", day: 10, time: "15:30", tool: "add_claim", as: "pool", args: { text: "The orders database connection pool hit its limit of 50 connections at 13:57", source: "pg_stat_activity snapshot" }, note: "finds the pool ran out" },
-  { who: "alice", day: 10, time: "15:45", tool: "ask_question", as: "whyPool", args: { text: "Why did the orders connection pool run out?", about: ["@pool"] }, note: "asks why" },
-  { who: "carol", day: 10, time: "16:30", tool: "add_claim", as: "mobile", args: { text: "Mobile app 5.12, released at 13:50, retries failed requests immediately and without limit", source: "mobile release notes 5.12" }, note: "spots the mobile release" },
   {
-    who: "carol", day: 10, time: "16:50", tool: "add_claim", as: "retries",
-    args: { text: "Retries from mobile 5.12 held orders database connections open until the pool ran out", supports: ["@pool"], answers: ["@whyPool"] },
-    note: "answers alice's second question",
+    who: "bob", day: 17, time: "11:30", tool: "add_claim", as: "riverside",
+    args: { text: "The Riverside Room can take the whole party on Friday 12 Dec", source: "phone call with the Riverside Room", about_from: "2026-12-12", about_to: "2026-12-12" },
+    note: "claims the Riverside Room can take the whole party on Friday 12 Dec",
   },
-  { who: "carol", day: 10, time: "16:51", tool: "link", args: { from: "@mobile", relation: "SUPPORTS", to: "@retries" }, note: "links the release as evidence" },
-  { who: "bob", day: 10, time: "17:05", tool: "add_claim", as: "redis", args: { text: "The Redis cache was down during the incident" }, note: "adds a claim about Redis" },
-  { who: "bob", day: 10, time: "17:20", tool: "withdraw", args: { id: "@redis", reason: "Wrong incident: that was the staging cluster" }, note: "withdraws it: wrong incident. It stays in the history, marked as ended" },
   {
-    who: "bob", day: 10, time: "17:40", tool: "add_claim",
-    args: { text: "Mobile retries exhausting the orders database pool caused the checkout slowdown, not the 14:05 deploy", replaces: ["@deploy"], supports: ["@retries"], answers: ["@whatChanged"] },
-    note: "replaces his deploy claim: the conflict settles, and alice's first question is answered",
+    who: "carol", day: 17, time: "14:05", tool: "add_claim",
+    args: { text: "The Riverside Room's licence caps it at 40 seated, eight short of our 48", source: "Riverside Room premises licence, on the council's register", supports: ["@headcount"], contradicts: ["@riverside"] },
+    note: "finds the Riverside Room's licence caps it at 40 seated. That contradicts bob, and the graph now holds a conflict",
   },
-  { who: "alice", day: 10, time: "18:00", tool: "ask_question", args: { text: "Should the API gateway rate-limit each client?" }, note: "asks what to do about it" },
+  { who: "bob", day: 17, time: "15:20", tool: "add_claim", as: "budget", args: { text: "The budget is £2,400, which is £50 a head for 48", source: "finance: events budget 2026" }, note: "records the budget: £2,400, which is £50 a head" },
+  { who: "alice", day: 17, time: "15:40", tool: "ask_question", as: "coversHire", args: { text: "Does the budget cover a venue hire fee as well as food?", about: ["@budget"] }, note: "asks whether that covers a venue hire fee as well as food" },
   {
-    who: "alice", day: 11, time: "09:15", tool: "add_claim",
-    args: { text: "Per-client rate limiting at the gateway would have contained the retry storm within a minute", source: "replay of 10 Nov traffic in staging", supports: ["@retries"] },
-    note: "replays the traffic in staging the next morning. Her last question is still open",
+    who: "bob", day: 18, time: "09:30", tool: "reply",
+    args: { question: "@coversHire", text: "Checking each venue's terms now. Hire fees are the sticking point; food alone fits." },
+    note: "replies: he's checking each venue's terms, and hire fees are the sticking point",
+  },
+  {
+    who: "carol", day: 18, time: "10:00", tool: "add_claim", as: "orangery",
+    args: { text: "The Orangery holds 60 and is free on Friday 19 Dec", source: "the Orangery's bookings page", about_from: "2026-12-19", about_to: "2026-12-19" },
+    note: "finds the Orangery holds 60 and is free on Friday 19 Dec",
+  },
+  {
+    who: "carol", day: 18, time: "10:20", tool: "add_claim", as: "waiver",
+    args: { text: "The Orangery waives its hire fee at a £1,800 minimum spend on food and drink, which fits the £2,400 budget", source: "the Orangery's events pack", supports: ["@budget"], answers: ["@coversHire"] },
+    note: "claims the Orangery waives its hire fee at a £1,800 minimum spend, which fits the budget. That answers alice's second question, and closes its thread",
+  },
+  { who: "carol", day: 18, time: "10:21", tool: "link", args: { from: "@orangery", relation: "SUPPORTS", to: "@waiver" }, note: "links the Orangery's availability as support for that" },
+  {
+    who: "bob", day: 18, time: "12:05", tool: "add_claim", as: "lastYear",
+    args: { text: "Last year's party cost £2,300, so £2,400 is plenty", source: "finance: events spend 2025", about_from: "2025-12-01", about_to: "2025-12-31", supports: ["@budget"] },
+    note: "claims last year's party cost £2,300, as support for the budget",
+  },
+  {
+    who: "bob", day: 18, time: "12:30", tool: "withdraw", args: { id: "@lastYear", reason: "That figure was the summer party" },
+    note: "withdraws it: that figure was the summer party. Nothing is deleted: the claim and its link stay in the history, marked as ended, and drop out of the current view",
+  },
+  {
+    who: "bob", day: 18, time: "16:45", tool: "add_claim",
+    args: { text: "The party is at the Orangery on Friday 19 Dec, not the Riverside Room", about_from: "2026-12-19", about_to: "2026-12-19", replaces: ["@riverside"], supports: ["@waiver"], answers: ["@whichVenue"] },
+    note: "replaces his Riverside claim: the party is at the Orangery on 19 Dec. The conflict settles, and alice's first question is answered",
+  },
+  { who: "alice", day: 19, time: "09:00", tool: "ask_question", as: "partners", args: { text: "Should partners be invited, and is there budget for them?" }, note: "asks whether partners should be invited, and whether there is budget for them" },
+  {
+    who: "carol", day: 19, time: "09:40", tool: "reply",
+    args: { question: "@partners", text: "Finance can't stretch to partners this year. A January drinks evening for partners might work; I'll ask." },
+    note: "replies in the thread: not within this year's budget, but a January drinks evening might work. Still a reply, not an answer: the question stays open",
   },
 ];
 
