@@ -81,7 +81,7 @@ that stands alone and record it with `add_claim` and `answers: [question id]`.
 Credit a reply in `source` ("reply r_…") when the answer came from one. Don't
 answer for the person: if it isn't settled, reply instead, or ask.
 
-## News: what others' changes mean for you
+## What others' changes mean for you
 
 Your tool results may start with `News:` lines. Tell the person briefly. In
 Claude Code and Codex the same news about others' changes can instead arrive
@@ -106,7 +106,7 @@ members`; each item arrives one way or the other, not both. They come from:
 `context_activity` lists the recent changes and the latest digests at any
 time.
 
-## Undo, and what can't be undone
+## Undo and what can't be undone
 
 A write stays on this machine for about 10 seconds before it is sent to the
 other members. In that time `take_back` (or Undo on the receipt) removes it

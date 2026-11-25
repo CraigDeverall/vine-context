@@ -9,7 +9,7 @@ Back to the [README](../README.md).
 - [The picture](#the-picture)
 - [Every member has a full copy](#every-member-has-a-full-copy)
 - [A write is a signed change](#a-write-is-a-signed-change)
-- [Same changes, same graph](#same-changes-same-graph)
+- [Applying changes in any order](#applying-changes-in-any-order)
 - [Members and roles](#members-and-roles)
 - [The mesh](#the-mesh)
 - [Join codes](#join-codes)
@@ -61,7 +61,7 @@ When an agent calls a write tool such as `add_claim`:
 
 Each author numbers their own changes 1, 2, 3. So "what I have" is one number per member, and catching up is sending what the other side lacks.
 
-## Same changes, same graph
+## Applying changes in any order
 
 Applying a change is idempotent and order-independent:
 
@@ -85,7 +85,7 @@ Online members meet in a signalling room named and sealed with the group secret,
 
 Links and relay connections are pinged and replaced when they go quiet, and reconnect for as long as the host runs. Changes are forwarded, so members who are never online together still get each other's writes through anyone who is.
 
-Each machine learns its public address from public STUN servers (Google's and Cloudflare's by default). If two machines can't reach each other directly, a TURN server carries their link: `vine setup` or `vine turn set --provider cloudflare` sets up Cloudflare's on your own account (Vine mints short-lived credentials from your key at connect time), or `vine turn set` stores one you run, and `vine status` and the console say which links are relayed. See [Strict networks](GUIDE.md#strict-networks-turn-and-stun).
+Each machine learns its public address from public STUN servers (Google's and Cloudflare's by default). If two machines can't reach each other directly, a TURN server carries their link: `vine setup` or `vine turn set --provider cloudflare` sets up Cloudflare's on your own account (Vine mints short-lived credentials from your key at connect time), or `vine turn set` stores one you run, and `vine status` and the console say which links are relayed. See [Strict networks](GUIDE.md#turn-and-stun-on-strict-networks).
 
 ## Join codes
 

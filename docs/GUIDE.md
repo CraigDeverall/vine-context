@@ -16,7 +16,7 @@ Back to the [README](../README.md).
 - [What a sync tells you](#what-a-sync-tells-you)
 - [Undo and withdraw](#undo-and-withdraw)
 - [Staying in sync](#staying-in-sync)
-- [Strict networks: TURN and STUN](#strict-networks-turn-and-stun)
+- [TURN and STUN on strict networks](#turn-and-stun-on-strict-networks)
 - [Removing someone](#removing-someone)
 - [The Claude Code panel](#the-claude-code-panel)
 - [Commands](#commands)
@@ -197,9 +197,9 @@ After that it can only be *withdrawn*, which keeps it in everyone's history.
 - Sharing is on by default and survives restarts. *"Stop sharing"* takes a context offline until you share again. Your copy keeps working.
 - Each context's host runs while an agent uses it. To keep contexts syncing without an agent open, and after a reboot, run `vine autostart on` (macOS only for now).
 - `vine status --graph <name>` shows the members, the live links to them, and whether the signalling relays are reachable.
-- If two machines can't reach each other directly (some networks block it), set a TURN server: see [Strict networks](#strict-networks-turn-and-stun).
+- If two machines can't reach each other directly (some networks block it), set a TURN server: see [Strict networks](#turn-and-stun-on-strict-networks).
 
-## Strict networks: TURN and STUN
+## TURN and STUN on strict networks
 
 If two machines can't reach each other directly (some networks block it), one of them sets a TURN server, which then carries that pair's connection. There's none by default, and Vine ships no shared one: it's Cloudflare's on your own account, or a server you run. See [Do I need a TURN server?](#do-i-need-a-turn-server).
 
@@ -252,17 +252,10 @@ The panel never writes a claim or question itself: your agent does, from what yo
 | `vine doctor` | Check Node, Relate, WebRTC, the model, the data directory, the network (does it need TURN?) and the TURN server |
 | `vine status --graph <name>` | Members, live links and relay reachability for one context |
 | `vine whoami` | Your name and key |
-| `vine turn set \| show \| test \| clear` | Set (`--provider cloudflare`, or a server of your own), show, check or remove a TURN server ([strict networks](#strict-networks-turn-and-stun)) |
+| `vine turn set \| show \| test \| clear` | Set (`--provider cloudflare`, or a server of your own), show, check or remove a TURN server ([strict networks](#turn-and-stun-on-strict-networks)) |
 | `vine autostart on` | Keep contexts syncing after login (macOS) |
 
-| Setting | What it changes |
-|---|---|
-| `VINE_DATA_DIR` | Where contexts are kept (default `~/.local/share/vine-context/`) |
-| `VINE_USER` | Your name in new contexts (default: your git name) |
-| `VINE_ICE` | STUN and TURN servers, replacing the defaults and the `vine turn` setting ([strict networks](#strict-networks-turn-and-stun)) |
-| `VINE_TURN_PASSWORD` | The TURN server's password, when it was set with `--store env` |
-| `VINE_CLOUDFLARE_TURN_SECRET` | The Cloudflare TURN key's secret, when it was set with `--store env` |
-| `VINE_EMBEDDER` | The search embedder: `auto` (default: the sentence model when installed, else the built-in), `hash` or a model name ([limits](HOW-IT-WORKS.md#limits)) |
+Every option and environment variable, with its default, is listed in the README's [Settings](../README.md#settings) section.
 
 ## Trying it with two identities on one machine
 

@@ -1,5 +1,7 @@
 <h1 align="center"><img src="docs/images/vine-context-logo.svg" alt="Vine Context" width="460"></h1>
 
+<p align="center"><b>Peer to Peer Graphs</b></p>
+
 **Shared memory for a team's AI agents.** One [Relate](https://relatedb.ai/) context graph of claims and questions, kept in step between everyone's machines, peer to peer, with no server.
 
 ```bash
@@ -97,6 +99,21 @@ Codex and other MCP agents: see [the guide](docs/GUIDE.md#install-by-hand).
 
 </details>
 
+<details><summary>From a clone of this repo</summary>
+
+```bash
+git clone https://github.com/CraigDeverall/vine-context.git
+cd vine-context
+npm ci
+npm run build
+npm install -g .
+vine demo
+```
+
+The example store is then at `examples/data/graphs/party` in the clone.
+
+</details>
+
 ### 2. See it (about two minutes)
 
 ```bash
@@ -183,9 +200,39 @@ flowchart LR
 
 The full account is in [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md), and the design reasoning in [docs/REPLICATION.md](docs/REPLICATION.md).
 
+## Settings
+
+Everything works without settings. These change the defaults, and `vine --help` lists them too.
+
+**Command options**
+
+| Command | Options |
+|---|---|
+| `vine setup` | `--yes` takes the default answer to every question (secrets are still typed, unseen) · `--agent claude,codex` or `none` picks which agents get the plugin (default: those found) · `--turn cloudflare`, `custom` or `none` instead of asking · `--json` prints the results as JSON · `--dry-run` runs only the read-only checks and prints what it would do |
+| `vine demo` | `--pace SECONDS` between steps (default 4; `0` plays it all at once) · `--join` meets through the public Nostr relays and prints a join code for your own agent · `--port N` for the browser page · `--no-open` doesn't open the browser · `--verbose` |
+
+**Environment variables**
+
+| Variable | What it changes | Default |
+|---|---|---|
+| `VINE_USER` | Your name in contexts | The name saved with `set_my_name`, else git's `user.name`, else your computer account's full name, else a made-up one |
+| `VINE_DATA_DIR` | Where contexts live | `~/.local/share/vine-context` |
+| `VINE_CONTEXT` | The context a new chat starts with when its folder has none linked | None: the agent asks |
+| `VINE_CHAT` | The chat's id, used to remember its context | Claude Code's or Codex's session id |
+| `VINE_EMBEDDER` | How search turns text into vectors: `auto`, `hash` (words only) or `bge-small` | `auto`: `bge-small` when its package runs here, else `hash` |
+| `VINE_AUTO_SHARE` | `off`: new contexts don't sync until you share them | On |
+| `VINE_HOOKS` | `quiet`: no reminder beside each prompt (the session briefing and others' news stay) · `off`: the hooks say nothing | On |
+| `VINE_HOLD_MS` | How long a write waits on this machine, so Undo can remove it, before it is sent | `10000` (10 seconds) |
+| `VINE_RELAYS` | Nostr relays members use to find each other, comma-separated | Four public relays |
+| `VINE_ICE` | STUN and TURN servers, comma-separated; replaces the defaults and the `vine turn` setting | Google's and Cloudflare's STUN |
+| `VINE_TURN_PASSWORD` | The TURN server's password, when it was saved with `--store env` | None |
+| `VINE_CLOUDFLARE_TURN_SECRET` | The Cloudflare TURN key's secret, when it was saved with `--store env` | None |
+
+The other commands (`vine doctor`, `vine status`, `vine turn`, `vine autostart` and the rest) are listed in [the guide](docs/GUIDE.md#commands).
+
 ## Limits
 
-- **Search matches meaning with a small model that installs with vine,** on the CPU, offline. It has only been run on macOS arm64 so far; where its package isn't available or doesn't run, search matches words and word fragments instead, and `vine doctor` says which is in use.
+- **Search matches meaning with a small model that installs with vine,** on the CPU, offline. Its packages are built and tested in CI for macOS (arm64, x64), Linux (x64, arm64) and Windows x64; anywhere else, or where it doesn't run, search matches words and word fragments instead, and `vine doctor` says which is in use.
 - **Strict networks need a TURN server, on your own account.** Vine ships no shared TURN server or key. `vine setup` sets up Cloudflare's on your own Cloudflare account in a few steps (free up to 1,000 GB a month, far more than Vine uses), or you can use one you run. Only one machine in a pair needs one ([do I need a TURN server?](docs/GUIDE.md#do-i-need-a-turn-server)). Replication has been tested between processes on one machine and over real public relays.
 - **Removing someone can't recall the copy they already have.**
 - **Clocks are assumed correct,** and a context is sized for about 20 members and 100,000 changes.
