@@ -163,7 +163,7 @@ export class Host {
   static async start(o: HostOptions): Promise<Host> {
     const path = socketPath(o.dataDir, o.graph);
     if (await hostAlive(path)) throw new HostRunningError(`A host for graph '${o.graph}' is already running.`);
-    const graph = await Graph.open({ dataDir: o.dataDir, name: o.graph });
+    const graph = await Graph.open({ dataDir: o.dataDir, name: o.graph, log: o.log });
     const host = new Host(graph, o);
     await host.init();
     await host.listen();

@@ -207,7 +207,7 @@ export class Graph {
   }
 
   /** Opens (or creates) a graph's store on this machine. Every graph uses the Claims and Questions model. */
-  static async open(opts: { name?: string; dataDir?: string; embedder?: Embedder } = {}): Promise<Graph> {
+  static async open(opts: { name?: string; dataDir?: string; embedder?: Embedder; log?(msg: string): void } = {}): Promise<Graph> {
     const name = opts.name ?? process.env.VINE_GRAPH ?? "default";
     if (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(name)) throw new ToolError(`Graph names are lower-case letters, digits and dashes: '${name}'.`);
     const dir = join(opts.dataDir ?? defaultDataDir(), "graphs", name);
@@ -220,13 +220,16 @@ export class Graph {
       openStores.set(dir, store);
     }
     const { db, conn } = store;
-    const embedder = opts.embedder ?? makeEmbedder();
+    const embedder = opts.embedder ?? makeEmbedder(undefined, opts.log);
     const found = conn.query("MATCH (m:_VineMeta {key: 'meta'}) RETURN m {.*} AS m").rows[0]?.m as Meta | undefined;
     const pack = claimsPack();
     if (found && found.model !== pack.model.name)
       throw new ToolError(`Graph '${name}' uses the model '${found.model}', which this version of vine-context no longer supports (only '${pack.model.name}').`);
     const graph = new Graph(name, dir, pack, embedder, db, conn, R, store);
-    if (found && found.embedder !== embedder.name) graph.reembed();
+    if (found && found.embedder !== embedder.name) {
+      opts.log?.(`graph '${name}': its vectors were made by ${found.embedder}; making them again with ${embedder.name}`);
+      graph.reembed();
+    }
     graph.applyModel(found);
     return graph;
   }
