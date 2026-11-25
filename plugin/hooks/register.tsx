@@ -30,7 +30,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, UiPressArgument } from 'claude-code'
 
-import type { Activity, Change, ContextDetails, Filters, GraphEdge, GraphNode, Invite, Latest, Person, Tab } from '../types'
+import type { Activity, Change, ContextDetails, Filters, Found, GraphEdge, GraphNode, Invite, Latest, Person, Tab } from '../types'
 
 const PANE = 'context-graph'
 const POLL_MS = 4000
@@ -59,6 +59,7 @@ const switching = atom({ plugin: 'vine-context', key: 'switching' } as const, fa
 const detail = atom({ plugin: 'vine-context', key: 'detail' } as const, null)
 const renaming = atom({ plugin: 'vine-context', key: 'renaming' } as const, false)
 const filters = atom({ plugin: 'vine-context', key: 'filters' } as const, { text: '', claims: 'current', questions: 'open' })
+const found = atom({ plugin: 'vine-context', key: 'found' } as const, null)
 const more = atom({ plugin: 'vine-context', key: 'more' } as const, 0)
 const unattached = atom({ plugin: 'vine-context', key: 'unattached' } as const, null)
 const viewing = atom({ plugin: 'vine-context', key: 'viewing' } as const, null)
@@ -167,6 +168,50 @@ export function matches(n: GraphNode, text: string): boolean {
   if (!words.length) return true
   const hay = `${n.title} ${prop(n, 'recorded_by')} ${prop(n, 'source')} ${n.key}`.toLowerCase()
   return words.every(w => hay.includes(w))
+}
+
+/** How many items a filter adds because they're close in meaning, past those that share its words. */
+export const RELATED = 5
+
+/**
+ * A list under the filter: the items that match its words, then up to RELATED
+ * more that the search found close in meaning (`near`, best first), which are
+ * marked so the list can say so.
+ */
+export function filtered<T>(items: T[], key: (x: T) => string, words: (x: T) => boolean, near: string[] | null | undefined): { list: T[]; byMeaning: Set<string> } {
+  const list = items.filter(words)
+  const byMeaning = new Set<string>()
+  if (!near?.length) return { list, byMeaning }
+  const shown = new Set(list.map(key))
+  const byKey = new Map(items.map(x => [key(x), x] as const))
+  for (const id of near) {
+    if (byMeaning.size >= RELATED) break
+    const x = byKey.get(id)
+    if (x !== undefined && !shown.has(id)) {
+      byMeaning.add(id)
+      list.push(x)
+    }
+  }
+  return { list, byMeaning }
+}
+
+/**
+ * Asks the server's search for what the filter's text is close to, in the
+ * context the panel shows, ended items included so History can use it too.
+ * A server from before `include_ended` is asked again without it.
+ */
+async function findRelated($: Engine, text: string, context: string, ctx: Record<string, unknown>) {
+  if (!text) return update($, found, () => null)
+  await update($, found, () => ({ text, context, ids: null }))
+  const ask = { query: text, kind: 'any', limit: 50, ...ctx }
+  const settle = (next: Found) => update($, found, (v: Found | null) => (v?.text === text && v.context === context ? next : v))
+  try {
+    const rows = await call($, 'search', { ...ask, include_ended: true }).catch(() => call($, 'search', ask))
+    const ids = (Array.isArray(rows) ? rows : []).map((r: any) => r?.id).filter((id: unknown): id is string => typeof id === 'string')
+    await settle({ text, context, ids })
+  } catch {
+    await settle({ text, context, ids: [], failed: true })
+  }
 }
 
 /** What the agent is asked from the panel's other buttons: the person steers, the agent records. */
@@ -1356,7 +1401,11 @@ export const register: Register = on => {
         })
         .then(() => (x === current ? undefined : update($, filters, (v: Filters): Filters => ({ ...v, text: '' }))))
         .then(() => update($, tab, () => x))
-    const setFilter = (patch: Partial<Filters>) => void update($, more, () => 0).then(() => update($, filters, (v: Filters): Filters => ({ ...v, ...patch })))
+    // Returned, so whoever presses waits for the search too.
+    const setFilter = (patch: Partial<Filters>) =>
+      update($, more, () => 0)
+        .then(() => update($, filters, (v: Filters): Filters => ({ ...v, ...patch })))
+        .then(() => (patch.text !== undefined ? findRelated($, patch.text, a.context, ctx) : undefined))
     const members = a.people.filter((p: Person) => p.role)
     const counts: Record<Tab, number | undefined> = { overview: undefined, questions: t?.open.length, claims: t?.claims.length, people: members.length, settings: undefined }
     const goOnline = <Button key="go-online" label="Go online" variant="primary" onPress={() => void act($, 'start_sharing', { ...ctx }, 'Back online: syncing with the other members.')} />
@@ -1442,14 +1491,24 @@ export const register: Register = on => {
       </Box>
     )
 
-    /** The filter box above a list, and what it's filtering by. */
-    const filterBox = (what: string) => (
+    /** The search behind the filter's text, once it has answered for this text in this context. */
+    const search = f.text ? await read($, found) : null
+    const near = search && search.text === f.text && search.context === a.context ? search : null
+    /** The filter box above a list, and what it's filtering by: its words, and how many more are close in meaning. */
+    const filterBox = (what: string, byMeaning: number) => (
       <Box flexDirection="column" gap="xs" width="100%" alignItems="stretch">
-        <Input key="filter" value={f.text} placeholder={`Filter ${what} by words, a person or an id`} submitLabel="Filter" onSubmit={(v: string) => setFilter({ text: v.trim() })} />
+        <Input key="filter" value={f.text} placeholder={`Search ${what} by meaning, words, a person or an id`} submitLabel="Search" onSubmit={(v: string) => setFilter({ text: v.trim() })} />
         {f.text && (
-          <Box flexDirection="row" gap="xs" alignItems="center">
-            <Text size="footnote" dimColor>
+          <Box flexDirection="row" gap="xs" alignItems="center" flexWrap="wrap">
+            <Text size="footnote" dimColor wrap="wrap">
               Showing {what} matching “{short(f.text, 40)}”
+              {!near || near.ids === null
+                ? ' · looking for ones close in meaning…'
+                : near.failed
+                  ? ' · search by meaning isn’t available, so only words match'
+                  : byMeaning
+                    ? `, then ${byMeaning} close in meaning`
+                    : ''}
             </Text>
             <Button key="clear-filter" label="× Clear" plain dimColor onPress={() => setFilter({ text: '' })} />
           </Box>
@@ -1604,7 +1663,12 @@ export const register: Register = on => {
         mine: [...t.open, ...t.answered].filter(th => isMine(th.q)),
       }
       const scope = f.questions in scopes ? f.questions : 'open'
-      const list = scopes[scope].filter(th => matches(th.q, f.text) || th.replies.some(r => matches(r, f.text)) || th.answers.some(c => matches(c, f.text)))
+      const { list, byMeaning } = filtered(
+        scopes[scope],
+        th => th.q.key,
+        th => matches(th.q, f.text) || th.replies.some(r => matches(r, f.text)) || th.answers.some(c => matches(c, f.text)),
+        near?.ids,
+      )
       const question = (th: Thread) => {
         const q = th.q
         const answered = th.answers.length > 0
@@ -1620,6 +1684,7 @@ export const register: Register = on => {
                 <Text size="footnote" dimColor>
                   asked by {byline(q)}
                   {th.replies.length ? ` · ${th.replies.length} repl${th.replies.length === 1 ? 'y' : 'ies'}` : ''}
+                  {byMeaning.has(q.key) ? ' · close in meaning' : ''}
                   {held(q)}
                 </Text>
               </Box>
@@ -1674,7 +1739,7 @@ export const register: Register = on => {
             {chip('scope-answered', `Answered ${t.answered.length}`, scope === 'answered', () => setFilter({ questions: 'answered' }))}
             {chip('scope-mine', `Mine ${scopes.mine.length}`, scope === 'mine', () => setFilter({ questions: 'mine' }))}
           </Box>
-          {filterBox('questions')}
+          {filterBox('questions', byMeaning.size)}
           {!list.length &&
             card(
               'empty',
@@ -1703,7 +1768,7 @@ export const register: Register = on => {
         history: rel.history,
       }
       const scope = f.claims in scopes ? f.claims : 'current'
-      const list = scopes[scope].filter(n => matches(n, f.text))
+      const { list, byMeaning } = filtered(scopes[scope], n => n.key, n => matches(n, f.text), near?.ids)
       const pairs = scope === 'history' ? [] : rel.conflicts.filter(([x, y]) => matches(x, f.text) || matches(y, f.text))
       const side = (keep: GraphNode, drop: GraphNode) => (
         <Box key={`side-${keep.key}`} flexDirection="row" gap={1} justifyContent="space-between" alignItems="flex-start">
@@ -1739,7 +1804,7 @@ export const register: Register = on => {
             {(rel.conflicts.length > 0 || scope === 'conflicts') && chip('scope-conflicts', `⚡ Conflicts ${rel.conflicts.length}`, scope === 'conflicts', () => setFilter({ claims: 'conflicts' }))}
             {chip('scope-history', `History ${rel.history.length}`, scope === 'history', () => setFilter({ claims: 'history' }))}
           </Box>
-          {filterBox('claims')}
+          {filterBox('claims', byMeaning.size)}
           {pairs.map(([x, y]) =>
             card(
               `conflict-${x.key}-${y.key}`,
@@ -1785,6 +1850,7 @@ export const register: Register = on => {
                     </Text>
                     <Text size="footnote" dimColor wrap="wrap">
                       {byline(n)}
+                      {byMeaning.has(n.key) ? ' · close in meaning' : ''}
                       {scope === 'history'
                         ? n.ended
                           ? ` · withdrawn${prop(n, 'withdrawn_by') ? ` by ${prop(n, 'withdrawn_by')}` : ''}${prop(n, 'withdraw_reason') ? `: ${short(prop(n, 'withdraw_reason'), 80)}` : ''}`
