@@ -78,7 +78,7 @@ Work done during the contest: the embedded Relate graph and its model, the chang
 
 ## Submission checklist
 
-- [ ] Repository is public
+- [x] Repository is public
 - [ ] `vine-context` is published to npm (the README's install steps depend on it)
 - [x] GitHub topics `relate` and `relate-neo4j-hackathon`
 - [x] Open-source licence (Apache-2.0)
