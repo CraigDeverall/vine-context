@@ -74,7 +74,10 @@ const creating = atom({ plugin: 'vine-context', key: 'creating' } as const, null
 const managing = atom({ plugin: 'vine-context', key: 'managing' } as const, null)
 const details = atom({ plugin: 'vine-context', key: 'details' } as const, null)
 const deleting = atom({ plugin: 'vine-context', key: 'deleting' } as const, null)
-const editing = atom({ plugin: 'vine-context', key: 'editing' } as const, false)
+/** The context whose description is being edited. */
+const editing = atom({ plugin: 'vine-context', key: 'editing' } as const, false as string | boolean)
+/** The context being renamed. */
+const renamingContext = atom({ plugin: 'vine-context', key: 'renamingContext' } as const, null as null | string)
 const switching = atom({ plugin: 'vine-context', key: 'switching' } as const, false)
 const detail = atom({ plugin: 'vine-context', key: 'detail' } as const, null)
 const renaming = atom({ plugin: 'vine-context', key: 'renaming' } as const, false)
@@ -84,7 +87,8 @@ const more = atom({ plugin: 'vine-context', key: 'more' } as const, 0)
 const unattached = atom({ plugin: 'vine-context', key: 'unattached' } as const, null)
 const viewing = atom({ plugin: 'vine-context', key: 'viewing' } as const, null)
 const tick = atom({ plugin: 'vine-context', key: 'tick' } as const, 0)
-const inviting = atom({ plugin: 'vine-context', key: 'inviting' } as const, null)
+/** The context a join code is being made for, and the role it gives. */
+const inviting = atom({ plugin: 'vine-context', key: 'inviting' } as const, null as null | { name: string; role: Invite['role'] })
 const folds = atom({ plugin: 'vine-context', key: 'folds' } as const, [] as string[])
 
 type Engine = EngineInterface
@@ -96,6 +100,10 @@ let newName = ''
 let newDescription = ''
 /** What's typed to confirm a deletion, for its Delete button. */
 let deleteText = ''
+/** What's typed as a context's new name, for its Rename button. */
+let renameText = ''
+/** The join code just made for a context that's off for this chat: its page shows it, since it has no People tab. */
+let madeCode: { name: string; id: string; send: string; label: string | null; role: string } | null = null
 
 /** The tabs, each with its icon. */
 const TABS: { tab: Tab; icon: string; label: string }[] = [
@@ -418,6 +426,25 @@ async function act($: Engine, tool: string, args: Record<string, unknown>, done?
     // A new join code (from Invite): marked in the People tab's list.
     const made = r && typeof r === 'object' ? (r as { invite?: { id?: string } }).invite?.id : undefined
     if (made) await update($, code, () => made)
+    const inv = r as { context?: string; code?: string; invite?: { id: string; label?: string; role?: string } } | null
+    if (inv?.code && inv.context && inv.invite)
+      madeCode = { name: inv.context, id: inv.invite.id, send: `Join my context graph: /vine-context:join ${inv.code}`, label: inv.invite.label ?? null, role: inv.invite.role ?? 'contributor' }
+  } catch (e) {
+    await fail($, (e as Error).message)
+  }
+  await refresh($)
+  await loadDetails($)
+}
+
+/** Renames a context on this machine; the panel follows it to its new name. */
+async function renameContext($: Engine, from: string, to: string) {
+  try {
+    await call($, 'rename_context', { name: from, to })
+    await clearError($)
+    await say($, `Renamed to '${to}' on this machine. Other members keep their own name for it.`)
+    if ((await read($, managing)) === from) await update($, managing, () => to)
+    if ((await read($, viewing)) === from) await update($, viewing, () => to)
+    if (madeCode?.name === from) madeCode = { ...madeCode, name: to }
   } catch (e) {
     await fail($, (e as Error).message)
   }
@@ -801,7 +828,7 @@ export const register: Register = on => {
     /** Starts the join-code step for one of the chat's contexts: the panel moves to it, and the code lands in its People tab. */
     const share = (n: string) => {
       inviteNote = ''
-      return show(n).then(() => update($, inviting, () => 'contributor' as Invite['role']))
+      return show(n).then(() => update($, inviting, () => ({ name: n, role: 'contributor' as Invite['role'] })))
     }
     const writeHere = (n: string) => void act($, 'add_context', { name: n, write_here: true }, `New items go to '${n}' unless another fits better.`)
 
@@ -820,8 +847,10 @@ export const register: Register = on => {
           }
         >
           {pinned ? '📌 On for new chats in ' : '📌 Turn on for new chats in '}
-          <Text size="footnote" dimColor>
-            {tail(f.folder, Math.max(12, Math.min(48, cols - 18)))}
+          {/* The folder's end is what tells folders apart, so a long path loses its start. Desktop always
+              cuts a Text at its end, so the cut is made here; it leaves more room there for the wider font. */}
+          <Text size="footnote" dimColor wrap="truncate-start">
+            {tail(f.folder, Math.max(12, Math.min(48, cols - (graphical ? 22 : 18))))}
           </Text>
         </Button>
       )
@@ -849,20 +878,54 @@ export const register: Register = on => {
             <Text wrap="wrap">{value}</Text>
           </Box>
         ) : (
-          <Box key={`detail-${label}`} flexDirection="row" gap={1}>
-            <Box width={12} flexShrink={0}>
+          <Box key={`detail-${label}`} flexDirection="row" gap={1} alignItems="flex-start">
+            <Box width={10} flexShrink={0}>
               <Text dimColor>{label}</Text>
             </Box>
-            <Box flexShrink={1}>
+            <Box flexShrink={1} flexGrow={1}>
               <Text wrap="wrap">{value}</Text>
             </Box>
           </Box>
         )
       const count = (k: string, one: string, plural: string) => `${d?.items[k] ?? 0} ${(d?.items[k] ?? 0) === 1 ? one : plural}`
+      const description = d ? d.description : descriptionOf(n)
+      const fresh = !inTab && madeCode?.name === n ? madeCode : null
       /** No one else has joined, so there is nobody to sync with. */
       const alone = d?.members === 1
       return (
         <Box key={`settings-${n}`} flexDirection="column" gap="md">
+          <Box flexDirection="column" gap="xs">
+            {heading('Name')}
+            {split(
+              `name-row-${n}`,
+              <Text weight="semibold" bold wrap="wrap">
+                {n}
+              </Text>,
+              <Button key={`rename-context-${n}`} label="✎ Rename" variant="secondary" dimColor onPress={() => ((renameText = ''), void update($, renamingContext, () => n))} />,
+              'center',
+            )}
+            {d?.id && (
+              <Text key={`context-id-${n}`} size="footnote" dimColor mono wrap="wrap">
+                {d.id}
+              </Text>
+            )}
+            {meta(d?.id ? 'The name is this machine’s own; other members may call it something else. The id above is the same for everyone.' : 'This machine’s name for it. Other members have their own.')}
+          </Box>
+          <Box flexDirection="column" gap="xs">
+            {heading('What it’s for')}
+            {split(
+              `description-row-${n}`,
+              description ? (
+                <Text wrap="wrap">{description}</Text>
+              ) : (
+                <Text italic dimColor wrap="wrap">
+                  No description yet, so agents won’t know what belongs here.
+                </Text>
+              ),
+              isAdmin && <Button key={`describe-${n}`} label={description ? '✎ Edit' : 'Describe'} variant={description ? 'secondary' : 'primary'} dimColor={!!description} onPress={() => void update($, editing, () => n)} />,
+            )}
+            {!isAdmin && (d?.role ?? c?.role) && meta('Only an admin can change it.')}
+          </Box>
           <Box flexDirection="column" gap="xs">
             {heading('This chat')}
             <Box flexDirection="row" gap="xs" justifyContent="space-between" alignItems="center">
@@ -909,7 +972,7 @@ export const register: Register = on => {
                       : 'Nobody else is in this context yet. Invite someone to share it with them.'
                     : 'Every member keeps a full copy. Changes travel directly between your machines whenever you’re both online.',
             )}
-            {c && (
+            {(
               <Box flexDirection="row" gap="xs" flexWrap="wrap">
                 {isAdmin && (
                   <Button
@@ -918,7 +981,7 @@ export const register: Register = on => {
                     variant="primary"
                     onPress={() => {
                       inviteNote = ''
-                      return inTab ? update($, inviting, () => 'contributor' as Invite['role']) : share(n)
+                      return update($, inviting, () => ({ name: n, role: 'contributor' as Invite['role'] }))
                     }}
                   />
                 )}
@@ -930,7 +993,30 @@ export const register: Register = on => {
                   ))}
               </Box>
             )}
-            {c && !isAdmin && meta('Only an admin can invite people.')}
+            {!isAdmin && (d?.role ?? c?.role) && meta('Only an admin can invite people.')}
+            {fresh && (
+              <Box key={`made-${n}`} flexDirection="column" gap="xs">
+                {split(
+                  `made-row-${n}`,
+                  <Text wrap="wrap">
+                    <Text weight="semibold" bold>
+                      {fresh.label ? `For ${fresh.label.replace(/^for\s+/i, '')}` : 'No note'}
+                    </Text>
+                    <Text dimColor> · {fresh.role}</Text>
+                    <Text color="success"> · new: send it now</Text>
+                  </Text>,
+                  <Button
+                    key={`copy-made-${n}`}
+                    label="Copy"
+                    variant="secondary"
+                    onPress={(press: UiPressArgument) => void $.ui.copy({ text: fresh.send, surface: press.surface }).then(r => r.isCopied && $.ui.toast('Copied: send it privately, to that one person.'))}
+                  />,
+                  'center',
+                )}
+                {Code ? <Code source={fresh.send} /> : <Text>{fresh.send}</Text>}
+                {meta('Turn it on and open its People tab to see or cancel its codes.')}
+              </Box>
+            )}
           </Box>
           <Box flexDirection="column" gap="xs">
             {heading('About')}
@@ -944,11 +1030,10 @@ export const register: Register = on => {
                 </Box>
                 {reveal(
                   `about-${n}`,
-                  'Id, storage and history',
-                  'Hide id, storage and history',
+                  'Storage and history',
+                  'Hide storage and history',
                   <Box key={`about-more-${n}`} flexDirection="column">
                     {row('Changes', `${d.changes} in all, withdrawn items included`)}
-                    {row('Id', d.id ?? 'none')}
                     {row('Stored at', d.stored_at)}
                   </Box>,
                 )}
@@ -974,6 +1059,128 @@ export const register: Register = on => {
             </Box>
           </Box>
         </Box>
+      )
+    }
+
+    /** A context's description as best known: its details, else the chat's list, else the open context. */
+    const descriptionOf = (n: string) =>
+      (loadedDetails && loadedDetails.name === n ? loadedDetails.description : null) ?? inChat(n)?.description ?? (a?.context === n ? a.description : null) ?? null
+
+    // Editing a context's description, from its Settings or the open context's header: only that.
+    const describingNow = await read($, editing)
+    if (typeof describingNow === 'string' && here.includes(describingNow)) {
+      const n = describingNow
+      const before = descriptionOf(n)
+      const close = () => void update($, editing, () => false)
+      return modal(
+        'describe-step',
+        `Describe ${n}`,
+        'What goes in it, and what doesn’t. It syncs to every member, and their agents use it to decide what belongs here.',
+        field(
+          `What is '${n}' for?`,
+          <Input
+            key="describe"
+            value={before ?? ''}
+            placeholder="What goes in it, in a sentence or two"
+            submitLabel="Save"
+            rows={4}
+            autoFocus
+            onSubmit={(v: string) => {
+              close()
+              if (v.trim() && v.trim() !== before) void act($, 'describe_context', { description: v.trim(), context: n }, 'Saved. Every member’s agent sees it.')
+            }}
+          />,
+        ),
+        { label: 'Cancel', onPress: close },
+      )
+    }
+
+    // Renaming a context on this machine: only that.
+    const renamingNow = await read($, renamingContext)
+    if (renamingNow && here.includes(renamingNow)) {
+      const n = renamingNow
+      const close = () => {
+        renameText = ''
+        void update($, renamingContext, () => null)
+      }
+      const rename = (typed: string) => {
+        const to = typed.trim().toLowerCase().replace(/\s+/g, '-')
+        if (!to || to === n) return close()
+        if (!NAME_RE.test(to)) return void fail($, 'A context name is lower-case letters, digits and dashes, such as "checkout-incident".')
+        if (here.includes(to)) return void fail($, `There's already a context '${to}' on this machine.`)
+        close()
+        void renameContext($, n, to)
+      }
+      return modal(
+        'rename-context-step',
+        `Rename ${n}`,
+        'The name is this machine’s label for it. Other members keep their own name for it, and every chat and folder here that uses it follows the new one.',
+        <Box flexDirection="column" gap="sm">
+          <Input
+            key={`rename-context-${n}`}
+            label="New name"
+            value={n}
+            placeholder="lower-case letters, digits and dashes"
+            submitLabel="Rename"
+            autoFocus
+            onInput={(v: string) => (renameText = v)}
+            onSubmit={rename}
+          />
+          <Box flexDirection="row">
+            <Button key="do-rename-context" label="Rename" variant="primary" onPress={() => rename(renameText || n)} />
+          </Box>
+        </Box>,
+        { label: 'Cancel', onPress: close },
+      )
+    }
+
+    // Making a join code for a context, on or off for this chat: who it's for and their role. An open
+    // context's code waits in its People tab; an off one's shows on its page.
+    const invitingNow = await read($, inviting)
+    const managedNow = await read($, managing)
+    if (invitingNow && typeof invitingNow === 'object' && here.includes(invitingNow.name)) {
+      const { name: n, role } = invitingNow
+      const close = () => void update($, inviting, () => null)
+      const make = (text: string) => {
+        inviteNote = ''
+        close()
+        if (inChat(n) && a?.context === n && !(managedNow === n)) void update($, tab, () => 'people' as Tab)
+        void act($, 'share_context', { ...(text.trim() ? { label: text.trim() } : {}), ...(role !== 'contributor' ? { role } : {}), context: n }, 'Join code made. Copy it and send it privately, to that one person.')
+      }
+      return modal(
+        'invite-step',
+        `Invite someone to ${n}`,
+        'A join code lets one person in: whoever uses it first. Send it to them privately. It expires in 24 hours if no one uses it.',
+        <Box flexDirection="column" gap="sm">
+          {Select && (
+            <Select
+              key="invite-role"
+              label="They can"
+              value={role}
+              options={[
+                { key: 'contributor', value: 'contributor', label: 'Read and add (contributor)' },
+                { key: 'reader', value: 'reader', label: 'Only read (reader)' },
+                { key: 'admin', value: 'admin', label: 'Read, add and invite (admin)' },
+              ]}
+              onSelect={(r: string) => void update($, inviting, () => ({ name: n, role: r as Invite['role'] }))}
+            />
+          )}
+          {field(
+            'Who is it for? (optional)',
+            <Input
+              key="invite-note"
+              placeholder="e.g. Sam: shown when they join, so a code used by someone else stands out"
+              autoFocus
+              onInput={(v: string) => (inviteNote = v)}
+              onSubmit={make}
+            />,
+          )}
+          <Box flexDirection="row">
+            <Button key="make-code" label="Make join code" variant="primary" onPress={() => make(inviteNote)} />
+          </Box>
+          {meta('This machine answers the code, so it must be online when they use it. Everyone in the context is told who joined.')}
+        </Box>,
+        { label: 'Cancel', onPress: close },
       )
     }
 
@@ -1117,26 +1324,11 @@ export const register: Register = on => {
       const managed = await read($, managing)
       if (managed && here.includes(managed)) {
         const n = managed
-        const c = inChat(n)
-        const d = loadedDetails && loadedDetails.name === n ? loadedDetails : null
-        const description = d ? d.description : (c?.description ?? null)
         return modal(
           'context-details',
           n,
           null,
-          <Box flexDirection="column" gap="md">
-            <Box flexDirection="column" gap="xs">
-              {heading('What it’s for')}
-              {description ? (
-                <Text wrap="wrap">{description}</Text>
-              ) : (
-                <Text italic dimColor wrap="wrap">
-                  No description yet, so agents won’t know what belongs here.
-                </Text>
-              )}
-            </Box>
-            {settings(n, false)}
-          </Box>,
+          settings(n, false),
           { label: '‹ Contexts', onPress: () => void manage($, null) },
         )
       }
@@ -1251,30 +1443,6 @@ export const register: Register = on => {
         />
       ) : null
 
-    // Editing the description: only that.
-    if (await read($, editing))
-      return modal(
-        'describe-step',
-        `Describe ${a.context}`,
-        'What goes in it, and what doesn’t. It syncs to every member, and their agents use it to decide what belongs here.',
-        field(
-          `What is '${a.context}' for?`,
-          <Input
-            key="describe"
-            value={a.description ?? ''}
-            placeholder="What goes in it, in a sentence or two"
-            submitLabel="Save"
-            rows={4}
-            autoFocus
-            onSubmit={(v: string) => {
-              void update($, editing, () => false)
-              if (v.trim() && v.trim() !== a.description) void act($, 'describe_context', { description: v.trim(), ...ctx }, 'Saved. Every member’s agent sees it.')
-            }}
-          />,
-        ),
-        { label: 'Cancel', onPress: () => void update($, editing, () => false) },
-      )
-
     // Changing your name: only that.
     if (await read($, renaming))
       return modal(
@@ -1294,53 +1462,6 @@ export const register: Register = on => {
         />,
         { label: 'Cancel', onPress: () => void update($, renaming, () => false) },
       )
-
-    // Making a join code: who it's for and their role, then back to the list, where it waits to be sent.
-    const invitingRole = admin ? await read($, inviting) : null
-    if (invitingRole) {
-      const close = () => void update($, inviting, () => null)
-      const make = (text: string) => {
-        inviteNote = ''
-        close()
-        void update($, tab, () => 'people' as Tab)
-        void act($, 'share_context', { ...(text.trim() ? { label: text.trim() } : {}), ...(invitingRole !== 'contributor' ? { role: invitingRole } : {}), ...ctx }, 'Join code made. Copy it and send it privately, to that one person.')
-      }
-      return modal(
-        'invite-step',
-        `Invite someone to ${a.context}`,
-        'A join code lets one person in: whoever uses it first. Send it to them privately. It expires in 24 hours if no one uses it.',
-        <Box flexDirection="column" gap="sm">
-          {Select && (
-            <Select
-              key="invite-role"
-              label="They can"
-              value={invitingRole}
-              options={[
-                { key: 'contributor', value: 'contributor', label: 'Read and add (contributor)' },
-                { key: 'reader', value: 'reader', label: 'Only read (reader)' },
-                { key: 'admin', value: 'admin', label: 'Read, add and invite (admin)' },
-              ]}
-              onSelect={(r: string) => void update($, inviting, () => r as Invite['role'])}
-            />
-          )}
-          {field(
-            'Who is it for? (optional)',
-            <Input
-              key="invite-note"
-              placeholder="e.g. Sam: shown when they join, so a code used by someone else stands out"
-              autoFocus
-              onInput={(v: string) => (inviteNote = v)}
-              onSubmit={make}
-            />,
-          )}
-          <Box flexDirection="row">
-            <Button key="make-code" label="Make join code" variant="primary" onPress={() => make(inviteNote)} />
-          </Box>
-          {meta('This machine answers the code, so it must be online when they use it. Everyone in the context is told who joined.')}
-        </Box>,
-        { label: 'Cancel', onPress: close },
-      )
-    }
 
     // Confirming a removal: only that.
     const pending = await read($, confirmRemove)
@@ -1575,7 +1696,7 @@ export const register: Register = on => {
               </Text>
             )}
           </Box>
-          {admin && <Button key="edit-description" label="✎" plain dimColor onPress={() => void update($, editing, () => true)} />}
+          {admin && <Button key="edit-description" label="✎" plain dimColor onPress={() => void update($, editing, () => a.context)} />}
         </Box>
         <Box flexDirection="row" gap="sm" flexWrap="wrap" alignItems="center">
           {shown.map((p: Person) => (
@@ -1688,7 +1809,7 @@ export const register: Register = on => {
             `❓ ${t.open.length} open question${t.open.length === 1 ? '' : 's'}${waiting.length ? `, ${waiting.length} with replies` : ''}.`,
             <Button key="see-questions" label="See" variant="secondary" onPress={() => void update($, filters, (v: Filters): Filters => ({ ...v, text: '', questions: 'open' })).then(() => setTab('questions'))} />,
           ),
-        admin && !a.description && need('describe', 'suggestion', 'This context has no description, so agents can’t tell what belongs in it.', <Button key="need-describe" label="Describe" variant="primary" onPress={() => void update($, editing, () => true)} />),
+        admin && !a.description && need('describe', 'suggestion', 'This context has no description, so agents can’t tell what belongs in it.', <Button key="need-describe" label="Describe" variant="primary" onPress={() => void update($, editing, () => a.context)} />),
         admin &&
           members.length === 1 &&
           !invites.length &&
@@ -1696,7 +1817,7 @@ export const register: Register = on => {
             'alone',
             'suggestion',
             'It’s just you here so far.',
-            <Button key="need-invite" label="Invite someone" variant="primary" onPress={() => ((inviteNote = ''), void update($, inviting, () => 'contributor' as Invite['role']))} />,
+            <Button key="need-invite" label="Invite someone" variant="primary" onPress={() => ((inviteNote = ''), void update($, inviting, () => ({ name: a.context, role: 'contributor' as Invite['role'] })))} />,
           ),
         invites.length > 0 && need('invites', 'subtle', `${invites.length} join code${invites.length === 1 ? ' is' : 's are'} waiting to be used.`, <Button key="see-invites" label="See" variant="secondary" onPress={() => setTab('people')} />),
       ].filter(Boolean)
@@ -2084,7 +2205,7 @@ export const register: Register = on => {
                     variant="primary"
                     onPress={() => {
                       inviteNote = ''
-                      void update($, inviting, () => 'contributor' as Invite['role'])
+                      void update($, inviting, () => ({ name: a.context, role: 'contributor' as Invite['role'] }))
                     }}
                   />,
                   'center',

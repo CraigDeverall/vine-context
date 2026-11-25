@@ -9,8 +9,10 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { afterAll, describe, expect, it } from "vitest";
 import { loadIdentity } from "../src/core/identity.js";
-import { LocalHost } from "../src/host/client.js";
-import { Host } from "../src/host/host.js";
+import { ensureHost, LocalHost } from "../src/host/client.js";
+import { Host, hostAlive } from "../src/host/host.js";
+import { socketPath } from "../src/host/state.js";
+import { localContexts } from "../src/mcp/links.js";
 import { Session } from "../src/mcp/server.js";
 import { readTurn, saveTurn } from "../src/p2p/ice.js";
 import { memorySignaller } from "../src/p2p/signal.js";
@@ -19,13 +21,32 @@ import { tempDir } from "./helpers.js";
 const signal = memorySignaller(new EventEmitter());
 const ice: string[] = [];
 const hosts: Host[] = [];
-afterAll(() => hosts.forEach((h) => h.stop()));
+const spawnedIn: string[] = [];
+afterAll(async () => {
+  hosts.forEach((h) => h.stop());
+  // Hosts run as their own processes: ask each to stop.
+  for (const dataDir of spawnedIn)
+    for (const { name } of localContexts(dataDir)) {
+      const sock = socketPath(dataDir, name);
+      if (!(await hostAlive(sock))) continue;
+      const h = await LocalHost.connect(sock);
+      await h.request("shutdown").catch(() => undefined);
+      h.close();
+    }
+});
 
-/** One person's machine: its contexts' hosts, and chats (by id) started in a folder. */
-function machine(user: string) {
+/**
+ * One person's machine: its contexts' hosts, and chats (by id) started in a folder.
+ * `spawned` runs each host as its own process, as on a real machine: a store can't
+ * be closed, so only a host that exits lets go of it (renaming needs that).
+ */
+function machine(user: string, o: { spawned?: boolean } = {}) {
   const dataDir = tempDir();
+  if (o.spawned) spawnedIn.push(dataDir);
   const started = new Map<string, Host>();
+  const cli = { file: process.execPath, args: ["--import", "tsx", "src/cli/index.ts"] };
   const open = async (name: string) => {
+    if (o.spawned) return ensureHost({ dataDir, graph: name, command: cli, idleSeconds: 30 });
     let h = started.get(name);
     if (!h) {
       h = await Host.start({ dataDir, graph: name, user, signal, ice, holdMs: 100 });
@@ -274,6 +295,61 @@ describe("details and deleting", () => {
     expect((await other.call("context_info")).context).toBe(null);
     expect(existsSync(join(me.dataDir, "graphs", "incident"))).toBe(false);
     await expect(c.call("delete_context", { name: "incident", confirm: "incident" })).rejects.toThrow(/no context 'incident'/);
+  });
+});
+
+describe("renaming, describing and inviting any context here", () => {
+  it("renames a context on this machine, and every chat and folder follows it", async () => {
+    const me = machine("alice", { spawned: true });
+    const c = await me.chat({ id: "chat-1", cwd: "/work/app" });
+    await c.call("use_context", { name: "incident", description: "The checkout slowdown" });
+    await c.call("add_context", { name: "infra", description: "How our infrastructure is set up" });
+    await c.call("add_claim", { text: "Checkout p95 rose to 4 s", context: "incident" });
+    await c.call("link_folder");
+    const other = await me.chat({ id: "chat-2" });
+    await other.call("use_context", { name: "incident" });
+    const id = (await c.call("context_details", { name: "incident" })).id;
+
+    await expect(c.call("rename_context", { name: "incident", to: "infra" })).rejects.toThrow(/already a context 'infra'/);
+    await expect(c.call("rename_context", { name: "lunch", to: "dinner" })).rejects.toThrow(/no context 'lunch'/);
+
+    const r = await c.call("rename_context", { name: "incident", to: "checkout-slowdown" });
+    expect(r).toMatchObject({ renamed: "incident", to: "checkout-slowdown", id, write_to: "checkout-slowdown" });
+    expect(readdirSync(join(me.dataDir, "graphs")).sort()).toEqual(["checkout-slowdown", "infra"]);
+    expect(existsSync(join(me.dataDir, "hosts", "incident"))).toBe(false);
+    // Same context, same items, new name.
+    expect(await c.call("context_details", { name: "checkout-slowdown" })).toMatchObject({ id, description: "The checkout slowdown", in_chat: true, writes_here: true, items: { Claim: 1 } });
+    expect((await c.call("context_info")).contexts.map((x: any) => x.name)).toEqual(["checkout-slowdown", "infra"]);
+    const links = JSON.parse(readFileSync(join(me.dataDir, "links.json"), "utf8"));
+    expect(links.chats["chat-1"].contexts.map((x: any) => x.name)).toEqual(["checkout-slowdown", "infra"]);
+    expect(links.chats["chat-1"].write_to).toBe("checkout-slowdown");
+    expect(links.folders[resolve("/work/app")].contexts.map((x: any) => x.name)).toEqual(["checkout-slowdown", "infra"]);
+    // Another chat that had it open follows it, rather than losing it.
+    expect((await other.call("context_info")).context).toBe("checkout-slowdown");
+    // A context the chat doesn't use renames too.
+    await other.call("rename_context", { name: "infra", to: "platform" });
+    expect((await c.call("context_info")).contexts.map((x: any) => x.name)).toEqual(["checkout-slowdown", "platform"]);
+  });
+
+  it("describes and invites to a context this chat doesn't use", async () => {
+    const me = machine("alice");
+    const c = await me.chat({ id: "chat-1" });
+    await c.call("use_context", { name: "incident" });
+    await c.call("add_context", { name: "infra" });
+    await c.call("remove_context", { name: "infra" });
+
+    await c.call("describe_context", { description: "How our infrastructure is set up", context: "infra" });
+    expect((await c.call("context_details", { name: "infra" })).description).toBe("How our infrastructure is set up");
+    const inv = await c.call("share_context", { label: "for Sam", context: "infra" });
+    expect(inv).toMatchObject({ context: "infra", invite: { label: "for Sam" } });
+    expect(inv.code).toMatch(/^vine1_/);
+    expect((await c.call("context_details", { name: "infra" })).open_invites).toBe(1);
+    // Taking it offline and back works the same.
+    await c.call("stop_sharing", { context: "infra" });
+    expect((await c.call("context_details", { name: "infra" })).sharing).toBe(false);
+    // The chat is unchanged.
+    expect((await c.call("context_info")).contexts.map((x: any) => x.name)).toEqual(["incident"]);
+    await expect(c.call("describe_context", { description: "x", context: "lunch" })).rejects.toThrow(/no context 'lunch'/);
   });
 });
 

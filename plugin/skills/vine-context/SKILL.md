@@ -49,6 +49,12 @@ is written into the folder.
   their copies (and that with no other member it's gone for good), ask them
   to confirm by name, then pass that name as `confirm`. `context_details`
   shows what a context holds first.
+- **Names are this machine's.** `rename_context` gives a context on this
+  machine a new name, only when the person asks and with the name they chose.
+  Other members keep their own name for it; every chat and folder here
+  follows the new one. `describe_context`, `share_context`, `stop_sharing`
+  and `start_sharing` also take any context on this machine by name, whether
+  or not this chat uses it.
 - **Sometimes several.** `add_context` adds another alongside, and
   `remove_context` takes one out (with no name, all of them, which leaves the
   chat with none). With several, reads search all of them and each row says

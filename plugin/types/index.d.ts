@@ -124,8 +124,8 @@ declare module 'claude-code' {
       tab: Shaped<Tab>
       /** The invite just made (its id), marked in the list until another is made. */
       code: string | null
-      /** The new-invite step, with the role picked; null while it's closed. */
-      inviting: Invite['role'] | null
+      /** The new-invite step: the context it's for (on or off for this chat) and the role picked; null while it's closed. A value from before it named the context is ignored. */
+      inviting: { name: string; role: Invite['role'] } | null
       notice: string | null
       error: string | null
       confirmRemove: string | null
@@ -137,8 +137,10 @@ declare module 'claude-code' {
       details: ContextDetails | null
       /** The context whose deletion is being confirmed (the panel shows only that), with what's wrong with what was typed. */
       deleting: { name: string; error: string | null } | null
-      /** Whether the description is being edited (the panel shows only that). */
-      editing: boolean
+      /** The context whose description is being edited (the panel shows only that); false while no one is. A `true` from before it named the context is ignored. */
+      editing: string | boolean
+      /** The context being renamed on this machine (the panel shows only that); null while none is. */
+      renamingContext: string | null
       /** Whether the panel shows the chat's contexts, to turn on and off, instead of a context. */
       switching: boolean
       /** Which of the chat's contexts the panel shows; null is the one writes go to. */

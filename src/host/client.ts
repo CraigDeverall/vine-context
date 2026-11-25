@@ -4,7 +4,7 @@
 
 import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { openSync } from "node:fs";
+import { closeSync, openSync } from "node:fs";
 import { createConnection, type Socket } from "node:net";
 import { join } from "node:path";
 import { RpcClient, lineReader, type Message } from "../p2p/protocol.js";
@@ -84,6 +84,9 @@ export async function ensureHost(o: EnsureOptions): Promise<LocalHost> {
   let exited: number | null = null;
   child.on("exit", (code) => (exited = code ?? 1));
   child.unref();
+  // The child has its own handle on the log now. Holding ours would keep the host's folder
+  // open, and Windows refuses to rename (or remove) a folder with a file open in it.
+  closeSync(out);
 
   const deadline = Date.now() + 20_000;
   while (Date.now() < deadline) {

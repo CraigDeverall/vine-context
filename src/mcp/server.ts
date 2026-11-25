@@ -31,7 +31,7 @@ import { claimsPack } from "../core/pack.js";
 import { packageInfo } from "../core/package-root.js";
 import { autoShare, defaultDataDir } from "../core/paths.js";
 import { LocalHost } from "../host/client.js";
-import { hostAlive, placeReplica, readGroup } from "../host/host.js";
+import { hostAlive, moveContext, placeReplica, readGroup } from "../host/host.js";
 import { chatMarks, markSeen } from "../host/news.js";
 import { socketPath } from "../host/state.js";
 import { checkStoredTurn, clearTurn, readCloudflare, readTurn, saveTurn, type IceSource } from "../p2p/ice.js";
@@ -40,7 +40,7 @@ import { parseCode } from "../p2p/link.js";
 import type { GraphDescription } from "../p2p/protocol.js";
 import type { SignalFactory } from "../p2p/signal.js";
 import { registerViews, uiMeta } from "./apps.js";
-import { chatLink, folderLink, forgetContext, localContexts, resolveRef, setChatLink, setFolderLink, type Link, type Ref } from "./links.js";
+import { chatLink, folderLink, forgetContext, localContexts, renameInLinks, resolveRef, setChatLink, setFolderLink, type Link, type Ref } from "./links.js";
 
 type Content = { content: { type: "text"; text: string }[]; structuredContent?: Record<string, unknown>; isError?: boolean };
 const text = (value: unknown): Content => ({
@@ -296,6 +296,17 @@ export class Session {
       throw new Error(`This chat doesn't use '${name}': it uses ${[...this.contexts.keys()].map((n) => `'${n}'`).join(", ") || "no context"}. add_context adds one.`);
     if (!c) throw new Error(this.noContext());
     if (!c.host.closed) return c;
+    // Renamed (by another chat): follow it to its new name, by its id.
+    if (!this.localNames().includes(c.name) && c.d.graph_id) {
+      const moved = localContexts(this.dataDir).find((l) => l.id === c.d.graph_id);
+      if (moved) {
+        const again = await this.reattach(c.name, moved.name);
+        this.remember();
+        this.offer();
+        if (name && name !== moved.name) this.o.log?.(`'${name}' was renamed to '${moved.name}' on this machine`);
+        return again;
+      }
+    }
     // Deleted from this machine (by another chat): reopening it would start an empty context under its name.
     if (!this.localNames().includes(c.name)) {
       this.contexts.delete(c.name);
@@ -400,6 +411,7 @@ export class Session {
         async (raw: Record<string, unknown>) => {
           const { context, ...args } = raw as Record<string, unknown> & { context?: string };
           try {
+            await this.followRenames();
             if (tool.kind === "read" && !context && this.many) return this.withNews(await this.readAll(tool.name, args));
             const c = await this.target(context);
             let result = await this.request<Record<string, unknown>>("call", { tool: tool.name, args }, c.name);
@@ -541,20 +553,9 @@ export class Session {
       // Windows won't move a folder with open files: it goes once the host has stopped.
     }
     const sock = socketPath(this.dataDir, name);
-    if (await hostAlive(sock)) {
-      try {
-        const h = await LocalHost.connect(sock);
-        await h.request("shutdown").catch(() => undefined);
-        h.close();
-      } catch {
-        // it stopped by itself
-      }
-      for (let i = 0; i < 40 && (await hostAlive(sock)); i++) await new Promise((r) => setTimeout(r, 150));
-      if (await hostAlive(sock)) {
-        if (doomed !== store) renameSync(doomed, store);
-        throw new Error(`The host for '${name}' didn't stop, so nothing was deleted. Try again in a moment.`);
-      }
-      await new Promise((r) => setTimeout(r, 200)); // let the host's process exit
+    if (!(await this.stopHost(name))) {
+      if (doomed !== store) renameSync(doomed, store);
+      throw new Error(`The host for '${name}' didn't stop, so nothing was deleted. Try again in a moment.`);
     }
     const rm = (dir: string) => rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
     rm(doomed);
@@ -562,6 +563,91 @@ export class Session {
     if (process.platform !== "win32" && existsSync(sock)) rmSync(sock, { force: true });
     forgetContext(this.dataDir, name, id);
     return { deleted: name, id: id ?? null, contexts: this.list(), write_to: this.writeTo ?? null, your_contexts: this.localNames() };
+  }
+
+  /** Stops a context's host, if one runs (every chat's connection to it closes). False if it wouldn't stop. */
+  private async stopHost(name: string): Promise<boolean> {
+    const sock = socketPath(this.dataDir, name);
+    if (!(await hostAlive(sock))) return true;
+    try {
+      const h = await LocalHost.connect(sock);
+      await h.request("shutdown").catch(() => undefined);
+      h.close();
+    } catch {
+      // it stopped by itself
+    }
+    for (let i = 0; i < 40 && (await hostAlive(sock)); i++) await new Promise((r) => setTimeout(r, 150));
+    if (await hostAlive(sock)) return false;
+    await new Promise((r) => setTimeout(r, 200)); // let the host's process exit
+    return true;
+  }
+
+  /** Gives a context on this machine a new local name: its store, its host's files, and every chat's and folder's link move with it. */
+  private async renameLocal(from: string, to: string): Promise<Record<string, unknown>> {
+    if (!this.localNames().includes(from)) throw new Error(`There's no context '${from}' on this machine.`);
+    if (from === to) return { renamed: from, to, contexts: this.list() };
+    if (this.localNames().includes(to)) throw new Error(`There's already a context '${to}' on this machine.`);
+    const id = readGroup(this.dataDir, from)?.id;
+    const attached = this.contexts.get(from);
+    if (attached) attached.host.close();
+    if (!(await this.stopHost(from))) throw new Error(`The host for '${from}' didn't stop, so it wasn't renamed. Try again in a moment.`);
+    const sock = socketPath(this.dataDir, from);
+    moveContext(this.dataDir, from, to);
+    if (process.platform !== "win32" && existsSync(sock)) rmSync(sock, { force: true });
+    renameInLinks(this.dataDir, from, to, id);
+    if (attached) {
+      await this.reattach(from, to);
+      this.remember();
+      this.offer();
+    }
+    return { renamed: from, to, id: id ?? null, contexts: this.list(), write_to: this.writeTo ?? null, your_contexts: this.localNames() };
+  }
+
+  /** Picks up contexts another chat renamed: their host stopped, and they're here under a new name with the same id. */
+  private async followRenames(): Promise<void> {
+    for (const c of [...this.contexts.values()]) {
+      if (!c.host.closed || !c.d.graph_id || this.localNames().includes(c.name)) continue;
+      const moved = localContexts(this.dataDir).find((l) => l.id === c.d.graph_id);
+      if (!moved) continue;
+      await this.reattach(c.name, moved.name);
+      this.remember();
+      this.offer();
+    }
+  }
+
+  /** Reopens one of the chat's contexts under its new name, in its old place in the chat's list. */
+  private async reattach(from: string, to: string): Promise<Attached> {
+    const order = [...this.contexts.keys()].map((k) => (k === from ? to : k));
+    this.contexts.delete(from);
+    if (this.writeTo === from) this.writeTo = to;
+    const c = await this.attach(to, false);
+    const all = new Map(this.contexts);
+    this.contexts.clear();
+    for (const k of order) if (all.has(k)) this.contexts.set(k, all.get(k)!);
+    return c;
+  }
+
+  /** Runs `fn` on a context's host: this chat's own connection if it uses it, else one opened just for this. */
+  private async onContext<T>(name: string | undefined, fn: (host: LocalHost, name: string) => Promise<T>): Promise<T> {
+    if (!name || this.contexts.has(name)) {
+      const c = await this.target(name);
+      try {
+        return await fn(c.host, c.name);
+      } catch (e) {
+        if (!c.host.closed) throw e;
+        // The host restarted: reconnect once.
+        const again = await this.target(c.name);
+        return fn(again.host, again.name);
+      }
+    }
+    if (!this.localNames().includes(name)) throw new Error(`There's no context '${name}' on this machine.`);
+    if (!this.o.openLocal) throw new Error("This session can't open other contexts.");
+    const host = await this.o.openLocal(name);
+    try {
+      return await fn(host, name);
+    } finally {
+      host.close();
+    }
   }
 
   /** The catalogue of this machine's contexts. Relate and the embedder load on the first search, not when the chat starts. */
@@ -616,12 +702,14 @@ export class Session {
     const ro = { readOnlyHint: true, idempotentHint: true, openWorldHint: false };
     const wrap = (fn: (args: any) => Promise<unknown>) => async (args: any) => {
       try {
+        await this.followRenames();
         return this.withNews(text(await fn(args)));
       } catch (e) {
         return this.withNews(failure((e as Error).message));
       }
     };
     const which = contextArg.describe("Which of this chat's contexts (default: the one writes go to)");
+    const anyHere = contextArg.describe("Which context: one of this chat's (default: the one writes go to), or any other on this machine by name");
 
     this.server.registerTool(
       "context_info",
@@ -738,10 +826,11 @@ export class Session {
         description:
           "Set what a context is for, in a sentence or two (you must be an admin): what goes in it and what doesn't. Every member's agent sees it. " +
           "Ask the person for it; don't invent it.",
-        inputSchema: { description: z.string().min(1).max(500).describe("What the context is for"), context: which },
+        inputSchema: { description: z.string().min(1).max(500).describe("What the context is for"), context: anyHere },
         annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       },
       wrap(async (a: { description: string; context?: string }) => {
+        if (a.context && !this.contexts.has(a.context)) return this.onContext(a.context, (h) => h.request("describe_context", { description: a.description }));
         const c = await this.target(a.context);
         const r = await this.request("describe_context", { description: a.description }, c.name);
         await this.refresh(c.name);
@@ -840,11 +929,12 @@ export class Session {
           label: z.string().max(60).optional().describe("Who it's for, e.g. 'for Sam': shown in sharing_status and in the join notice"),
           role: z.enum(["reader", "contributor", "admin"]).optional().describe("The role they get when they join: the person's choice (default contributor)"),
           expires_hours: z.number().positive().max(720).optional().describe("Hours until an unused code stops working (default 24)"),
-          context: which,
+          context: anyHere,
         },
         annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
       },
       wrap(async ({ context, ...a }) => {
+        if (context && !this.contexts.has(context)) return this.onContext(context, async (h, n) => this.invited(await h.request<Record<string, any>>("share", a), n));
         const c = await this.target(context);
         return this.invited(await this.request<Record<string, any>>("share", a, c.name), c.name);
       }),
@@ -868,10 +958,10 @@ export class Session {
         description:
           "Stop syncing a context with the other members, and stop answering your join codes for it, until you share again (start_sharing, or the console). " +
           "Your copy keeps working; what you write is sent when you're back. Sharing is on by default.",
-        inputSchema: { context: which },
+        inputSchema: { context: anyHere },
         annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       },
-      wrap(({ context }) => this.request("unshare", undefined, context)),
+      wrap(({ context }) => this.onContext(context, (h) => h.request("unshare"))),
     );
 
     this.server.registerTool(
@@ -880,10 +970,10 @@ export class Session {
         title: "Go online",
         description:
           "Start syncing a context with the other members again after stop_sharing, and answer your join codes for it. It makes no new join code (share_context does). Sharing is on by default, so this is only needed after going offline.",
-        inputSchema: { context: which },
+        inputSchema: { context: anyHere },
         annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       },
-      wrap(({ context }) => this.request("start_sharing", undefined, context)),
+      wrap(({ context }) => this.onContext(context, (h) => h.request("start_sharing"))),
     );
 
     this.server.registerTool(
@@ -1039,6 +1129,19 @@ export class Session {
           return failure((e as Error).message); // no withNews: the panel reads this too
         }
       },
+    );
+
+    this.server.registerTool(
+      "rename_context",
+      {
+        title: "Rename a context on this machine",
+        description:
+          "Give a context on this machine (whether or not this chat uses it) a new name. The name is this machine's own label for it: other members keep theirs, and the context's id doesn't change. " +
+          "Every chat and folder that uses it follows it to the new name. Only when the person asks: they choose the name.",
+        inputSchema: { name: nameArg, to: z.string().regex(GRAPH_RE).describe("The new name: lower-case letters, digits and dashes") },
+        annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      },
+      wrap(async ({ name, to }: { name: string; to: string }) => ({ ...(await this.renameLocal(name, to)), note: "Renamed on this machine. Other members keep their own name for it." })),
     );
 
     this.server.registerTool(

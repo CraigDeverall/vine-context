@@ -118,6 +118,26 @@ export function setFolderLink(dataDir: string, folder: string, link: Omit<Link, 
   save(dataDir, links);
 }
 
+/** Points every chat's and folder's link at a context's new name (it keeps its id). */
+export function renameInLinks(dataDir: string, from: string, to: string, id?: string): void {
+  const links = load(dataDir);
+  const is = (r: Ref) => (id && r.id ? r.id === id : r.name === from);
+  const move = (all: Record<string, Stored>) => {
+    for (const [k, v] of Object.entries(all)) {
+      const l = asLink(v);
+      if (!l || !l.contexts.some(is)) continue;
+      all[k] = {
+        contexts: l.contexts.map((r) => (is(r) ? { ...r, name: to } : r)),
+        ...(l.write_to ? { write_to: l.write_to === from ? to : l.write_to } : {}),
+        at: l.at,
+      };
+    }
+  };
+  move(links.chats);
+  move(links.folders);
+  save(dataDir, links);
+}
+
 /** Takes a deleted context out of every chat's and folder's link (a link left with none goes too). */
 export function forgetContext(dataDir: string, name: string, id?: string): void {
   const links = load(dataDir);
