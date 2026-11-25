@@ -62,6 +62,8 @@ const lead = (c: Change) => {
   const i = /^(claim|question|reply|describe)$/.test(c.kind) ? c.summary.indexOf(": ") : -1;
   return i < 0 ? { head: "", body: c.summary } : { head: c.summary.slice(0, i + 2), body: c.summary.slice(i + 2) };
 };
+/** A way out of a step (Cancel, Done, Back) leads with a ‹ caret, so it reads as going back. */
+const caret = (label: string) => (label.startsWith("‹") ? label : `‹ ${label}`);
 const ICON: Record<string, string> = { claim: "📌", question: "❓", reply: "↳", link: "🔗", withdraw: "✕", add_member: "👋", remove_member: "🚪", set_role: "🔑", rename: "✎", describe: "✎", create: "✦" };
 const ROLES: Role[] = ["reader", "contributor", "admin"];
 
@@ -375,7 +377,7 @@ export function Contexts({ b }: { b: Bridge }) {
       <div className="stack sm">
         <div className="spread">
           <h1 className="title wrap">{title}</h1>
-          {close && <button onClick={close.onClick}>{close.label}</button>}
+          {close && <button onClick={close.onClick}>{caret(close.label)}</button>}
         </div>
         {about && <p className="wrap">{about}</p>}
       </div>
@@ -663,7 +665,7 @@ export function Contexts({ b }: { b: Bridge }) {
           <button className="primary" onClick={create}>
             Create
           </button>
-          <button onClick={close}>Cancel</button>
+          <button onClick={close}>‹ Cancel</button>
         </div>
         <Meta>It’s yours: you’re its admin, and it’s added to this chat. Invite people from its People tab, or with Share in the list.</Meta>
       </div>,

@@ -190,7 +190,7 @@ export function Console({ b }: { b: Bridge }) {
               Save
             </button>
             <button type="button" onClick={() => setNaming(undefined)}>
-              Cancel
+              ‹ Cancel
             </button>
           </div>
         )}
