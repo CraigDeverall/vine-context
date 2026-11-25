@@ -29,7 +29,7 @@ describe("the TURN setting", () => {
     saveTurn(dir, { host: "turn.example.org", username: "sam", password: PASSWORD });
     const { config, summary } = resolveIce(dir);
     expect(config.servers).toEqual([...DEFAULT_STUN, { hostname: "turn.example.org", port: 3478, username: "sam", password: PASSWORD, relayType: "TurnUdp" }]);
-    expect(summary).toEqual({ stun: DEFAULT_STUN, turn: "turn.example.org:3478 (udp)", source: "setting" });
+    expect(summary).toEqual({ stun: DEFAULT_STUN, turn: "turn.example.org:3478 (udp)", source: "setting", provider: "custom" });
     expect(JSON.stringify(summary)).not.toContain(PASSWORD);
   });
 

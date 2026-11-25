@@ -78,10 +78,23 @@ The Relate features in use: an embedded directory store, uniqueness constraints,
 ### 1. Install it
 
 ```bash
-npm install -g vine-context
+npx vine-context setup
 ```
 
-This installs the `vine` command. `vine doctor` checks your machine if anything looks wrong.
+One command sets the machine up, and repairs it if you run it again. It installs the `vine` command and the plugin for Claude Code or Codex (printing each command before it runs it), confirms your name, checks the machine and its network, sets up a TURN server if the network looks like it needs one, and offers autostart on macOS. `--dry-run` shows what it would do without changing anything.
+
+<details><summary>By hand</summary>
+
+```bash
+npm install -g vine-context
+claude plugin marketplace add CraigDeverall/vine-context
+claude plugin install vine-context@vine-context
+vine doctor
+```
+
+Codex and other MCP agents: see [the guide](docs/GUIDE.md#install-by-hand).
+
+</details>
 
 ### 2. See it (about two minutes)
 
@@ -97,14 +110,7 @@ In the browser page that opens:
 
 ### 3. Use it from your agent
 
-**Recommended: install the plugin.** It brings the MCP server, the skills and the `/vine-context:join` command, and in Claude Code a live panel beside the chat.
-
-```bash
-claude plugin marketplace add CraigDeverall/vine-context
-claude plugin install vine-context@vine-context
-```
-
-Codex uses the same plugin, and any other MCP agent can run `vine mcp` directly: see [the guide](docs/GUIDE.md#install).
+`vine setup` installed the plugin. It brings the MCP server, the skills and the `/vine-context:join` command, and in Claude Code a live panel beside the chat. Codex uses the same plugin, and any other MCP agent can run `vine mcp` directly: see [the guide](docs/GUIDE.md#install).
 
 Then ask in plain words:
 
@@ -176,7 +182,7 @@ The full account is in [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md), and the des
 ## Limits
 
 - **Search matches words, not meaning, by default.** Start vine with `VINE_EMBEDDER=bge-small` to match meaning; its prebuilt package installs with vine, but it has only been run on macOS arm64 so far.
-- **Strict networks need a TURN server.** You bring your own, and `vine turn set` stores it ([strict networks](docs/GUIDE.md#strict-networks-turn-and-stun)). Replication has been tested between processes on one machine and over real public relays.
+- **Strict networks need a TURN server, on your own account.** Vine ships no shared TURN server or key. `vine setup` sets up Cloudflare's on your own Cloudflare account in a few steps (free up to 1,000 GB a month, far more than Vine uses), or you can use one you run. Only one machine in a pair needs one ([do I need a TURN server?](docs/GUIDE.md#do-i-need-a-turn-server)). Replication has been tested between processes on one machine and over real public relays.
 - **Removing someone can't recall the copy they already have.**
 - **Clocks are assumed correct,** and a context is sized for about 20 members and 100,000 changes.
 - **Desktop only for now:** phones, and assistants that only reach remote MCP servers, can't connect yet.

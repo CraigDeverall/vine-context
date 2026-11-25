@@ -85,7 +85,7 @@ Online members meet in a signalling room named and sealed with the group secret,
 
 Links and relay connections are pinged and replaced when they go quiet, and reconnect for as long as the host runs. Changes are forwarded, so members who are never online together still get each other's writes through anyone who is.
 
-Each machine learns its public address from public STUN servers (Google's and Cloudflare's by default). If two machines can't reach each other directly, a TURN server carries their link: `vine turn set` stores one, and `vine status` and the console say which links are relayed. See [Strict networks](GUIDE.md#strict-networks-turn-and-stun).
+Each machine learns its public address from public STUN servers (Google's and Cloudflare's by default). If two machines can't reach each other directly, a TURN server carries their link: `vine setup` or `vine turn set --provider cloudflare` sets up Cloudflare's on your own account (Vine mints short-lived credentials from your key at connect time), or `vine turn set` stores one you run, and `vine status` and the console say which links are relayed. See [Strict networks](GUIDE.md#strict-networks-turn-and-stun).
 
 ## Join codes
 
@@ -126,7 +126,7 @@ The example in this repo has the same layout under [`examples/data`](../examples
 
 - **Relate 1.0 is new.** This pins `@relate/relate` 1.0.1 and uses its `hybrid-search` preview.
 - **Search embedder.** The default matches words and word fragments, not meaning, and runs offline with no model download. An optional one matches meaning with a small sentence model on the CPU: start vine with `VINE_EMBEDDER=bge-small`. Its prebuilt package, `vine-context-embedder-<os>-<arch>` for macOS arm64 and x64, Linux x64 and arm64 (glibc) and Windows x64, is an optional dependency, so npm installs the one for your machine beside vine; it has only been run on macOS arm64. `minilm` needs a checkout with a Rust toolchain and `npm run build:embedder`. Each machine makes its own vectors, so members of one context can use different embedders.
-- **Tested connections.** Replication was tested between processes on one machine, over real public relays, and between hosts in one process. Networks with strict NAT need a TURN server.
+- **Tested connections.** Replication was tested between processes on one machine, over real public relays, and between hosts in one process. Networks with strict NAT need a TURN server, on your own account: Vine ships none ([do I need one?](GUIDE.md#do-i-need-a-turn-server)).
 - **Removal can't recall data.** A removed member keeps what they already received. Every other machine refuses their later changes and stops syncing with them. The group secret isn't changed, so they can still see that the signalling room is in use, but get nothing from it.
 - **Clocks.** Changes are ordered by their time, so members' clocks are assumed to be right.
 - **Size.** Made for groups of up to about 20, and logs of up to about 100,000 changes. A new member downloads the whole log.
