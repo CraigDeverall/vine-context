@@ -6,7 +6,7 @@ Back to the [README](../README.md).
 
 ## Judge it in five minutes
 
-1. **Run it.** One command, with Node 20 or later. It installs nothing, needs no account or API key, and touches nothing of yours:
+1. **Run it.** One command, with Node 20 or later. Nothing to install (npx fetches a copy), no account or API key, and it touches nothing of yours:
 
    ```bash
    npx vine-context demo
