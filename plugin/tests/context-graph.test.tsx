@@ -169,7 +169,8 @@ test('the overview says what needs you, hands steering to the agent, and opens i
   await $.command.run(RUN)
   const desk = await $.ui.mount({ ...PANE, surface: 'desktop' })
   // Overview is the first tab, marked; no graph, no refresh, no way to add a claim or question by hand.
-  expect((await desk.find({ key: 'tab-overview' }))?.text).toMatch(/^▸ 🏠 Overview/)
+  expect((await desk.find({ key: 'tab-overview' }))?.text).toMatch(/^🏠 Overview/)
+  expect((await desk.find({ key: 'tab-overview' }))?.props.variant).toBe('primary')
   expect((await desk.find({ key: 'tab-questions' }))?.text).toMatch(/❓ Questions 1/)
   expect((await desk.find({ key: 'tab-claims' }))?.text).toMatch(/📌 Claims 4/)
   expect((await desk.find({ key: 'tab-people' }))?.text).toMatch(/👥 People 3/)
@@ -205,7 +206,8 @@ test('the overview says what needs you, hands steering to the agent, and opens i
   expect(await desk.find({ type: 'Text', text: /Claim in conflict/ })).toBeDefined()
   await desk.press({ key: 'close-claim-view' })
   await desk.press({ key: 'see-conflicts' })
-  expect((await desk.find({ key: 'scope-conflicts' }))?.text).toMatch(/^▸ ⚡ Conflicts 1/)
+  expect((await desk.find({ key: 'scope-conflicts' }))?.text).toMatch(/^⚡ Conflicts 1/)
+  expect((await desk.find({ key: 'scope-conflicts' }))?.props.variant).toBe('primary')
   await desk.unmount()
 })
 
@@ -217,7 +219,8 @@ test('the questions tab shows threads; a question opens on its own, where answer
   await $.command.run(RUN)
   const desk = await $.ui.mount({ ...PANE, surface: 'desktop' })
   await desk.press({ key: 'tab-questions' })
-  expect((await desk.find({ key: 'scope-open' }))?.text).toBe('▸ Open 1')
+  expect((await desk.find({ key: 'scope-open' }))?.text).toBe('Open 1')
+  expect((await desk.find({ key: 'scope-open' }))?.props.variant).toBe('primary')
 
   // The open question's thread: its live reply, not the withdrawn one. The answered one is under Answered.
   expect(await desk.find({ type: 'Text', text: /Thursday suits most people/ })).toBeDefined()
@@ -274,7 +277,7 @@ test('editing the description takes the whole panel; claims show conflicts and h
   expect(calls).toContainEqual({ tool: 'describe_context', args: { description: 'What the team knows about checkout', context: 'team' } })
 
   await desk.press({ key: 'tab-claims' })
-  expect((await desk.find({ key: 'tab-claims' }))?.text).toMatch(/^▸ /)
+  expect((await desk.find({ key: 'tab-claims' }))?.props.variant).toBe('primary')
   // The current claims: not the replaced or the withdrawn one. The conflict sits on top, each side with "Keep this one".
   expect(await desk.find({ type: 'Text', text: /The outage lasted 6 minutes/ })).toBeDefined()
   expect(await desk.find({ type: 'Text', text: /The outage lasted 4 minutes/ })).toBeUndefined()
@@ -444,7 +447,7 @@ test('a context opens from the list on its tabs or its Settings tab, an off one 
   expect(await desk.find({ key: 'tab-overview' })).toBeDefined()
   await desk.press({ key: 'switch' })
   await desk.press({ key: 'settings-team' })
-  expect((await desk.find({ key: 'tab-settings' }))?.text).toMatch(/^▸ /)
+  expect((await desk.find({ key: 'tab-settings' }))?.props.variant).toBe('primary')
   expect(calls).toContainEqual({ tool: 'context_details', args: { name: 'team' } })
   expect(await desk.find({ type: 'Text', text: /6 claims · 2 questions · 2 replies/ })).toBeDefined()
   expect(await desk.find({ type: 'Text', text: /3 members · 1 of the others online · 2 join codes waiting · 3 signalling relays reachable/ })).toBeDefined()
@@ -465,7 +468,7 @@ test('a context opens from the list on its tabs or its Settings tab, an off one 
   await desk.press({ key: 'detail-invite-team' })
   expect(await desk.find({ type: 'Text', text: /Invite someone to team/ })).toBeDefined()
   await desk.press({ key: 'close-invite-step' })
-  expect((await desk.find({ key: 'tab-settings' }))?.text).toMatch(/^▸ /)
+  expect((await desk.find({ key: 'tab-settings' }))?.props.variant).toBe('primary')
 
   // A context that's off can't be opened: Settings shows its own page.
   await desk.press({ key: 'switch' })
@@ -526,7 +529,7 @@ test('a context opens from the list on its tabs or its Settings tab, an off one 
   await desk.input({ key: 'delete-confirm-team', text: 'team', kind: 'change' })
   await desk.press({ key: 'delete-team' })
   expect(calls).toContainEqual({ tool: 'delete_context', args: { name: 'team', confirm: 'team' } })
-  expect((await desk.find({ key: 'tab-overview' }))?.text).toMatch(/^▸ /)
+  expect((await desk.find({ key: 'tab-overview' }))?.props.variant).toBe('primary')
   await desk.unmount()
 })
 
@@ -753,6 +756,6 @@ test('minimized to a widget, the pane is a glance with nothing to press, and exp
 
   const docked = await $.ui.mount({ ...sized(60), surface: 'desktop' })
   expect(await docked.find({ key: 'glance' })).toBeUndefined()
-  expect((await docked.find({ key: 'tab-overview' }))?.text).toMatch(/^▸ /)
+  expect((await docked.find({ key: 'tab-overview' }))?.props.variant).toBe('primary')
   await docked.unmount()
 })

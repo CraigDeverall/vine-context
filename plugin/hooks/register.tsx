@@ -622,9 +622,13 @@ export const register: Register = on => {
         {text}
       </Text>
     )
-    /** One of a row of choices: the chosen one stands out. */
+    /**
+     * One of a row of choices: the chosen one stands out. On a graphical surface its filled colour says so, and
+     * nothing is added to its label, so the row doesn't shift as the choice moves. A terminal may have no colour
+     * to go by, so there the chosen one is marked with ▸ as well.
+     */
     const chip = (key: string, label: string, active: boolean, onPress: () => void) => (
-      <Button key={key} label={`${active ? '▸ ' : ''}${label}`} variant={active ? 'primary' : 'secondary'} dimColor={!active} onPress={onPress} />
+      <Button key={key} label={`${active && !graphical ? '▸ ' : ''}${label}`} variant={active ? 'primary' : 'secondary'} dimColor={!active} onPress={onPress} />
     )
     const note = await read($, notice)
     const made = await read($, code)
