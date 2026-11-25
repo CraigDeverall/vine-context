@@ -249,7 +249,6 @@ Each is explained in [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md#limits).
 | [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md) | Hosts, signed changes, the mesh, join codes, files on disk, limits |
 | [docs/REPLICATION.md](docs/REPLICATION.md) | The replication design and the decisions behind it |
 | [docs/HACKATHON.md](docs/HACKATHON.md) | The Relate hackathon entry: how it meets each judging criterion, what is new, AI tools used |
-| [docs/PLAN.md](docs/PLAN.md), [docs/spikes.md](docs/spikes.md) | The project's history: the original plan and the early experiments |
 
 ## Built with
 

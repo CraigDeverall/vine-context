@@ -168,7 +168,7 @@ A chat usually uses one context, and keeps it when you reopen the chat. The choi
 - *"Also use the infra context"* (`add_context`) adds another, and `remove_context` takes one out. With several, reads search them all, and the agent puts each write in the one whose description fits.
 - There is no default. A new chat has no context until you choose, so the agent asks before its first write.
 - Pin contexts to a folder (`link_folder`; the 📌 on each context in the panel): new chats started in that folder, or below it, start with the pinned ones. That is kept on your machine too.
-- *"Delete the old-spike context"* (`delete_context`) deletes this machine's copy for good, after you confirm it by name; other members keep theirs. In the panel it's under a context's **Settings**.
+- *"Delete the old-draft context"* (`delete_context`) deletes this machine's copy for good, after you confirm it by name; other members keep theirs. In the panel it's under a context's **Settings**.
 - *"Rename the incident-42 context to checkout-slowdown"* (`rename_context`) changes this machine's name for it; other members keep their own name for it. A context's **Settings** in the panel (the same whether it's on for the chat or not) changes its name and description, invites people and takes it offline.
 
 ## Questions have threads

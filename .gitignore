@@ -4,7 +4,6 @@ dist/
 .DS_Store
 .env*
 /.data/
-/spikes/.out/
 !examples/data/**/*.log
 
 # Written by Claude Code when it loads the mod from this folder
