@@ -186,6 +186,9 @@ test('the overview says what needs you, hands steering to the agent, and opens i
   expect((await desk.find({ key: 'sync-toggle' }))?.text).toMatch(/Go offline/)
   for (const gone of ['refresh', 'add-claim', 'ask-question']) expect(await desk.find({ key: gone })).toBeUndefined()
   expect(await desk.find({ type: 'Svg' })).toBeUndefined()
+  // An activity line's who-did-what lead is dim, so the claim itself reads first.
+  const lead = await desk.find({ type: 'Text', text: /^📌 bob claimed: $/ })
+  expect(lead?.props?.dimColor).toBe(true)
 
   // What needs you: the conflict, your question's replies, the open question, the waiting codes; your held write, to undo.
   expect(await desk.find({ type: 'Text', text: /1 pair of claims can’t both be true/ })).toBeDefined()
