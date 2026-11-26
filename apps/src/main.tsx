@@ -1,8 +1,15 @@
+import { Alert } from "@squonk/ui/alert";
+import { Button } from "@squonk/ui/button";
+import { HStack } from "@squonk/ui/hstack";
+import { Presentation } from "@squonk/ui/presentation";
+import { Spinner } from "@squonk/ui/spinner";
+import { Text } from "@squonk/ui/text";
+import { VStack } from "@squonk/ui/vstack";
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
 import { NoToolCalls, asks, useBridge, type Bridge } from "./bridge";
 import type { Panel } from "./panel";
-import "./styles.css";
+import { VineTheme } from "./theme";
 import { Conflicts } from "./views/Conflicts";
 import { Console } from "./views/Console";
 import { Contexts } from "./views/Contexts";
@@ -30,9 +37,15 @@ function Root() {
   // A panel opened from another view (the receipt), shown in its place.
   const [panel, setPanel] = useState<{ view: Panel; data: unknown }>();
   const [error, setError] = useState<string>();
-  if (!b) return <p className="faint">Connecting…</p>;
-  if ("error" in b) return <p className="notice bad">{b.error}</p>;
-  if (b.failed) return <p className="notice bad">{b.failed}</p>;
+  if (!b)
+    return (
+      <HStack gap="xs" align="center">
+        <Spinner label="Connecting" />
+        <Text tone="muted">Connecting…</Text>
+      </HStack>
+    );
+  if ("error" in b) return <Alert tone="error">{b.error}</Alert>;
+  if (b.failed) return <Alert tone="error">{b.failed}</Alert>;
 
   // Larger display modes, best first: fullscreen is the side or full-window
   // panel in hosts that have one; pip floats. Inline hosts just swap in place.
@@ -59,24 +72,30 @@ function Root() {
   if (panel) {
     const View = VIEWS[panel.view];
     return (
-      <>
-        <div className="spread" style={{ marginBottom: 6 }}>
-          <button className="link" onClick={back}>
+      <VStack gap="sm">
+        <HStack>
+          <Button variant="ghost" onClick={back}>
             ← Back to what was written
-          </button>
-        </div>
+          </Button>
+        </HStack>
         <View b={{ ...b, data: panel.data }} />
-      </>
+      </VStack>
     );
   }
   const View = VIEWS[window.__VINE_VIEW__ ?? ""];
-  if (!View) return <p className="notice bad">Unknown view.</p>;
+  if (!View) return <Alert tone="error">Unknown view.</Alert>;
   return (
-    <>
+    <VStack gap="sm">
       <View b={b} open={open} />
-      {error && <p className="notice bad">{error}</p>}
-    </>
+      {error && <Alert tone="error">{error}</Alert>}
+    </VStack>
   );
 }
 
-createRoot(document.getElementById("root")!).render(<Root />);
+createRoot(document.getElementById("root")!).render(
+  <VineTheme>
+    <Presentation register="compact">
+      <Root />
+    </Presentation>
+  </VineTheme>,
+);

@@ -1,0 +1,3 @@
+/* The page around the views: the theme's background edge to edge. */
+html { background: var(--squonk-colors-background-default); min-height: 100%; }
+body { padding: var(--squonk-spacing-sm); }

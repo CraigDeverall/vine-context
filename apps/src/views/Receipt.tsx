@@ -2,6 +2,19 @@
 // machine: Undo removes it without trace. After that it has been sent to the
 // other members, and the button becomes Withdraw (it stays in the history).
 
+import { Alert } from "@squonk/ui/alert";
+import { Badge } from "@squonk/ui/badge";
+import { Button } from "@squonk/ui/button";
+import { Card } from "@squonk/ui/card";
+import { Code } from "@squonk/ui/code";
+import { Grid } from "@squonk/ui/grid";
+import { HStack } from "@squonk/ui/hstack";
+import { LinkButton } from "../linkbutton";
+import { Presentation } from "@squonk/ui/presentation";
+import { Split } from "@squonk/ui/split";
+import { Text } from "@squonk/ui/text";
+import { Tooltip } from "@squonk/ui/tooltip";
+import { VStack } from "@squonk/ui/vstack";
 import { useEffect, useState } from "react";
 import { asks, type Bridge } from "../bridge";
 import type { Panel } from "../panel";
@@ -14,6 +27,9 @@ interface ReceiptData {
   undo: { take_back: boolean; withdraw: boolean } | null;
   where: string;
 }
+
+// Secondary detail lines, one step down the theme's text-size ladder.
+const small = { fontSize: "var(--squonk-roles-type-small)" } as const;
 
 const show = (v: unknown): string => (Array.isArray(v) ? v.join(", ") : typeof v === "object" && v ? JSON.stringify(v) : String(v));
 
@@ -29,7 +45,7 @@ export function Receipt({ b, open }: { b: Bridge; open?: (p: Panel) => void }) {
     const t = setInterval(() => setNow(Date.now()), 250);
     return () => clearInterval(t);
   }, [sharedAt]);
-  if (!d) return <p className="faint">Waiting for the result…</p>;
+  if (!d) return <Text tone="muted">Waiting for the result…</Text>;
 
   const input = Object.entries(d.input ?? {}).filter(([, v]) => v !== undefined && v !== null && !(Array.isArray(v) && v.length === 0));
   const main = input.find(([k]) => k === "text");
@@ -56,50 +72,82 @@ export function Receipt({ b, open }: { b: Bridge; open?: (p: Panel) => void }) {
   const withdraw = () => run("withdraw", { id: item }, "Withdrawn. The other members have it, so it stays in the graph's history.");
 
   return (
-    <div className="card">
-      <div className="spread">
-        <div className="row">
-          <span className={`pill ${undone ? "" : held ? "warn" : "ok"}`}>{undone ? "undone" : held ? "on this machine" : "shared"}</span>
-          <strong>{d.title}</strong>
-          {d.result && typeof d.result.id === "string" && <code className="faint">{d.result.id}</code>}
-        </div>
-        {!undone && held && (
-          <button disabled={busy} onClick={undo} title="It is still only on this machine: Undo removes it without trace">
-            Undo ({left}s)
-          </button>
-        )}
-        {!undone && canWithdraw && (
-          <button disabled={busy} onClick={withdraw} title="Already sent to the other members: withdrawing keeps it in the history">
-            Withdraw
-          </button>
-        )}
-      </div>
-      {main && <p style={{ margin: "8px 0", fontSize: 15 }} className={undone ? "ended" : ""}>{show(main[1])}</p>}
-      {rest.length > 0 && (
-        <dl className="kv" style={{ marginTop: 6 }}>
-          {rest.map(([k, v]) => (
-            <div key={k} style={{ display: "contents" }}>
-              <dt>{k.replace(/_/g, " ")}</dt>
-              <dd>{show(v)}</dd>
-            </div>
-          ))}
-        </dl>
-      )}
-      <div className="spread" style={{ marginTop: 6 }}>
-        <p className="faint" style={{ margin: 0 }}>In {d.where}</p>
-        {open && (
-          <div className="row">
-            <button className="link" onClick={() => open("explorer")}>
-              Explore graph
-            </button>
-            <button className="link" onClick={() => open("console")}>
-              Console
-            </button>
-          </div>
-        )}
-      </div>
-      {undone && <p className="notice">{undone}</p>}
-      {error && <p className="notice bad">{error}</p>}
-    </div>
+    <Presentation register="compact">
+      <Card variant="outlined">
+        <VStack gap="sm">
+          <Split align="center" wrap>
+            <HStack gap="sm" align="center" wrap>
+              <Badge tone={undone ? "neutral" : held ? "warning" : "success"}>{undone ? "undone" : held ? "on this machine" : "shared"}</Badge>
+              <Text as="span" weight="bold">
+                {d.title}
+              </Text>
+              {d.result && typeof d.result.id === "string" && (
+                <Text as="span" tone="muted" style={small}>
+                  <Code>{d.result.id}</Code>
+                </Text>
+              )}
+            </HStack>
+            {!undone && held && (
+              <Tooltip content="It is still only on this machine: Undo removes it without trace">
+                <Button variant="secondary" disabled={busy} onClick={undo}>
+                  Undo ({left}s)
+                </Button>
+              </Tooltip>
+            )}
+            {!undone && canWithdraw && (
+              <Tooltip content="Already sent to the other members: withdrawing keeps it in the history">
+                <Button variant="secondary" disabled={busy} onClick={withdraw}>
+                  Withdraw
+                </Button>
+              </Tooltip>
+            )}
+          </Split>
+          {main && (
+            <Text tone={undone ? "muted" : undefined} style={undone ? { textDecoration: "line-through" } : undefined}>
+              {show(main[1])}
+            </Text>
+          )}
+          {rest.length > 0 && (
+            <Grid as="dl" columns="max-content 1fr" gap="xs" style={{ ...small, margin: 0, columnGap: "var(--squonk-spacing-md)" }}>
+              {rest.map(([k, v]) => (
+                <div key={k} style={{ display: "contents" }}>
+                  <Text as="dt" tone="secondary">
+                    {k.replace(/_/g, " ")}
+                  </Text>
+                  <Text as="dd" style={{ margin: 0, overflowWrap: "anywhere" }}>
+                    {show(v)}
+                  </Text>
+                </div>
+              ))}
+            </Grid>
+          )}
+          <Split align="center" wrap>
+            <Text tone="muted" style={small}>
+              In {d.where}
+            </Text>
+            {open && (
+              <HStack gap="md" align="center" wrap>
+                <LinkButton  onClick={() => open("explorer")}>
+                  Explore graph
+                </LinkButton>
+                <LinkButton  onClick={() => open("console")}>
+                  Console
+                </LinkButton>
+              </HStack>
+            )}
+          </Split>
+          {undone && (
+            <Alert tone="info" variant="tinted">
+              {undone}
+            </Alert>
+          )}
+          {error && (
+            <Alert tone="error" variant="tinted">
+              {error}
+            </Alert>
+          )}
+        </VStack>
+      </Card>
+    </Presentation>
   );
 }

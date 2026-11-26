@@ -59,7 +59,7 @@ The documentation is one page per audience: the [README](../README.md) to a firs
 
 ## Third-party tools
 
-[MCP TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk), [MCP Apps (ext-apps)](https://github.com/modelcontextprotocol/ext-apps), [node-datachannel](https://github.com/murat-dogan/node-datachannel) (WebRTC), [nostr-tools](https://github.com/nbd-wtf/nostr-tools), Preact, zod, yaml, esbuild, tsup, vitest. Public Nostr relays and STUN servers carry connection handshakes only.
+[MCP TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk), [MCP Apps (ext-apps)](https://github.com/modelcontextprotocol/ext-apps), [node-datachannel](https://github.com/murat-dogan/node-datachannel) (WebRTC), [nostr-tools](https://github.com/nbd-wtf/nostr-tools), React, @squonk/ui, zod, yaml, esbuild, tsup, vitest. Public Nostr relays and STUN servers carry connection handshakes only.
 
 ## AI tools
 
