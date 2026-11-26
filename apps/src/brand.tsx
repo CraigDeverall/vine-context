@@ -14,8 +14,8 @@ export function Brand() {
         <Text as="span" weight="bold" style={{ fontFamily: "var(--squonk-typography-fonts-heading)", lineHeight: 1.1 }}>
           Vine Context
         </Text>
-        <Text as="span" variant="eyebrow" tone="muted">
-          P2P context
+        <Text as="span" tone="muted" style={{ fontSize: "var(--squonk-roles-type-small)", lineHeight: 1.2 }}>
+          P2P Shared Memories
         </Text>
       </VStack>
     </HStack>
