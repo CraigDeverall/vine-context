@@ -25,9 +25,9 @@ import { McpServer, type RegisteredTool } from "@modelcontextprotocol/sdk/server
 import { z } from "zod";
 import type { Catalogue } from "../core/catalogue.js";
 import { RANK } from "../core/changes.js";
-import { inputShape, type Role, type Snapshot } from "../core/graph.js";
+import { inputShape, isoMoment, type Role, type Snapshot } from "../core/graph.js";
 import { fingerprint, isGuessedName, nameSource, setName, type Identity } from "../core/identity.js";
-import { claimsPack } from "../core/pack.js";
+import { claimsPack, type ToolSpec } from "../core/pack.js";
 import { packageInfo } from "../core/package-root.js";
 import { autoShare, defaultDataDir } from "../core/paths.js";
 import { LocalHost } from "../host/client.js";
@@ -47,6 +47,10 @@ const text = (value: unknown): Content => ({
   content: [{ type: "text", text: typeof value === "string" ? value : JSON.stringify(value, null, 1) }],
 });
 const failure = (message: string): Content => ({ ...text(message), isError: true });
+
+/** The views open_view shows. */
+const OPEN_VIEWS = ["contexts", "console", "explorer"] as const;
+type OpenView = (typeof OPEN_VIEWS)[number];
 
 const OS: Record<string, string> = { darwin: "macOS", win32: "Windows", linux: "Linux" };
 const GRAPH_RE = /^[a-z0-9][a-z0-9-]{0,62}$/;
@@ -99,7 +103,7 @@ export interface SessionOptions {
   chat?: string;
   /** The folder the chat started in: contexts linked to it (or a parent) are where a new chat starts. */
   cwd?: string;
-  /** Starts (once) the localhost page that shows the views, and returns its link: browser_view. */
+  /** Starts (once) the localhost page that shows the views, and returns its link: open_view with `browser`. */
   browserView?: () => Promise<string>;
   log?(msg: string): void;
 }
@@ -132,7 +136,7 @@ export class Session {
           "Vine Context holds shared contexts: what a group knows, as dated claims and open questions, synced peer to peer between its members' agents. " +
           "Use it during ordinary work, not only when asked: when this chat reaches a decision, establishes a fact or leaves a question open that fits its context's purpose, record it (add_claim, ask_question; search first), " +
           "and look there (search, open_questions) before answering what the group may already know. context_info says which context this chat uses and what it is for. " +
-          "Every member keeps a full copy, so it works offline. A chat usually uses one context; use_context switches it, add_context adds another, remove_context drops one, and the chat keeps them when reopened. " +
+          "Every member keeps a full copy, so it works offline. A chat usually uses one context; use_context switches it (or, with `mode`, adds or drops one), and the chat keeps them when reopened. " +
           "find_context searches this machine's contexts by what they are for: use it to pick one, and before starting a new one. " +
           "Call model_guide once before you first write, and follow it. " +
           "To invite someone, use share_context: it makes a join code for one person. To join someone else's context, call join_context with the vine1_ code they sent.",
@@ -293,7 +297,7 @@ export class Session {
   private async target(name?: string): Promise<Attached> {
     const c = name ? this.contexts.get(name) : this.writeTo ? this.contexts.get(this.writeTo) : undefined;
     if (name && !c)
-      throw new Error(`This chat doesn't use '${name}': it uses ${[...this.contexts.keys()].map((n) => `'${n}'`).join(", ") || "no context"}. add_context adds one.`);
+      throw new Error(`This chat doesn't use '${name}': it uses ${[...this.contexts.keys()].map((n) => `'${n}'`).join(", ") || "no context"}. use_context with mode 'add' adds one.`);
     if (!c) throw new Error(this.noContext());
     if (!c.host.closed) return c;
     // Renamed (by another chat): follow it to its new name, by its id.
@@ -363,6 +367,78 @@ export class Session {
     return ` This chat's contexts: ${parts.join("; ")}.`;
   }
 
+  /**
+   * What this server adds to two of the model's tools. `recent` can also give
+   * the context's activity (what the panels poll), and `withdraw` first undoes
+   * a write that is still only on this machine.
+   */
+  private modelTool(tool: Pick<ToolSpec, "name" | "description" | "input">): { description: string; shape: Record<string, z.ZodType> } {
+    const shape = inputShape(tool.input, true);
+    if (tool.name === "recent")
+      return {
+        description:
+          tool.description +
+          " With `activity`, one context's latest activity instead (no `since` needed): who wrote what, what others' changes meant for you, joins and role changes, who is online.",
+        shape: {
+          ...shape,
+          since: z.string().meta({ format: "date-time" }).optional().describe("Changes after this time (ISO 8601). Required unless activity."),
+          activity: z.boolean().optional(),
+          snapshot: z.boolean().optional().describe("With activity: also its items and links"),
+          context: contextArg,
+        },
+      };
+    if (tool.name === "withdraw")
+      return {
+        description:
+          tool.description +
+          " A write still only on this machine (for a few seconds after it is made) is undone without trace instead and never reaches anyone: the result then says taken_back.",
+        shape: {
+          ...shape,
+          id: z.string().describe("The claim, question or reply; or, to undo a write just made, its `change` id"),
+          undo_only: z.boolean().optional().describe("Fail if it was already shared, rather than withdraw"),
+        },
+      };
+    return { description: tool.description, shape };
+  }
+
+  /** The `activity` form of `recent`. It never takes the agent's notices: the panels poll it. */
+  private async activityCall(a: { limit?: number; snapshot?: boolean; context?: string }): Promise<Content> {
+    try {
+      if (!this.contexts.size) {
+        const none = { using: "no context", context: null, contexts: [], your_contexts: this.localNames(), next: this.noContext() };
+        return { ...text(none), structuredContent: none };
+      }
+      const out = await this.activity(a);
+      return { ...text(out), structuredContent: out };
+    } catch (e) {
+      return failure((e as Error).message);
+    }
+  }
+
+  /**
+   * Undoes a write that is still only on this machine: it is removed and never
+   * reaches anyone. Null when there is nothing to undo (it was shared already),
+   * unless `must`, which fails instead. Without `must`, an item's own id only
+   * undoes the write that made it (so withdrawing twice doesn't undo the
+   * withdrawal), and only while nothing else links to it; a change id undoes
+   * that change, whatever it was.
+   */
+  private async takeBack(id: string, context: string | undefined, must: boolean): Promise<Record<string, unknown> | null> {
+    const names: (string | undefined)[] = context || !this.many ? [context] : [...this.contexts.keys()];
+    let last: Error | undefined;
+    for (const n of names) {
+      try {
+        const r = await this.request<Record<string, unknown>>("take_back", { id, new_only: !must }, n);
+        return { ...(this.many ? { context: n ?? this.writeTo } : {}), ...r, note: "Undone before it was shared: it never left this machine and leaves no trace." };
+      } catch (e) {
+        last = e as Error;
+        if (/already been shared/.test(last.message)) break;
+      }
+    }
+    if (must) throw last ?? new Error(`No write ${id} from this machine.`);
+    return null;
+  }
+
   /** Registers the model's tools for the chat's contexts, as far as this machine's roles allow. */
   private offer(): void {
     for (const t of this.modelTools.values()) t.remove();
@@ -371,15 +447,16 @@ export class Session {
     if (!all.length) {
       // No context yet: the model's tools are still offered, and say what to do first.
       for (const tool of claimsPack().tools) {
+        const { description, shape } = this.modelTool(tool);
         const registered = this.server.registerTool(
           tool.name,
           {
             title: tool.title,
-            description: `${tool.description} This chat has no context yet: this tells you how to choose one.`,
-            inputSchema: inputShape(tool.input),
+            description: `${description} This chat has no context yet: this tells you how to choose one.`,
+            inputSchema: shape,
             annotations: { readOnlyHint: tool.kind === "read", destructiveHint: false, idempotentHint: tool.kind === "read", openWorldHint: false },
           },
-          async () => this.withNews(failure(this.noContext())),
+          async (raw: Record<string, unknown>) => (tool.name === "recent" && raw?.activity ? this.activityCall({}) : this.withNews(failure(this.noContext()))),
         );
         this.modelTools.set(tool.name, registered);
       }
@@ -396,13 +473,14 @@ export class Session {
         : tool.kind === "write"
           ? ` Goes to the context named in \`context\`, else '${this.writeTo}'. Pick the context whose description fits; if none clearly does, ask the person.${this.contextsLine()}`
           : ` Without \`context\`, it runs on each of this chat's contexts and every result says which one it came from.${this.contextsLine()}`;
+      const { description, shape } = this.modelTool(tool);
       const registered = this.server.registerTool(
         tool.name,
         {
           title: tool.title,
-          description: tool.description + routing,
+          description: description + routing,
           inputSchema: {
-            ...inputShape(tool.input),
+            ...shape,
             ...(many ? { context: contextArg.describe(tool.kind === "write" ? "The context to write to (default: the write context)" : "Only this context (default: all of this chat's)") } : {}),
           },
           annotations: { readOnlyHint: tool.kind === "read", destructiveHint: false, idempotentHint: tool.kind === "read", openWorldHint: false },
@@ -410,8 +488,21 @@ export class Session {
         },
         async (raw: Record<string, unknown>) => {
           const { context, ...args } = raw as Record<string, unknown> & { context?: string };
+          if (tool.name === "recent") {
+            const { activity, snapshot } = args as { activity?: boolean; snapshot?: boolean };
+            if (activity) return this.activityCall({ limit: args.limit as number | undefined, snapshot, context });
+            delete args.activity;
+            delete args.snapshot;
+          }
           try {
             await this.followRenames();
+            if (tool.name === "recent" && !args.since) throw new Error("Give `since` (ISO 8601, for example 2026-03-01T09:00:00Z), or set `activity` for the context's latest activity.");
+            if (tool.name === "withdraw") {
+              const must = Boolean(args.undo_only);
+              delete args.undo_only;
+              const undone = await this.takeBack(String(args.id), context, must);
+              if (undone) return this.withNews(text(undone));
+            }
             if (tool.kind === "read" && !context && this.many) return this.withNews(await this.readAll(tool.name, args));
             const c = await this.target(context);
             let result = await this.request<Record<string, unknown>>("call", { tool: tool.name, args }, c.name);
@@ -419,7 +510,9 @@ export class Session {
             const out = text(result);
             const held =
               tool.kind === "write" && result && typeof result === "object" && result.shared_at
-                ? ` It stays on this machine until ${result.shared_at}; until then take_back removes it without trace.`
+                ? tool.name === "withdraw"
+                  ? ` Withdrawn: it stays in the history. The withdrawal itself stays on this machine until ${result.shared_at}; until then withdraw with its \`change\` id undoes it.`
+                  : ` It stays on this machine until ${result.shared_at}; until then withdraw removes it without trace.`
                 : "";
             out.content.push({ type: "text", text: `(${tool.kind === "write" ? "in" : "from"} ${this.where(c.name)})${held}` });
             if (tool.view)
@@ -430,7 +523,7 @@ export class Session {
                 input: args,
                 result,
                 context: c.name,
-                undo: tool.kind === "write" ? { take_back: true, withdraw: RANK[this.roleIn(c)] >= RANK.contributor } : null,
+                undo: tool.kind === "write" ? { held: true, withdraw: RANK[this.roleIn(c)] >= RANK.contributor } : null,
                 where: this.where(c.name),
               };
             return this.withNews(out);
@@ -708,39 +801,55 @@ export class Session {
         return this.withNews(failure((e as Error).message));
       }
     };
-    const which = contextArg.describe("Which of this chat's contexts (default: the one writes go to)");
-    const anyHere = contextArg.describe("Which context: one of this chat's (default: the one writes go to), or any other on this machine by name");
+    const which = contextArg.describe("One of this chat's contexts (default: where writes go)");
+    const anyHere = contextArg.describe("Any context on this machine (default: where the chat's writes go)");
 
     this.server.registerTool(
       "context_info",
       {
         title: "Context info",
         description:
-          "This chat's context: what it's for, your role, how much it holds, everyone in it and who is online, and the sharing state. Also the other contexts on this machine (your_contexts). " +
-          "If the chat uses several, `contexts` lists them and `context` picks which one to detail.",
-        inputSchema: { context: which },
+          "This chat's context: what it's for, your role, how much it holds, who is in it and online, and the sharing state; also the other contexts on this machine (your_contexts). " +
+          "With `details`, a summary of any one context on this machine instead: id, who made it, members, items, whether it's syncing, where it's stored.",
+        inputSchema: {
+          context: contextArg.describe("One of this chat's contexts (default: where writes go); with details, any on this machine"),
+          details: z.boolean().optional(),
+        },
         annotations: ro,
       },
-      wrap(async ({ context }: { context?: string }) => {
-        if (!this.contexts.size) return { using: "no context", context: null, contexts: [], your_contexts: this.localNames(), next: this.noContext() };
-        const c = await this.target(context);
-        return {
-          using: this.where(c.name),
-          context: c.name,
-          id: c.d.graph_id ?? null,
-          description: c.d.description ?? null,
-          role: c.d.member === false ? null : c.d.you.role,
-          ...(await this.request<Record<string, unknown>>("info", undefined, c.name)),
-          contexts: this.list(),
-          write_to: this.writeTo,
-          your_contexts: this.localNames(),
-          folder: this.folderState(),
-          started_from: this.origin,
-          next: this.many
-            ? "Reads search every context in this chat; put each write in the one whose description fits (the `context` argument), else it goes to write_to."
-            : "use_context switches this chat to another context; add_context adds one alongside (the chat keeps them when reopened).",
-        };
-      }),
+      async ({ context, details }: { context?: string; details?: boolean }) => {
+        // The summary of one context: the panels read it too, so it never takes the agent's notices.
+        if (details || (context && !this.contexts.has(context) && this.localNames().includes(context))) {
+          try {
+            const name = context ?? this.writeTo;
+            if (!name) throw new Error(this.noContext());
+            const out = await this.details(name);
+            return { ...text(out), structuredContent: out };
+          } catch (e) {
+            return failure((e as Error).message);
+          }
+        }
+        return wrap(async () => {
+          if (!this.contexts.size) return { using: "no context", context: null, contexts: [], your_contexts: this.localNames(), next: this.noContext() };
+          const c = await this.target(context);
+          return {
+            using: this.where(c.name),
+            context: c.name,
+            id: c.d.graph_id ?? null,
+            description: c.d.description ?? null,
+            role: c.d.member === false ? null : c.d.you.role,
+            ...(await this.request<Record<string, unknown>>("info", undefined, c.name)),
+            contexts: this.list(),
+            write_to: this.writeTo,
+            your_contexts: this.localNames(),
+            folder: this.folderState(),
+            started_from: this.origin,
+            next: this.many
+              ? "Reads search every context in this chat; put each write in the one whose description fits (the `context` argument), else it goes to write_to."
+              : "use_context switches this chat to another context, or with mode 'add' adds one alongside (the chat keeps them when reopened).",
+          };
+        })({});
+      },
     );
 
     this.server.registerTool(
@@ -748,8 +857,8 @@ export class Session {
       {
         title: "Find a context",
         description:
-          "Search the contexts on this machine (yours and ones you joined, whether or not this chat uses them) by name and what they are for, ranked by hybrid search (meaning plus keywords). " +
-          "Use it to find the context a topic belongs in, and before starting a new one, so it isn't a duplicate. It searches contexts, not what's in them: for claims and questions, use search.",
+          "Search the contexts on this machine (whether or not this chat uses them) by name and what they are for. " +
+          "Use it to find the context a topic belongs in, and before starting a new one. It searches contexts, not their contents: for claims and questions, use search.",
         inputSchema: {
           query: z.string().min(1).max(500).describe("What the context would be about"),
           limit: z.number().int().min(1).max(50).default(10).describe("How many contexts"),
@@ -766,38 +875,10 @@ export class Session {
           found,
           searched: names.length,
           next: found.length
-            ? "Scores rank, they don't judge: read the descriptions. use_context switches this chat to one, add_context adds it alongside; if none fits, ask the person before starting a new one."
-            : "No context here matches. If the person wants one for this, ask what it's for and start it with use_context or add_context and a description.",
+            ? "Scores rank, they don't judge: read the descriptions. use_context switches this chat to one, or with mode 'add' adds it alongside; if none fits, ask the person before starting a new one."
+            : "No context here matches. If the person wants one for this, ask what it's for and start it with use_context and a description.",
         };
       }),
-    );
-
-    this.server.registerTool(
-      "context_activity",
-      {
-        title: "Context activity",
-        description:
-          "What happened lately in one of this chat's contexts (default: the write context), newest first: who wrote what (yours and synced from others), what others' changes meant for you (the sync digest), joins and role changes, who is online, and (for an admin) the open join codes. " +
-          "With snapshot, also its items and links. Read-only; it never uses up the notices meant for you (it's what the Claude Code mod's band and panel poll).",
-        inputSchema: {
-          limit: z.number().int().min(1).max(200).optional().describe("How many recent changes (default 30)"),
-          snapshot: z.boolean().optional().describe("Also return the context as it stands now (items and links)"),
-          context: which,
-        },
-        annotations: ro,
-      },
-      async (a: { limit?: number; snapshot?: boolean; context?: string }) => {
-        try {
-          if (!this.contexts.size) {
-            const none = { using: "no context", context: null, contexts: [], your_contexts: this.localNames(), next: this.noContext() };
-            return { ...text(none), structuredContent: none };
-          }
-          const out = await this.activity(a);
-          return { ...text(out), structuredContent: out };
-        } catch (e) {
-          return failure((e as Error).message); // no withNews: this read never takes the agent's notices
-        }
-      },
     );
 
     this.server.registerTool(
@@ -820,72 +901,77 @@ export class Session {
     );
 
     this.server.registerTool(
-      "describe_context",
+      "update_context",
       {
-        title: "Describe a context",
+        title: "Change a context's purpose or name, or your name",
         description:
-          "Set what a context is for, in a sentence or two (you must be an admin): what goes in it and what doesn't. Every member's agent sees it. " +
-          "Ask the person for it; don't invent it.",
-        inputSchema: { description: z.string().min(1).max(500).describe("What the context is for"), context: anyHere },
-        annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-      },
-      wrap(async (a: { description: string; context?: string }) => {
-        if (a.context && !this.contexts.has(a.context)) return this.onContext(a.context, (h) => h.request("describe_context", { description: a.description }));
-        const c = await this.target(a.context);
-        const r = await this.request("describe_context", { description: a.description }, c.name);
-        await this.refresh(c.name);
-        return r;
-      }),
-    );
-
-    this.server.registerTool(
-      "set_my_name",
-      {
-        title: "Set your name",
-        description:
-          "Set the name other people see for you in every context on this machine (for example 'Craig Deverall'). Ask the person what they want to be called; don't invent it. " +
-          "You are your machine's key; the name is a label you can change. What you recorded before shows the new name too.",
-        inputSchema: { name: z.string().min(1).max(40).describe("1–40 letters, digits, spaces, dots, dashes or underscores") },
-        annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-      },
-      wrap(async ({ name }: { name: string }) => {
-        if (process.env.VINE_USER) throw new Error(`Your name is set by VINE_USER ('${process.env.VINE_USER}') in this agent's configuration; change it there.`);
-        const n = setName(this.dataDir, name);
-        for (const c of this.contexts.values()) await this.request("rename", { name: n }, c.name);
-        return { name: n, fingerprint: fingerprint(this.o.identity().publicKey), note: "This chat's contexts have it now; your other contexts take it when their hosts next start." };
-      }),
-    );
-
-    this.server.registerTool(
-      "set_turn_server",
-      {
-        title: "Set a TURN server",
-        description:
-          "Set the TURN server this machine's connections go through when two members' networks block a direct connection (a join that fails with 'could not connect', or members who never link). " +
-          "Most people don't need one, and there is none by default. The person must have a server and a username on it: ask for them, never invent them. " +
-          "Never ask for the server's password, and never accept one in the chat: this tool takes none. It saves the server and username only, and the password is read from the VINE_TURN_PASSWORD environment variable where vine runs. " +
-          "To have vine keep the password instead (in a file only the person can read, or the OS keychain), the person runs the `terminal_command` from the result in their own terminal: it asks for the password there, unseen. " +
-          "It applies to every context on this machine, from the next connection on, with nothing to restart. One of two members having a server is enough for that pair. The result says whether the server answered.",
+          "Change what a context is for (`purpose`; admins only; every member's agent sees it), this machine's own name for it (`rename_to`; other members keep theirs), " +
+          "or the name others see for you in every context on this machine (`my_name`). Ask the person for each; don't invent them.",
         inputSchema: {
-          host: z.string().min(1).max(255).describe("The server's host name or address, e.g. turn.example.org"),
-          port: z.number().int().min(1).max(65535).optional().describe("Default 3478 (5349 for tls)"),
-          username: z.string().min(1).max(255),
-          transport: z.enum(["udp", "tcp", "tls"]).optional().describe("How to reach the server (default udp)"),
+          purpose: z.string().min(1).max(500).optional().describe("A sentence or two: what goes in it and what doesn't"),
+          rename_to: contextArg.describe("Lower-case letters, digits and dashes"),
+          my_name: z.string().min(1).max(40).optional().describe("Letters, digits, spaces, dots, dashes or underscores"),
+          context: anyHere,
         },
-        annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+        annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       },
-      wrap(async (a: { host: string; port?: number; username: string; transport?: "udp" | "tcp" | "tls" }) => {
+      wrap(async (a: { purpose?: string; rename_to?: string; my_name?: string; context?: string }) => {
+        if (!a.purpose && !a.rename_to && !a.my_name) throw new Error("Nothing to change: give `purpose`, `rename_to` or `my_name`.");
+        if (a.my_name && process.env.VINE_USER) throw new Error(`Your name is set by VINE_USER ('${process.env.VINE_USER}') in this agent's configuration; change it there.`);
+        const out: Record<string, unknown> = {};
+        if (a.my_name) {
+          const n = setName(this.dataDir, a.my_name);
+          for (const c of this.contexts.values()) await this.request("rename", { name: n }, c.name);
+          out.my_name = { name: n, fingerprint: fingerprint(this.o.identity().publicKey), note: "This chat's contexts have it now; your other contexts take it when their hosts next start." };
+        }
+        if (a.purpose) {
+          if (a.context && !this.contexts.has(a.context)) out.purpose = await this.onContext(a.context, (h) => h.request("describe_context", { description: a.purpose }));
+          else {
+            const c = await this.target(a.context);
+            out.purpose = await this.request("describe_context", { description: a.purpose }, c.name);
+            await this.refresh(c.name);
+          }
+        }
+        if (a.rename_to) {
+          const from = a.context ?? this.writeTo;
+          if (!from) throw new Error(this.noContext());
+          out.renamed = { ...(await this.renameLocal(from, a.rename_to)), note: "Renamed on this machine. Other members keep their own name for it." };
+        }
+        return out;
+      }),
+    );
+
+    this.server.registerTool(
+      "turn_server",
+      {
+        title: "Set or forget the TURN server",
+        description:
+          "Set (`set`) or forget (`clear`) the TURN server this machine's connections use when two members' networks block a direct connection (a join that fails with 'could not connect', or members who never link). " +
+          "Most people need none. For `set`, ask the person for the server and their username on it; never invent them. " +
+          "Never ask for the server's password or accept one in the chat: this tool takes none. It is read from VINE_TURN_PASSWORD where vine runs, or the person runs the result's `terminal_command` in their own terminal so vine keeps it.",
+        inputSchema: {
+          action: z.enum(["set", "clear"]),
+          host: z.string().min(1).max(255).optional().describe("For set, e.g. turn.example.org"),
+          port: z.number().int().min(1).max(65535).optional().describe("Default 3478 (5349 for tls)"),
+          username: z.string().min(1).max(255).optional().describe("For set"),
+          transport: z.enum(["udp", "tcp", "tls"]).optional().describe("Default udp"),
+        },
+        annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+      },
+      wrap(async (a: { action: "set" | "clear"; host?: string; port?: number; username?: string; transport?: "udp" | "tcp" | "tls" }) => {
+        if (a.action === "clear") return { removed: clearTurn(this.dataDir), note: "Members whose networks block direct connections can no longer reach this machine directly. Links already open stay as they are." };
+        if (!a.host || !a.username) throw new Error("To set a TURN server, give its `host` and the person's `username` on it.");
         if (process.env.VINE_ICE !== undefined) throw new Error("VINE_ICE is set in this agent's configuration and replaces this setting; change it there, or remove it first.");
         // A server whose password vine keeps is left alone: saving from here would drop that password.
         if (readCloudflare(this.dataDir))
           throw new Error(
-            "Cloudflare TURN is set up on this machine, and this tool would replace it. To change it, the person runs `vine turn set` in a terminal; or remove it first with remove_turn_server.",
+            "Cloudflare TURN is set up on this machine, and this tool would replace it. To change it, the person runs `vine turn set` in a terminal; or remove it first with turn_server and the action 'clear'.",
           );
         const kept = readTurn(this.dataDir);
         if (kept && kept.store !== "env")
           throw new Error(
             `A TURN server is already set (${kept.host}:${kept.port}, user ${kept.username}) with its password kept by vine, and this tool can't replace it without losing that password. ` +
-              "To change it, the person runs `vine turn set` in a terminal; or remove it first with remove_turn_server.",
+              "To change it, the person runs `vine turn set` in a terminal; or remove it first with turn_server and the action 'clear'.",
           );
         const t = saveTurn(this.dataDir, { host: a.host, port: a.port, username: a.username, transport: a.transport, store: "env" });
         const check = await checkStoredTurn(this.dataDir);
@@ -905,30 +991,17 @@ export class Session {
     );
 
     this.server.registerTool(
-      "remove_turn_server",
-      {
-        title: "Remove the TURN server",
-        description: "Forget this machine's TURN server and its password. New connections are direct only; links already open stay as they are.",
-        inputSchema: {},
-        annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
-      },
-      wrap(async () => ({ removed: clearTurn(this.dataDir), note: "Members whose networks block direct connections can no longer reach this machine directly." })),
-    );
-
-    this.server.registerTool(
       "share_context",
       {
         title: "Invite someone",
         description:
-          "Invite one person to a context (you must be an admin of it; default: the chat's context): makes a new join code (vine1_…) for that person. " +
-          "Your machine answers the code, so it must be online when they use it. The first person to use it is let straight in with the code's role and gets a full copy; anyone else using it is turned away. " +
-          "Everyone in the context is told when someone joins, with their name, key fingerprint and agent. remove_peer takes anyone out. " +
-          "An unused code expires (default 24 hours). Call it once per person, and only when the person asks to invite someone. " +
-          "Unless they already said, ask first what the person may do: read and add (contributor), only read (reader), or read, add and invite (admin). sharing_status lists invites; revoke_invite cancels one.",
+          "Invite one person to a context (admins only; default: the chat's context): makes a join code (vine1_…) that lets the first person to use it in, with the code's role and a full copy. " +
+          "Your machine answers the code, so it must be online when they use it. Call it once per person, and only when the person asks to invite someone. " +
+          "Unless they already said, ask first what the invitee may do: read and add (contributor), only read (reader), or read, add and invite (admin).",
         inputSchema: {
-          label: z.string().max(60).optional().describe("Who it's for, e.g. 'for Sam': shown in sharing_status and in the join notice"),
-          role: z.enum(["reader", "contributor", "admin"]).optional().describe("The role they get when they join: the person's choice (default contributor)"),
-          expires_hours: z.number().positive().max(720).optional().describe("Hours until an unused code stops working (default 24)"),
+          label: z.string().max(60).optional().describe("Who it's for, e.g. 'for Sam'"),
+          role: z.enum(["reader", "contributor", "admin"]).optional().describe("Default contributor"),
+          expires_hours: z.number().positive().max(720).optional().describe("How long an unused code works (default 24)"),
           context: anyHere,
         },
         annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
@@ -941,76 +1014,47 @@ export class Session {
     );
 
     this.server.registerTool(
-      "revoke_invite",
+      "sharing",
       {
-        title: "Cancel an invite",
-        description: "Cancel a join code you made: it stops working. Use the invite id from sharing_status. To take someone out of a context, use remove_peer.",
-        inputSchema: { id: z.string().describe("The invite id (inv_…), as sharing_status shows it"), context: which },
+        title: "Sharing: status, go offline, go online",
+        description:
+          "`status`: whether a context is syncing, its invites (who each is for; open, used or expired), its members (name, key fingerprint, role, agent, online) and the links to them. " +
+          "`off`: stop syncing it and answering its join codes until `on`; your copy keeps working and what you write is sent when you're back. Sharing is on by default.",
+        inputSchema: { action: z.enum(["status", "on", "off"]), context: anyHere },
+        annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      },
+      wrap(({ action, context }: { action: "status" | "on" | "off"; context?: string }) =>
+        this.onContext(context, (h) => h.request(action === "status" ? "status" : action === "on" ? "start_sharing" : "unshare")),
+      ),
+    );
+
+    this.server.registerTool(
+      "manage_member",
+      {
+        title: "Change a role, remove someone, cancel an invite",
+        description:
+          "For an admin of a context. `set_role`: change a member's role. " +
+          "`remove`: take a member out; every machine stops syncing with them and refuses their later changes, but they keep the copy they already had. " +
+          "`revoke_invite`: cancel a join code.",
+        inputSchema: {
+          action: z.enum(["set_role", "remove", "revoke_invite"]),
+          name: z.string().optional().describe("The member (set_role, remove)"),
+          role: z.enum(["reader", "contributor", "admin"]).optional(),
+          invite: z.string().optional().describe("Invite id (inv_…) from sharing status"),
+          context: which,
+        },
         annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
       },
-      wrap(({ context, ...a }) => this.request("revoke_invite", a, context)),
-    );
-
-    this.server.registerTool(
-      "stop_sharing",
-      {
-        title: "Go offline",
-        description:
-          "Stop syncing a context with the other members, and stop answering your join codes for it, until you share again (start_sharing, or the console). " +
-          "Your copy keeps working; what you write is sent when you're back. Sharing is on by default.",
-        inputSchema: { context: anyHere },
-        annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-      },
-      wrap(({ context }) => this.onContext(context, (h) => h.request("unshare"))),
-    );
-
-    this.server.registerTool(
-      "start_sharing",
-      {
-        title: "Go online",
-        description:
-          "Start syncing a context with the other members again after stop_sharing, and answer your join codes for it. It makes no new join code (share_context does). Sharing is on by default, so this is only needed after going offline.",
-        inputSchema: { context: anyHere },
-        annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-      },
-      wrap(({ context }) => this.onContext(context, (h) => h.request("start_sharing"))),
-    );
-
-    this.server.registerTool(
-      "sharing_status",
-      {
-        title: "Sharing status",
-        description:
-          "Whether a context is syncing, its invites (who each is for, open, used or expired), everyone in it (name, key fingerprint, role, agent, operating system, online), the links to other members, and the signalling relays' state.",
-        inputSchema: { context: which },
-        annotations: ro,
-      },
-      wrap(({ context }) => this.request("status", undefined, context)),
-    );
-
-    const roleSchema = z.enum(["reader", "contributor", "admin"]);
-    this.server.registerTool(
-      "set_peer_role",
-      {
-        title: "Change someone's role",
-        description: "Change a member's role in a context (you must be an admin): reader, contributor or admin. Every member's machine applies it.",
-        inputSchema: { name: z.string().describe("Their name"), role: roleSchema.describe("Their new role"), context: which },
-        annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-      },
-      wrap(({ context, ...a }) => this.request("set_role", a, context)),
-    );
-
-    this.server.registerTool(
-      "remove_peer",
-      {
-        title: "Remove someone",
-        description:
-          "Take a member out of a context (you must be an admin). Every member's machine stops syncing with them and refuses their later changes. Their past contributions stay. " +
-          "They keep the copy they already had: removal can't take back what they received.",
-        inputSchema: { name: z.string().describe("Their name"), context: which },
-        annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
-      },
-      wrap(({ context, ...a }) => this.request("remove", a, context)),
+      wrap(({ action, name, role, invite, context }: { action: "set_role" | "remove" | "revoke_invite"; name?: string; role?: Role; invite?: string; context?: string }) => {
+        if (action === "revoke_invite") {
+          if (!invite) throw new Error("To cancel an invite, give its id as `invite` (inv_…, from sharing with the action 'status').");
+          return this.request("revoke_invite", { id: invite }, context);
+        }
+        if (!name) throw new Error("Give the member's `name`.");
+        if (action === "remove") return this.request("remove", { name }, context);
+        if (!role) throw new Error("Give their new `role`: reader, contributor or admin.");
+        return this.request("set_role", { name, role }, context);
+      }),
     );
 
     this.server.registerTool(
@@ -1019,16 +1063,16 @@ export class Session {
         title: "Join a shared context",
         description:
           "Join someone else's context with the join code they sent (vine1_…; it can be inside other text). Use it when the person pastes such a code. " +
-          "The machine that made the code must be online. You are let in at once and get your own full copy, kept in step with the others; everyone is told you joined (your name, key fingerprint and agent). " +
-          "It's added to this chat and writes go to it; the result includes a briefing (open questions, conflicts, latest). Other chats don't need the code: use_context with its name.",
+          "The machine that made the code must be online. You get your own full copy, kept in step with the others, and everyone is told you joined. " +
+          "It's added to this chat and writes go to it; the result includes a briefing. Other chats don't need the code: use_context with its name.",
         inputSchema: { code: z.string().describe("The vine1_… join code, exactly as sent") },
         annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
       },
       wrap(async ({ code }: { code: string }) => this.join(code)),
     );
 
-    const nameArg = z.string().regex(GRAPH_RE).describe("Context name: lower-case letters, digits and dashes");
-    const descriptionArg = z.string().max(500).optional().describe("For a new context: what it's for (what goes in it), in a sentence or two");
+    const nameArg = z.string().regex(GRAPH_RE).describe("Lower-case letters, digits and dashes");
+    const descriptionArg = z.string().max(500).optional().describe("For a new context: what goes in it, in a sentence or two");
 
     /** Starts a context of one's own if the name is new: describes it, and puts it online if sharing is on by default. It makes no join code: inviting is the person's step. */
     const created = async (name: string, isNew: boolean, description?: string) => {
@@ -1043,7 +1087,7 @@ export class Session {
       return {
         created: this.where(name),
         next:
-          (c.d.description ? "" : "Ask the person what this context is for and set it with describe_context. ") +
+          (c.d.description ? "" : "Ask the person what this context is for and set it with update_context (`purpose`). ") +
           "No one is invited yet and there is no join code. When the person wants someone in, ask who and what they may do (read and add, only read, or also invite), then call share_context for that one person. " +
           "Call model_guide before writing.",
       };
@@ -1052,16 +1096,38 @@ export class Session {
     this.server.registerTool(
       "use_context",
       {
-        title: "Use a context in this chat",
+        title: "Choose this chat's contexts",
         description:
-          "Make a context this chat's context, replacing the ones it had: one on this machine (yours, or one you joined; context_info lists your_contexts). The chat keeps it when reopened. " +
-          "A name that isn't here yet starts a new context of your own: ask the person what it's for and give that as its description. To use another alongside, add_context.",
-        inputSchema: { name: nameArg, description: descriptionArg },
+          "Make a context on this machine (context_info lists your_contexts) this chat's context, replacing the ones it had; the chat keeps it when reopened. " +
+          "A name that isn't here yet starts a new context of your own: ask the person what it's for and pass that as `description`. " +
+          "Mode `add` uses it alongside the chat's others (most chats need one). Mode `remove` takes it out of the chat (without a name, all of them); nothing is deleted.",
+        inputSchema: {
+          name: contextArg.describe("Lower-case letters, digits and dashes"),
+          mode: z.enum(["replace", "add", "remove"]).default("replace"),
+          description: descriptionArg,
+          write_here: z.boolean().optional().describe("With add: writes go to it by default"),
+        },
         annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       },
-      wrap(async ({ name, description }: { name: string; description?: string }) => {
+      wrap(async ({ name, mode, description, write_here }: { name?: string; mode?: "replace" | "add" | "remove"; description?: string; write_here?: boolean }) => {
+        if (mode === "remove") {
+          for (const n of name ? [name] : [...this.contexts.keys()]) this.detach(n);
+          return { contexts: this.list(), write_to: this.writeTo ?? null, ...(this.contexts.size ? {} : { next: this.noContext() }) };
+        }
+        if (!name) throw new Error("Give the context's `name`.");
         const isNew = !this.localNames().includes(name);
         await this.attach(name, false);
+        if (mode === "add") {
+          if (write_here) this.writeTo = name;
+          this.remember();
+          this.offer();
+          return {
+            contexts: this.list(),
+            write_to: this.writeTo,
+            next: this.many ? "Call model_guide again: it says how to pick a context for each write." : "Call model_guide before writing.",
+            ...(await created(name, isNew, description)),
+          };
+        }
         for (const other of [...this.contexts.keys()]) if (other !== name) (this.contexts.get(other)!.host.close(), this.contexts.delete(other));
         this.writeTo = name;
         this.origin = "chosen";
@@ -1073,85 +1139,13 @@ export class Session {
     );
 
     this.server.registerTool(
-      "add_context",
-      {
-        title: "Also use a context",
-        description:
-          "Add another context to this chat, alongside the ones it uses (most chats need one). Reads then search it too, and writes go to whichever context fits. A new name starts a new context of your own: ask what it's for. " +
-          "With write_here, writes go to it unless a call names another.",
-        inputSchema: { name: nameArg, description: descriptionArg, write_here: z.boolean().optional().describe("Make it where writes go by default") },
-        annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-      },
-      wrap(async ({ name, description, write_here }: { name: string; description?: string; write_here?: boolean }) => {
-        const isNew = !this.localNames().includes(name);
-        await this.attach(name, false);
-        if (write_here) this.writeTo = name;
-        this.remember();
-        this.offer();
-        return {
-          contexts: this.list(),
-          write_to: this.writeTo,
-          next: this.many ? "Call model_guide again: it says how to pick a context for each write." : "Call model_guide before writing.",
-          ...(await created(name, isNew, description)),
-        };
-      }),
-    );
-
-    this.server.registerTool(
-      "remove_context",
-      {
-        title: "Stop using a context",
-        description:
-          "Take a context out of this chat (nothing is deleted: it stays on this machine and keeps syncing). Without `name`, takes them all out, leaving the chat with no context.",
-        inputSchema: { name: z.string().regex(GRAPH_RE).optional().describe("The context to take out (default: all of them)") },
-        annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-      },
-      wrap(async ({ name }: { name?: string }) => {
-        for (const n of name ? [name] : [...this.contexts.keys()]) this.detach(n);
-        return { contexts: this.list(), write_to: this.writeTo ?? null, ...(this.contexts.size ? {} : { next: this.noContext() }) };
-      }),
-    );
-
-    this.server.registerTool(
-      "context_details",
-      {
-        title: "A context's details",
-        description:
-          "Everything about one context on this machine, whether or not this chat uses it: what it's for, its id, your role, who made it, how many members and items it has, whether it's syncing, and where it's stored. Read-only.",
-        inputSchema: { name: nameArg },
-        annotations: ro,
-      },
-      async ({ name }: { name: string }) => {
-        try {
-          const out = await this.details(name);
-          return { ...text(out), structuredContent: out };
-        } catch (e) {
-          return failure((e as Error).message); // no withNews: the panel reads this too
-        }
-      },
-    );
-
-    this.server.registerTool(
-      "rename_context",
-      {
-        title: "Rename a context on this machine",
-        description:
-          "Give a context on this machine (whether or not this chat uses it) a new name. The name is this machine's own label for it: other members keep theirs, and the context's id doesn't change. " +
-          "Every chat and folder that uses it follows it to the new name. Only when the person asks: they choose the name.",
-        inputSchema: { name: nameArg, to: z.string().regex(GRAPH_RE).describe("The new name: lower-case letters, digits and dashes") },
-        annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-      },
-      wrap(async ({ name, to }: { name: string; to: string }) => ({ ...(await this.renameLocal(name, to)), note: "Renamed on this machine. Other members keep their own name for it." })),
-    );
-
-    this.server.registerTool(
       "delete_context",
       {
         title: "Delete a context from this machine",
         description:
-          "Permanently delete this machine's copy of a context: its claims, questions and replies, its change log, the join codes made here, and every chat's and folder's link to it. It can't be undone. " +
-          "Other members keep their own copies; with no other member, it is gone for good. Getting it back means joining again with a new code from an admin. " +
-          "Only when the person asked to delete it: first tell them what it removes and ask them to confirm by name, then pass that name as `confirm`. To only stop using it in this chat, use remove_context.",
+          "Permanently delete this machine's copy of a context: its claims, questions and replies, its change log, its join codes, and every chat's and folder's link to it. It can't be undone. " +
+          "Other members keep their copies; with none, it is gone for good. " +
+          "Only when the person asked to delete it: first tell them what it removes and ask them to confirm by name, then pass that name as `confirm`. To only stop using it in this chat, use_context with mode `remove`.",
         inputSchema: { name: nameArg, confirm: z.string().describe("The context's name again, as the person confirmed it") },
         annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
       },
@@ -1167,12 +1161,11 @@ export class Session {
       {
         title: "Start this folder's chats here",
         description:
-          "Make new chats started in this chat's folder (or below it) start with this chat's contexts, or with `off`, stop that. " +
-          "With `name`, pin just that one context to the folder (any on this machine), or with `off` too, unpin it, leaving the folder's others as they are. " +
-          "It's kept on this machine (nothing is written into the folder). Ask the person first.",
+          "Make new chats started in this chat's folder (or below it) start with this chat's contexts; with `off`, stop that. " +
+          "With `name`, pin (or with `off`, unpin) just that context, leaving the folder's others as they are. Kept on this machine, not in the folder. Ask the person first.",
         inputSchema: {
-          off: z.boolean().optional().describe("Stop linking the folder (or, with name, unpin that context)"),
-          name: z.string().regex(GRAPH_RE).optional().describe("Pin or unpin only this context"),
+          off: z.boolean().optional(),
+          name: contextArg,
         },
         annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       },
@@ -1205,30 +1198,6 @@ export class Session {
       }),
     );
 
-    this.server.registerTool(
-      "take_back",
-      {
-        title: "Take back a write",
-        description:
-          "Undo something you just wrote, while it is still only on this machine (for a few seconds after writing): it is removed and never reaches anyone. " +
-          "Use it when something was recorded by mistake, such as personal details in the wrong chat. After that, use withdraw (which keeps it in the history).",
-        inputSchema: { id: z.string().describe("The change id (change) or the item's id from the write's result"), context: contextArg.describe("The context it was written to (default: each of this chat's, in turn)") },
-        annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
-      },
-      wrap(async ({ id, context }: { id: string; context?: string }) => {
-        if (context || !this.many) return this.request("take_back", { id }, context);
-        let last: unknown;
-        for (const c of this.contexts.values()) {
-          try {
-            return { context: c.name, ...((await this.request<Record<string, unknown>>("take_back", { id }, c.name)) as object) };
-          } catch (e) {
-            last = e;
-            if (/already been shared/.test((e as Error).message)) throw e;
-          }
-        }
-        throw last instanceof Error ? last : new Error(`No write ${id} from this machine.`);
-      }),
-    );
   }
 
   /** What the console shows. */
@@ -1253,104 +1222,75 @@ export class Session {
       }
     };
     const both = (summary: unknown, structured: Record<string, unknown>): Content => ({ ...text(summary), structuredContent: structured });
-    const which = contextArg.describe("Which of this chat's contexts (default: the one writes go to)");
+    const which = contextArg.describe("One of this chat's contexts (default: where writes go)");
 
     this.server.registerTool(
-      "open_contexts",
+      "open_view",
       {
-        title: "Open the contexts panel",
+        title: "Show a view of a context",
         description:
-          "Show the person this chat's context in a panel: what needs them, its questions with their threads, its claims (with conflicts and history), its people and join codes, and the chat's contexts to turn on and off. " +
-          "For the person to look at and steer from; to read the context yourself, use context_info and the model's search and read tools.",
-        inputSchema: {},
-        annotations: ro,
-        _meta: uiMeta("contexts", { beside: true }),
-      },
-      run(async () => {
-        if (!this.contexts.size) {
-          const none = { using: "no context", context: null, contexts: [], your_contexts: this.localNames(), next: this.noContext() };
-          return both(none, none);
-        }
-        const state = await this.activity({ limit: 40, snapshot: true });
-        const snap = state.snapshot as Snapshot;
-        // The agent gets a line about what the person now sees, not the whole context.
-        return both({ showing: state.using, context: state.context, items: snap.nodes.length, note: "The person is looking at the contexts panel." }, state);
-      }),
-    );
-
-    this.server.registerTool(
-      "open_console",
-      {
-        title: "Open the sharing console",
-        description:
-          "Show the sharing console for a context: everyone in it (with key fingerprints, agents, roles and who is online), your join codes, and whether it is syncing. " +
-          "An admin can make codes, change roles and remove people there.",
-        inputSchema: { context: which },
-        annotations: ro,
-        _meta: uiMeta("console"),
-      },
-      run(async (a: { context?: string }) => {
-        const state = await this.consoleState(a.context);
-        return both(state, state);
-      }),
-    );
-
-    this.server.registerTool(
-      "explore_context",
-      {
-        title: "Explore a context",
-        description:
-          "Show a context as an interactive picture: its items and the links between them, as it stood at a moment (default now). " +
-          "For the person to look at; to answer a question yourself, use the model's search and read tools.",
+          "Show the person a view of this chat's context: `contexts` (the panel: what needs them, questions and threads, claims, people and join codes, and the chat's contexts), " +
+          "`console` (sharing: members, key fingerprints, roles, who is online, join codes) or `explorer` (a picture of its items and links, as it stood `at` a moment). " +
+          "For the person to look at and steer from; to read the context yourself, use search and the other read tools." +
+          (this.o.browserView ? " If this agent can't show views, pass `browser` for a link to them in a browser tab." : ""),
         inputSchema: {
-          at: z.iso.datetime({ offset: true }).optional().describe("Show it as it stood at this time (ISO 8601). Default now."),
-          limit: z.number().int().min(1).max(1000).default(200).describe("Most recent items to show"),
+          view: z.enum(OPEN_VIEWS).default("contexts"),
+          at: z.string().meta({ format: "date-time" }).optional().describe("Explorer: ISO 8601, default now"),
+          limit: z.number().int().min(1).max(1000).optional().describe("Explorer: most recent items (default 200)"),
+          ...(this.o.browserView ? { browser: z.boolean().optional() } : {}),
           context: which,
         },
         annotations: ro,
-        _meta: uiMeta("explorer"),
+        _meta: uiMeta("view", { beside: true }),
       },
-      run(async ({ context, ...a }: { at?: string; limit?: number; context?: string }) => {
-        const c = await this.target(context);
-        const snap = await this.request<Snapshot>("snapshot", a, c.name);
-        const counts: Record<string, number> = {};
-        for (const n of snap.nodes) counts[n.label] = (counts[n.label] ?? 0) + 1;
-        return both(
-          {
-            showing: this.where(c.name),
-            at: snap.at,
-            nodes: counts,
-            links: snap.edges.length,
-            truncated: snap.truncated,
-            note: "The explorer shows the picture to the person; this summary is all you get here.",
-          },
-          { ...snap, where: this.where(c.name) } as unknown as Record<string, unknown>,
-        );
-      }),
-    );
-
-    if (this.o.browserView)
-      this.server.registerTool(
-        "browser_view",
-        {
-          title: "Open the views in a browser",
-          description:
-            "Get a link to the console and explorer in a browser tab on this machine, for when this agent can't show MCP App views itself. " +
-            "Give the person the link to open; it works only on this machine and while this session runs.",
-          annotations: ro,
-        },
-        run(async () => {
-          const url = await this.o.browserView!();
+      run(async ({ view = "contexts", at, limit, browser, context }: { view?: OpenView; at?: string; limit?: number; browser?: boolean; context?: string }) => {
+        if (browser && this.o.browserView) {
+          const url = await this.o.browserView();
           const opened = openInBrowser(url);
-          return text({
+          const out = {
             url,
             opened,
             note: opened
-              ? "Opened in the default browser. If no tab appeared, open the link on this machine. Don't share it: it acts as you."
-              : "Open it in a browser on this machine. Don't share it: it acts as you.",
-          });
-        }),
-      );
+              ? "Opened in the default browser. If no tab appeared, open the link on this machine. Don't share it: it acts as you. It works only on this machine and while this session runs."
+              : "Open it in a browser on this machine. Don't share it: it acts as you. It works only on this machine and while this session runs.",
+          };
+          return both(out, { view: "browser", ...out });
+        }
+        if (view === "console") {
+          const state = await this.consoleState(context);
+          return both(state, { view, ...state });
+        }
+        if (view === "explorer") {
+          if (at !== undefined) {
+            const ok = isoMoment().safeParse(at);
+            if (!ok.success) throw new Error(`Invalid input:\n- at: ${ok.error.issues[0]?.message}`);
+          }
+          const c = await this.target(context);
+          const snap = await this.request<Snapshot>("snapshot", { ...(at ? { at } : {}), limit: limit ?? 200 }, c.name);
+          const counts: Record<string, number> = {};
+          for (const n of snap.nodes) counts[n.label] = (counts[n.label] ?? 0) + 1;
+          return both(
+            {
+              showing: this.where(c.name),
+              at: snap.at,
+              nodes: counts,
+              links: snap.edges.length,
+              truncated: snap.truncated,
+              note: "The explorer shows the picture to the person; this summary is all you get here.",
+            },
+            { view, ...snap, where: this.where(c.name) } as unknown as Record<string, unknown>,
+          );
+        }
+        if (!this.contexts.size) {
+          const none = { using: "no context", context: null, contexts: [], your_contexts: this.localNames(), next: this.noContext() };
+          return both(none, { view, ...none });
+        }
+        const state = await this.activity({ limit: 40, snapshot: true, context });
+        const snap = state.snapshot as Snapshot;
+        // The agent gets a line about what the person now sees, not the whole context.
+        return both({ showing: state.using, context: state.context, items: snap.nodes.length, note: "The person is looking at the contexts panel." }, { view, ...state });
+      }),
+    );
   }
 
   /** What share_context says about a new invite. */
@@ -1358,13 +1298,13 @@ export class Session {
   private nameNote(): { your_name?: string } {
     const source = nameSource(this.dataDir);
     const { name } = this.o.identity();
-    if (source === "VINE_USER" || source === "set_my_name") return {};
+    if (source === "VINE_USER" || source === "chosen") return {};
     if (isGuessedName(source))
       return {
-        your_name: `Others see this person as '${name}', which is ${source === "login" ? "only their login name" : "a made-up name"}. If this chat hasn't asked yet, ask what name they want and save it with set_my_name; if they'd rather not say, '${name}' stays.`,
+        your_name: `Others see this person as '${name}', which is ${source === "login" ? "only their login name" : "a made-up name"}. If this chat hasn't asked yet, ask what name they want and save it with update_context (my_name); if they'd rather not say, '${name}' stays.`,
       };
     return {
-      your_name: `Others see this person as '${name}' (${source === "git" ? "from git's user.name" : "the full name on their computer account"}). If this chat hasn't told them yet, do, and offer set_my_name if they want another.`,
+      your_name: `Others see this person as '${name}' (${source === "git" ? "from git's user.name" : "the full name on their computer account"}). If this chat hasn't told them yet, do, and offer update_context (my_name) if they want another.`,
     };
   }
 
@@ -1380,7 +1320,7 @@ export class Session {
       next:
         "Give the person the 'send' line to pass on privately (not in a public channel). Agents without the plugin command can be told: join the context with this code. " +
         "This machine answers the code, so it must be online when they use it. Whoever uses it first is let in at once and gets a full copy, and everyone in the context is told who joined (name, key fingerprint, agent). " +
-        "Each code is for one person: call share_context again for the next. remove_peer takes anyone out.",
+        "Each code is for one person: call share_context again for the next. manage_member takes anyone out.",
     };
   }
 

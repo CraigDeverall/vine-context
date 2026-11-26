@@ -66,7 +66,7 @@ const started = [];
 try {
   const alice = await agent("alice", context);
   started.push(["alice", context]);
-  await alice.call("describe_context", { description: "A relay check: claims about an imaginary outage" });
+  await alice.call("update_context", { purpose: "A relay check: claims about an imaginary outage" });
   await alice.call("add_claim", { text: "Alice wrote this before anyone joined" });
   const inv = await alice.call("share_context", { label: "for bob" });
   check("alice gets a code", /^vine1_/.test(inv.code));
@@ -100,7 +100,7 @@ try {
   check("alice's write reaches bob", await until(async () => (await bob.texts()).includes("Alice's reply travels to bob")));
 
   const secret = await bob.call("add_claim", { text: "Bob's home address is 1 Secret Street" });
-  await bob.call("take_back", { id: secret.change });
+  await bob.call("withdraw", { id: secret.change, undo_only: true });
   await sleep(8000);
   check("a taken-back write never reaches alice", !(await alice.texts()).includes("Bob's home address is 1 Secret Street"));
 
@@ -121,7 +121,7 @@ try {
   // Alice comes back and catches up.
   const alice2 = await agent("alice", context);
   check("alice catches up when she's back", await until(async () => (await alice2.texts()).includes("Bob wrote this while alice was away")));
-  const st = await alice2.call("sharing_status");
+  const st = await alice2.call("sharing", { action: "status" });
   log("alice's relays:", JSON.stringify(st.relays), "links:", st.links.map((l) => `${l.name}:${l.state}`).join(","));
   await alice2.close();
   await bob.close();

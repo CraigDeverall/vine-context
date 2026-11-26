@@ -58,7 +58,7 @@ interface State {
   relays: Record<string, string>;
   people: Person[];
   log: { changes: number; held: number; refused: number };
-  you: { name: string; role: Role | null; fingerprint: string; name_from: "VINE_USER" | "set_my_name" | "git" | "os" | "login" | "generated" };
+  you: { name: string; role: Role | null; fingerprint: string; name_from: "VINE_USER" | "chosen" | "git" | "os" | "login" | "generated" };
 }
 
 const ROLES: Role[] = ["reader", "contributor", "admin"];
@@ -90,7 +90,7 @@ export function Console({ b }: { b: Bridge }) {
   const [role, setRole] = useState<Role>("contributor");
   const [naming, setNaming] = useState<string>();
   const saveName = async () => {
-    await act("name", "set_my_name", { name: naming!.trim() });
+    await act("name", "update_context", { my_name: naming!.trim() });
     setNaming(undefined);
   };
 
@@ -102,7 +102,7 @@ export function Console({ b }: { b: Bridge }) {
     // Where the host doesn't pass tool calls on, this view can't refresh: it shows what it was opened with.
     if (!b.canCall) return;
     try {
-      setState(await b.call<State>("open_console"));
+      setState(await b.call<State>("open_view", { view: "console" }));
     } catch (e) {
       setError((e as Error).message);
     }
@@ -159,11 +159,11 @@ export function Console({ b }: { b: Bridge }) {
               </HStack>
             </Heading>
             {state.sharing ? (
-              <Button variant="danger" disabled={!!busy} onClick={() => act("unshare", "stop_sharing")}>
+              <Button variant="danger" disabled={!!busy} onClick={() => act("unshare", "sharing", { action: "off" })}>
                 Go offline
               </Button>
             ) : admin ? (
-              <Button variant="primary" disabled={!!busy} onClick={() => act("share", "start_sharing")}>
+              <Button variant="primary" disabled={!!busy} onClick={() => act("share", "sharing", { action: "on" })}>
                 Go online
               </Button>
             ) : null}
@@ -191,7 +191,7 @@ export function Console({ b }: { b: Bridge }) {
             )}
             <Text as="span" tone="muted" style={small}>
               {" "}
-              {{ git: "(from git's user.name)", os: "(from your computer account)", login: "(your login name: set your own)", generated: "(made up: set your own)", VINE_USER: "(set by VINE_USER)", set_my_name: "" }[state.you.name_from] ?? ""}
+              {{ git: "(from git's user.name)", os: "(from your computer account)", login: "(your login name: set your own)", generated: "(made up: set your own)", VINE_USER: "(set by VINE_USER)", chosen: "" }[state.you.name_from] ?? ""}
             </Text>
           </Text>
         ) : (
@@ -235,7 +235,7 @@ export function Console({ b }: { b: Bridge }) {
                         expires {when(i.expires_at!)}
                       </Text>
                     </Text>
-                    <Button variant="secondary" disabled={!!busy} onClick={() => act(`cancel ${i.id}`, "revoke_invite", { id: i.id })}>
+                    <Button variant="secondary" disabled={!!busy} onClick={() => act(`cancel ${i.id}`, "manage_member", { action: "revoke_invite", invite: i.id })}>
                       Cancel
                     </Button>
                   </Split>
@@ -312,12 +312,12 @@ export function Console({ b }: { b: Bridge }) {
                     </VStack>
                     <HStack gap="sm" align="center">
                       {admin && !p.creator ? (
-                        <RolePicker value={p.role ?? "reader"} disabled={!!busy} onChange={(r) => act(`role ${p.name}`, "set_peer_role", { name: p.name, role: r })} />
+                        <RolePicker value={p.role ?? "reader"} disabled={!!busy} onChange={(r) => act(`role ${p.name}`, "manage_member", { action: "set_role", name: p.name, role: r })} />
                       ) : (
                         <Text as="span">{p.role}</Text>
                       )}
                       {admin && !p.creator && (
-                        <Button variant="danger" disabled={!!busy} onClick={() => act(`remove ${p.name}`, "remove_peer", { name: p.name })}>
+                        <Button variant="danger" disabled={!!busy} onClick={() => act(`remove ${p.name}`, "manage_member", { action: "remove", name: p.name })}>
                           Remove
                         </Button>
                       )}

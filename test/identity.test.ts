@@ -27,7 +27,7 @@ describe("the name others see", () => {
     expect(resolveName(dir, probes({ os: "Account Name", login: "loginname" }))).toEqual({ name: "Account Name", source: "os" });
     expect(resolveName(dir, probes({ login: "loginname" }))).toEqual({ name: "loginname", source: "login" });
     setName(dir, "Chosen");
-    expect(resolveName(dir, all)).toEqual({ name: "Chosen", source: "set_my_name" });
+    expect(resolveName(dir, all)).toEqual({ name: "Chosen", source: "chosen" });
     process.env.VINE_USER = "from-env";
     expect(resolveName(dir, all)).toEqual({ name: "from-env", source: "VINE_USER" });
   });
@@ -54,6 +54,6 @@ describe("the name others see", () => {
   });
 
   it("counts a login or made-up name as a guess, and the others as the person's own", () => {
-    expect((["VINE_USER", "set_my_name", "git", "os", "login", "generated"] as const).filter(isGuessedName)).toEqual(["login", "generated"]);
+    expect((["VINE_USER", "chosen", "git", "os", "login", "generated"] as const).filter(isGuessedName)).toEqual(["login", "generated"]);
   });
 });

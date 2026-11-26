@@ -90,12 +90,14 @@ describe("MCP App views", () => {
 
     const { tools } = await alice.client.listTools();
     const by = (n: string) => tools.find((t) => t.name === n)!;
-    expect(uiOf(by("open_console"))).toBe("ui://vine/console");
-    expect(uiOf(by("open_contexts"))).toBe("ui://vine/contexts");
-    // The contexts panel is also offered beside the conversation, where a host has that.
-    expect((by("open_contexts")._meta as any)["openai/ui"]).toEqual({ entrypoints: [{ type: "thread" }] });
-    expect((by("open_console")._meta as any)["openai/ui"]).toBeUndefined();
-    expect(uiOf(by("explore_context"))).toBe("ui://vine/explorer");
+    // open_view shows any of three views, and a tool names one resource: a page that picks the view from the call.
+    expect(uiOf(by("open_view"))).toBe("ui://vine/view");
+    const page = await alice.client.readResource({ uri: "ui://vine/view" });
+    expect((page.contents[0] as { text: string }).text).toContain('window.__VINE_VIEW__="view"');
+    expect((by("open_view").inputSchema.properties as any).view).toMatchObject({ enum: ["contexts", "console", "explorer"], default: "contexts" });
+    // With no arguments it is the contexts panel, which is also offered beside the conversation, where a host has that.
+    expect((by("open_view")._meta as any)["openai/ui"]).toEqual({ entrypoints: [{ type: "thread" }] });
+    expect(by("open_view").inputSchema.required ?? []).toEqual([]);
     expect(uiOf(by("add_claim"))).toBe("ui://vine/receipt");
     expect(uiOf(by("conflicts"))).toBe("ui://vine/conflicts");
     expect(uiOf(by("search"))).toBeUndefined();
@@ -109,12 +111,12 @@ describe("MCP App views", () => {
       view: "receipt",
       tool: "add_claim",
       input: { text: "The cache hit rate fell to 40% after the deploy" },
-      undo: { take_back: true, withdraw: true },
+      undo: { held: true, withdraw: true },
       where: "your context 'main'",
     });
-    // While it is held on this machine, take_back removes it without trace.
+    // While it is held on this machine, withdraw undoes it without trace.
     expect(r.structuredContent.result.shared_at).toBeDefined();
-    await alice.call("take_back", { id: r.structuredContent.result.change });
+    expect(await alice.call("withdraw", { id: r.structuredContent.result.change })).toMatchObject({ taken_back: r.structuredContent.result.change, kind: "claim" });
     expect(await alice.call("beliefs")).toEqual([]);
   });
 
@@ -127,7 +129,7 @@ describe("MCP App views", () => {
     const b = await alice.call("add_claim", { text: "The October campaign drove the sign-ups", supports: [a.result.id] });
     await alice.call("withdraw", { id: a.result.id });
 
-    const r = await alice.raw("explore_context");
+    const r = await alice.raw("open_view", { view: "explorer" });
     expect(r.content[0].text).not.toContain("Sign-ups doubled"); // the picture is for the person
     const now = r.structuredContent;
     expect(now.nodes.map((n: any) => [n.key, n.ended])).toEqual([
@@ -137,7 +139,7 @@ describe("MCP App views", () => {
     expect(now.edges).toEqual([expect.objectContaining({ type: "SUPPORTS", source: `Claim:${b.result.id}`, target: `Claim:${a.result.id}` })]);
     expect(now.schema.time).toEqual({ recorded: "recorded_at", ended: "withdrawn_at" });
 
-    const then = (await alice.raw("explore_context", { at: before })).structuredContent;
+    const then = (await alice.raw("open_view", { view: "explorer", at: before })).structuredContent;
     expect(then.nodes.map((n: any) => [n.key, n.ended])).toEqual([[a.result.id, false]]);
     expect(then.edges).toEqual([]);
   });
@@ -145,13 +147,13 @@ describe("MCP App views", () => {
   it("opens the contexts panel with everything it shows, and tells the agent only a summary", async () => {
     const alice = await agent("alice");
     const c = await alice.call("add_claim", { text: "Shown in the contexts panel" });
-    const r = await alice.raw("open_contexts");
+    const r = await alice.raw("open_view");
     // The view gets the same state it then polls for.
-    expect(r.structuredContent).toMatchObject({ context: "main", you: { name: "alice", role: "admin" }, your_contexts: ["main"], invites: [] });
+    expect(r.structuredContent).toMatchObject({ view: "contexts", context: "main", you: { name: "alice", role: "admin" }, your_contexts: ["main"], invites: [] });
     expect(r.structuredContent.snapshot.nodes.map((n: any) => n.title)).toContain("Shown in the contexts panel");
     expect(r.structuredContent.recent[0]).toMatchObject({ kind: "claim", mine: true, node: c.result?.id ?? c.id });
-    const polled = await alice.call("context_activity", { limit: 40, snapshot: true });
-    expect(Object.keys(polled).sort()).toEqual(Object.keys(r.structuredContent).sort());
+    const polled = await alice.call("recent", { activity: true, limit: 40, snapshot: true });
+    expect([...Object.keys(polled), "view"].sort()).toEqual(Object.keys(r.structuredContent).sort());
     // The agent reads a line about what the person sees, not the context's items.
     const said = (r.content as { text: string }[]).map((x) => x.text).join("\n");
     expect(said).toContain("contexts panel");
@@ -160,10 +162,10 @@ describe("MCP App views", () => {
 
   it("opens the console with your sharing state", async () => {
     const alice = await agent("alice");
-    expect(await alice.call("open_console")).toMatchObject({ sharing: false, can_invite: true, people: [expect.objectContaining({ name: "alice", you: true, creator: true })], links: [] });
+    expect(await alice.call("open_view", { view: "console" })).toMatchObject({ sharing: false, can_invite: true, people: [expect.objectContaining({ name: "alice", you: true, creator: true })], links: [] });
     await alice.call("share_context");
-    expect(await alice.call("open_console")).toMatchObject({ sharing: true, invites: [expect.objectContaining({ state: "open", code: expect.stringMatching(/^vine1_/) })] });
-    await alice.call("stop_sharing");
+    expect(await alice.call("open_view", { view: "console" })).toMatchObject({ sharing: true, invites: [expect.objectContaining({ state: "open", code: expect.stringMatching(/^vine1_/) })] });
+    await alice.call("sharing", { action: "off" });
   });
 
   it("joins with a code into its own copy, and explores it", async () => {
@@ -173,9 +175,9 @@ describe("MCP App views", () => {
     const { code } = await alice.call("share_context", { role: "reader" });
     const joined = await bob.call("join_context", { code });
     expect(joined).toMatchObject({ joined: "alice's context 'team'", here_as: "team", role: "reader", as: "bob" });
-    const state = await bob.call("open_console");
+    const state = await bob.call("open_view", { view: "console" });
     expect(state).toMatchObject({ host: "alice", can_invite: false, you: { name: "bob", role: "reader" } });
-    const snap = (await bob.raw("explore_context")).structuredContent;
+    const snap = (await bob.raw("open_view", { view: "explorer" })).structuredContent;
     expect(snap).toMatchObject({ graph: "team", where: expect.stringContaining("alice's context") });
     expect(snap.nodes.map((n: any) => n.title)).toEqual(["Alice's finding about the build"]);
     // Joining makes it this chat's context; as a reader there, bob gets no write tools.
@@ -185,7 +187,7 @@ describe("MCP App views", () => {
     await bob.call("use_context", { name: "own" });
     expect((await bob.call("context_info")).your_contexts).toEqual(["own", "team"]);
     expect(await bob.call("use_context", { name: "team" })).toMatchObject({ using: expect.stringContaining("alice's context") });
-    await alice.call("stop_sharing");
+    await alice.call("sharing", { action: "off" });
   });
 });
 
@@ -234,9 +236,12 @@ describe("the localhost page", () => {
     const client = new Client({ name: "browser", version: "0" });
     await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`), { requestInit: { headers: { Authorization: `Bearer ${token}` } } }));
     const names = (await client.listTools()).tools.map((t) => t.name);
-    expect(names).toEqual(expect.arrayContaining(["open_console", "explore_context", "add_claim"]));
-    expect(names).not.toContain("browser_view"); // the page's own sessions don't hand out more links
-    const r: any = await client.callTool({ name: "open_console", arguments: {} });
+    expect(names).toEqual(expect.arrayContaining(["open_view", "add_claim"]));
+    // The page's own sessions don't hand out more links.
+    const openView = (await client.listTools()).tools.find((t) => t.name === "open_view")!;
+    expect(Object.keys(openView.inputSchema.properties!)).not.toContain("browser");
+    expect(openView.description).not.toMatch(/browser/);
+    const r: any = await client.callTool({ name: "open_view", arguments: { view: "console" } });
     expect(r.structuredContent).toMatchObject({ graph: "main", you: { role: "admin" } });
     await client.close();
   });
@@ -250,15 +255,15 @@ describe("names, auto-share and which graph", () => {
       const me = await agent("first", "main", { storedName: true });
       // Until they choose a name, an invite's result says where the name came from.
       expect((await me.call("share_context")).your_name).toContain(`'${defaultName(me.dataDir)}'`);
-      const r = await me.call("set_my_name", { name: "Craig Deverall" });
-      expect(r).toMatchObject({ name: "Craig Deverall", fingerprint: expect.stringMatching(/^[0-9a-f]{4}-/) });
+      const r = await me.call("update_context", { my_name: "Craig Deverall" });
+      expect(r.my_name).toMatchObject({ name: "Craig Deverall", fingerprint: expect.stringMatching(/^[0-9a-f]{4}-/) });
       expect(defaultName(me.dataDir)).toBe("Craig Deverall");
-      expect(nameSource(me.dataDir)).toBe("set_my_name");
+      expect(nameSource(me.dataDir)).toBe("chosen");
       const c = await me.call("add_claim", { text: "Recorded after the rename" });
       expect(await me.call("history", { id: c.result.id })).toMatchObject({ item: { recorded_by: "Craig Deverall" } });
-      expect(await me.call("open_console")).toMatchObject({ you: { name: "Craig Deverall", name_from: "set_my_name" } });
+      expect(await me.call("open_view", { view: "console" })).toMatchObject({ you: { name: "Craig Deverall", name_from: "chosen" } });
       expect(await me.call("share_context")).not.toHaveProperty("your_name");
-      expect((await me.raw("set_my_name", { name: "<script>" })).isError).toBe(true);
+      expect((await me.raw("update_context", { my_name: "<script>" })).isError).toBe(true);
     } finally {
       if (before !== undefined) process.env.VINE_USER = before;
     }
@@ -273,16 +278,16 @@ describe("names, auto-share and which graph", () => {
       expect(r).not.toHaveProperty("code");
       expect(r).not.toHaveProperty("send");
       expect(await me.call("context_info")).toMatchObject({ sharing: { sharing: true } });
-      expect((await me.call("sharing_status")).invites).toEqual([]);
+      expect((await me.call("sharing", { action: "status" })).invites).toEqual([]);
       // Inviting is its own step, with the role the person chose.
       const inv = await me.call("share_context", { label: "for Sam", role: "reader" });
       expect(inv).toMatchObject({ code: expect.stringMatching(/^vine1_/), send: expect.stringContaining(inv.code), invite: { role: "reader" }, shared_as: { name: "alice" } });
-      expect((await me.call("sharing_status")).invites).toHaveLength(1);
+      expect((await me.call("sharing", { action: "status" })).invites).toHaveLength(1);
       // Switching back to an existing graph doesn't share it.
       const back = await me.call("use_context", { name: "main" });
       expect(back).not.toHaveProperty("code");
       await me.call("use_context", { name: "planning" });
-      await me.call("stop_sharing");
+      await me.call("sharing", { action: "off" });
     } finally {
       process.env.VINE_AUTO_SHARE = "off";
     }
@@ -301,7 +306,7 @@ describe("names, auto-share and which graph", () => {
   it("reports recent activity, the people and the graph", async () => {
     const me = await agent("alice");
     const c = await me.call("add_claim", { text: "Seen in the activity feed" });
-    const a = await me.call("context_activity", { snapshot: true });
+    const a = await me.call("recent", { activity: true, snapshot: true });
     expect(a).toMatchObject({ graph: "main", you: { name: "alice", role: "admin" }, members: 1, your_contexts: ["main"] });
     expect(a.recent[0]).toMatchObject({ kind: "claim", by: "alice", mine: true, held: true, node: c.result?.id ?? c.id, summary: "claimed: Seen in the activity feed" });
     expect(a.snapshot.nodes.map((n: any) => n.title)).toContain("Seen in the activity feed");

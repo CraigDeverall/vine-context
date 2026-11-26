@@ -23,7 +23,7 @@
 // start a prompt in the prompt box instead (see `drafts`): the person writes
 // their answer or correction on its last line and sends it themselves.
 //
-// It reads through the vine-context MCP server's `context_activity` tool,
+// It reads through the vine-context MCP server's `recent` tool (with `activity`),
 // which never uses up the join notices meant for the agent, and acts through
 // the server's ordinary tools. It polls, so there's nothing to refresh.
 
@@ -339,7 +339,7 @@ async function clearError($: Engine) {
 
 /** Why the server didn't answer, in words that say what to do about it. */
 export function trouble(message: string): string {
-  if (/context_activity|context_details|delete_context|unknown tool|not found|no such tool/i.test(message))
+  if (/unknown tool|not found|no such tool|invalid arguments for tool/i.test(message))
     return 'This chat is still running an older vine-context server. Start a new chat (or restart this one) to pick up the new one.'
   if (/not connected|no server|disconnected|closed/i.test(message)) return 'The vine-context server isn’t connected in this chat. Check it’s enabled, then start a new chat.'
   return message
@@ -354,7 +354,7 @@ function loaded() {
 async function refresh($: Engine) {
   try {
     const which = await read($, viewing)
-    const r = (await call($, 'context_activity', { limit: 40, snapshot: wantSnapshot, ...(which ? { context: which } : {}) })) as Activity | { context: null; your_contexts: string[] }
+    const r = (await call($, 'recent', { activity: true, limit: 40, snapshot: wantSnapshot, ...(which ? { context: which } : {}) })) as Activity | { context: null; your_contexts: string[] }
     loaded()
     failures = 0
     if (errorFromPoll) await clearError($)
@@ -439,7 +439,7 @@ async function act($: Engine, tool: string, args: Record<string, unknown>, done?
 /** Renames a context on this machine; the panel follows it to its new name. */
 async function renameContext($: Engine, from: string, to: string) {
   try {
-    await call($, 'rename_context', { name: from, to })
+    await call($, 'update_context', { context: from, rename_to: to })
     await clearError($)
     await say($, `Renamed to '${to}' on this machine. Other members keep their own name for it.`)
     if ((await read($, managing)) === from) await update($, managing, () => to)
@@ -468,7 +468,7 @@ async function loadDetails($: Engine) {
   const name = await detailsOf($)
   if (!name) return
   try {
-    const d = (await call($, 'context_details', { name })) as ContextDetails
+    const d = (await call($, 'context_info', { context: name, details: true })) as ContextDetails
     if ((await detailsOf($)) === name) await update($, details, () => d)
   } catch (e) {
     await fail($, trouble((e as Error).message))
@@ -845,14 +845,14 @@ export const register: Register = on => {
     /** Turns a context on or off for this chat. */
     const toggle = (n: string) =>
       void (inChat(n)
-        ? act($, 'remove_context', { name: n }, `'${n}' is off for this chat. It stays on this machine.`)
-        : act($, using.length ? 'add_context' : 'use_context', { name: n }, `'${n}' is on for this chat.`))
+        ? act($, 'use_context', { name: n, mode: 'remove' }, `'${n}' is off for this chat. It stays on this machine.`)
+        : act($, 'use_context', { name: n, ...(using.length ? { mode: 'add' } : {}) }, `'${n}' is on for this chat.`))
     /** Starts the join-code step for one of the chat's contexts: the panel moves to it, and the code lands in its People tab. */
     const share = (n: string) => {
       inviteNote = ''
       return show(n).then(() => update($, inviting, () => ({ name: n, role: 'contributor' as Invite['role'] })))
     }
-    const writeHere = (n: string) => void act($, 'add_context', { name: n, write_here: true }, `New items go to '${n}' unless another fits better.`)
+    const writeHere = (n: string) => void act($, 'use_context', { name: n, mode: 'add', write_here: true }, `New items go to '${n}' unless another fits better.`)
 
     /** A context's pin: whether new chats started in this chat's folder (or below it) start with it. */
     const pin = (n: string, where: string) => {
@@ -1019,9 +1019,9 @@ export const register: Register = on => {
                 {!inTab &&
                   sharing !== undefined &&
                   (sharing ? (
-                    <Button key={`detail-offline-${n}`} label="Go offline" variant="secondary" dimColor onPress={() => void act($, 'stop_sharing', { context: n }, `'${n}' is offline: not syncing until you go online again.`)} />
+                    <Button key={`detail-offline-${n}`} label="Go offline" variant="secondary" dimColor onPress={() => void act($, 'sharing', { action: 'off', context: n }, `'${n}' is offline: not syncing until you go online again.`)} />
                   ) : (
-                    <Button key={`detail-online-${n}`} label="Go online" variant="secondary" onPress={() => void act($, 'start_sharing', { context: n }, `'${n}' is back online: syncing with the other members.`)} />
+                    <Button key={`detail-online-${n}`} label="Go online" variant="secondary" onPress={() => void act($, 'sharing', { action: 'on', context: n }, `'${n}' is back online: syncing with the other members.`)} />
                   ))}
               </Box>
             )}
@@ -1119,7 +1119,7 @@ export const register: Register = on => {
             autoFocus
             onSubmit={(v: string) => {
               close()
-              if (v.trim() && v.trim() !== before) void act($, 'describe_context', { description: v.trim(), context: n }, 'Saved. Every member’s agent sees it.')
+              if (v.trim() && v.trim() !== before) void act($, 'update_context', { purpose: v.trim(), context: n }, 'Saved. Every member’s agent sees it.')
             }}
           />,
         ),
@@ -1297,7 +1297,7 @@ export const register: Register = on => {
         return update($, creating, () => null)
           .then(() => update($, switching, () => false))
           .then(() => update($, viewing, () => name))
-          .then(() => act($, a ? 'add_context' : 'use_context', { name, description }, `Created '${name}'${a ? ' and added it to this chat' : ''}. No one is invited yet: use Invite someone when you want to let a person in.`))
+          .then(() => act($, 'use_context', { name, description, ...(a ? { mode: 'add' } : {}) }, `Created '${name}'${a ? ' and added it to this chat' : ''}. No one is invited yet: use Invite someone when you want to let a person in.`))
       }
       return modal(
         'new-context-step',
@@ -1461,7 +1461,7 @@ export const register: Register = on => {
     const held = (n: GraphNode) => (heldByNode.has(n.key) ? <Text color="warning"> · still only on this machine</Text> : '')
     const undo = (n: GraphNode) => {
       const change = heldByNode.get(n.key)
-      return change ? <Button key={`undo-${n.key}`} label="Undo" variant="primary" onPress={() => void act($, 'take_back', { id: change.id, ...ctx }, 'Taken back. It never left this machine.')} /> : null
+      return change ? <Button key={`undo-${n.key}`} label="Undo" variant="primary" onPress={() => void act($, 'withdraw', { id: change.id, undo_only: true, ...ctx }, 'Taken back. It never left this machine.')} /> : null
     }
     /** Withdraw, for its author or an admin, once it has been shared (before that, Undo). */
     const withdraw = (n: GraphNode) =>
@@ -1489,7 +1489,7 @@ export const register: Register = on => {
           autoFocus
           onSubmit={(v: string) => {
             void update($, renaming, () => false)
-            if (v.trim() && v.trim() !== a.you.name) void act($, 'set_my_name', { name: v.trim() }, `You're now ${v.trim()} in every context on this machine.`)
+            if (v.trim() && v.trim() !== a.you.name) void act($, 'update_context', { my_name: v.trim() }, `You're now ${v.trim()} in every context on this machine.`)
           }}
         />,
         { label: 'Cancel', onPress: () => void update($, renaming, () => false) },
@@ -1510,7 +1510,7 @@ export const register: Register = on => {
             variant="primary"
             onPress={() => {
               void update($, confirmRemove, () => null)
-              void act($, 'remove_peer', { name: leaving.name, ...ctx }, `${leaving.name} was removed. They keep the copy they already had.`)
+              void act($, 'manage_member', { action: 'remove', name: leaving.name, ...ctx }, `${leaving.name} was removed. They keep the copy they already had.`)
             }}
           />
         </Box>,
@@ -1676,7 +1676,7 @@ export const register: Register = on => {
     const unshown = members.length - shown.length
     const unshownOnline = members.filter((p: Person) => p.online).length - shown.filter((p: Person) => p.online).length
     const counts: Record<Tab, number | undefined> = { overview: undefined, questions: t?.open.length, claims: t?.claims.length, people: members.length, settings: undefined }
-    const goOnline = <Button key="go-online" label="Go online" variant="primary" onPress={() => void act($, 'start_sharing', { ...ctx }, 'Back online: syncing with the other members.')} />
+    const goOnline = <Button key="go-online" label="Go online" variant="primary" onPress={() => void act($, 'sharing', { action: 'on', ...ctx }, 'Back online: syncing with the other members.')} />
 
     const header = (
       <Box flexDirection="column" gap="xs">
@@ -1692,7 +1692,7 @@ export const register: Register = on => {
               plain
               dimColor
               onPress={() =>
-                void act($, a.sharing ? 'stop_sharing' : 'start_sharing', { ...ctx }, a.sharing ? 'Offline: not syncing until you go online again.' : 'Back online: syncing with the other members.')
+                void act($, 'sharing', { action: a.sharing ? 'off' : 'on', ...ctx }, a.sharing ? 'Offline: not syncing until you go online again.' : 'Back online: syncing with the other members.')
               }
             >
               <Text size="footnote" underline>
@@ -1877,7 +1877,7 @@ export const register: Register = on => {
                   split(
                     `held-${c.id}`,
                     <Text wrap="wrap">{short(c.summary, 140)}</Text>,
-                    <Button key={`undo-change-${c.id}`} label="Undo" variant="primary" onPress={() => void act($, 'take_back', { id: c.id, ...ctx }, 'Taken back. It never left this machine.')} />,
+                    <Button key={`undo-change-${c.id}`} label="Undo" variant="primary" onPress={() => void act($, 'withdraw', { id: c.id, undo_only: true, ...ctx }, 'Taken back. It never left this machine.')} />,
                     'center',
                   ),
                 )}
@@ -2219,7 +2219,7 @@ export const register: Register = on => {
                   key={`role-${p.fingerprint}`}
                   value={p.role}
                   options={['reader', 'contributor', 'admin'].map(r => ({ key: r, value: r, label: r }))}
-                  onSelect={(r: string) => r !== p.role && void act($, 'set_peer_role', { name: p.name, role: r, ...ctx }, `${p.name} is now ${r}.`)}
+                  onSelect={(r: string) => r !== p.role && void act($, 'manage_member', { action: 'set_role', name: p.name, role: r, ...ctx }, `${p.name} is now ${r}.`)}
                 />
               ),
               admin && !p.creator && !p.you && p.role && (
@@ -2282,7 +2282,7 @@ export const register: Register = on => {
                                 variant="secondary"
                                 onPress={(press: UiPressArgument) => void $.ui.copy({ text: send, surface: press.surface }).then(r => r.isCopied && $.ui.toast('Copied: send it privately, to that one person.'))}
                               />,
-                              <Button key={`cancel-${i.id}`} label="Cancel" variant="secondary" dimColor onPress={() => void act($, 'revoke_invite', { id: i.id, ...ctx }, 'Cancelled: that code no longer works.')} />,
+                              <Button key={`cancel-${i.id}`} label="Cancel" variant="secondary" dimColor onPress={() => void act($, 'manage_member', { action: 'revoke_invite', invite: i.id, ...ctx }, 'Cancelled: that code no longer works.')} />,
                             ],
                             'center',
                           )}

@@ -95,7 +95,7 @@ let last = "";
 for (;;) {
   await new Promise((r) => setTimeout(r, 5000));
   try {
-    const s = await call("sharing_status");
+    const s = await call("sharing", { action: "status" });
     const people = (s.people ?? []).map((p) => `${p.name}${p.you ? " (you)" : ""}: ${p.role}, ${p.you || p.online ? "online" : "offline"}`).join("; ");
     const line = `${(await claims()).length} claim(s) · ${people}`;
     if (line !== last) log((last = line));

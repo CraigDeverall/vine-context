@@ -8,7 +8,7 @@
 // `vine ui`. Agents write; people steer: the view never writes a claim. Answer,
 // Correct, "Keep this one" and the rest hand the person's words to the agent.
 //
-// It reads through `context_activity`, which never uses up the notices meant
+// It reads through `recent` with `activity`, which never uses up the notices meant
 // for the agent, and acts through the server's ordinary tools. It polls.
 
 import { Alert } from "@squonk/ui/alert";
@@ -331,7 +331,7 @@ function ContextsPanel({ b }: { b: Bridge }) {
   const [creating, setCreating] = useState<{ error: string | null } | null>(null);
   /** A context that's off for this chat (by name), shown on its own page: it can't be opened. */
   const [managing, setManaging] = useState<string | null>(null);
-  /** Its details (`context_details`), or those of the open context's Settings tab. */
+  /** Its details (`context_info` with `details`), or those of the open context's Settings tab. */
   const [details, setDetails] = useState<ContextDetails | null>(null);
   const [deleting, setDeleting] = useState<{ name: string; error: string | null } | null>(null);
   const [editing, setEditing] = useState(false);
@@ -367,7 +367,7 @@ function ContextsPanel({ b }: { b: Bridge }) {
 
   const refresh = async (which = viewing.current) => {
     try {
-      take(await b.call<Activity | NoContext>("context_activity", { limit: 40, snapshot: true, ...(which ? { context: which } : {}) }));
+      take(await b.call<Activity | NoContext>("recent", { activity: true, limit: 40, snapshot: true, ...(which ? { context: which } : {}) }));
     } catch (e) {
       setReady(true);
       setTrouble(e instanceof NoToolCalls ? "This app can’t refresh the view by itself. Ask your agent to open the contexts panel again to see the latest." : (e as Error).message);
@@ -429,7 +429,7 @@ function ContextsPanel({ b }: { b: Bridge }) {
     const name = managingNow.current;
     if (!name) return;
     try {
-      const d = await b.call<ContextDetails>("context_details", { name });
+      const d = await b.call<ContextDetails>("context_info", { context: name, details: true });
       if (managingNow.current === name) setDetails(d);
     } catch (e) {
       setError((e as Error).message);
@@ -524,8 +524,8 @@ function ContextsPanel({ b }: { b: Bridge }) {
   /** Turns a context on or off for this chat. */
   const toggle = (n: string) =>
     void (inChat(n)
-      ? act("remove_context", { name: n }, `'${n}' is off for this chat. It stays on this machine.`)
-      : act(using.length ? "add_context" : "use_context", { name: n }, `'${n}' is on for this chat.`));
+      ? act("use_context", { name: n, mode: "remove" }, `'${n}' is off for this chat. It stays on this machine.`)
+      : act("use_context", { name: n, ...(using.length ? { mode: "add" } : {}) }, `'${n}' is on for this chat.`));
   /** The switch that turns a context on or off for this chat. */
   const onSwitch = (n: string) => {
     const c = inChat(n);
@@ -548,7 +548,7 @@ function ContextsPanel({ b }: { b: Bridge }) {
     draft.current.invite = "";
     return show(n).then(() => setInviting("contributor"));
   };
-  const writeHere = (n: string) => void act("add_context", { name: n, write_here: true }, `New items go to '${n}' unless another fits better.`);
+  const writeHere = (n: string) => void act("use_context", { name: n, mode: "add", write_here: true }, `New items go to '${n}' unless another fits better.`);
 
   /** A context's pin: whether new chats started in this chat's folder (or below it) start with it. */
   const pin = (n: string) => {
@@ -658,9 +658,9 @@ function ContextsPanel({ b }: { b: Bridge }) {
               )}
               {sharing !== undefined &&
                 (sharing ? (
-                  <Button onClick={() => void act("stop_sharing", { context: n }, `'${n}' is offline: not syncing until you go online again.`)}>Go offline</Button>
+                  <Button onClick={() => void act("sharing", { action: "off", context: n }, `'${n}' is offline: not syncing until you go online again.`)}>Go offline</Button>
                 ) : (
-                  <Button onClick={() => void act("start_sharing", { context: n }, `'${n}' is back online: syncing with the other members.`)}>Go online</Button>
+                  <Button onClick={() => void act("sharing", { action: "on", context: n }, `'${n}' is back online: syncing with the other members.`)}>Go online</Button>
                 ))}
             </Cluster>
           )}
@@ -783,7 +783,7 @@ function ContextsPanel({ b }: { b: Bridge }) {
       setCreating(null);
       setSwitching(false);
       viewing.current = name;
-      void act(a ? "add_context" : "use_context", { name, description }, `Created '${name}'${a ? " and added it to this chat" : ""}. No one is invited yet: use Invite someone when you want to let a person in.`);
+      void act("use_context", { name, description, ...(a ? { mode: "add" } : {}) }, `Created '${name}'${a ? " and added it to this chat" : ""}. No one is invited yet: use Invite someone when you want to let a person in.`);
     };
     return modal(
       "Create a new context",
@@ -930,7 +930,7 @@ function ContextsPanel({ b }: { b: Bridge }) {
     const change = heldByNode.get(n.key);
     return (
       change && (
-        <Button variant="primary" onClick={() => void act("take_back", { id: change.id, ...ctx }, "Taken back. It never left this machine.")}>
+        <Button variant="primary" onClick={() => void act("withdraw", { id: change.id, undo_only: true, ...ctx }, "Taken back. It never left this machine.")}>
           Undo
         </Button>
       )
@@ -966,7 +966,7 @@ function ContextsPanel({ b }: { b: Bridge }) {
         autoFocus
         onSubmit={(v) => {
           setEditing(false);
-          if (v.trim() && v.trim() !== a.description) void act("describe_context", { description: v.trim(), ...ctx }, "Saved. Every member’s agent sees it.");
+          if (v.trim() && v.trim() !== a.description) void act("update_context", { purpose: v.trim(), ...ctx }, "Saved. Every member’s agent sees it.");
         }}
       />,
       { label: "Cancel", onClick: () => setEditing(false) },
@@ -984,7 +984,7 @@ function ContextsPanel({ b }: { b: Bridge }) {
         autoFocus
         onSubmit={(v) => {
           setRenaming(false);
-          if (v.trim() && v.trim() !== a.you.name) void act("set_my_name", { name: v.trim() }, `You're now ${v.trim()} in every context on this machine.`);
+          if (v.trim() && v.trim() !== a.you.name) void act("update_context", { my_name: v.trim() }, `You're now ${v.trim()} in every context on this machine.`);
         }}
       />,
       { label: "Cancel", onClick: () => setRenaming(false) },
@@ -1068,7 +1068,7 @@ function ContextsPanel({ b }: { b: Bridge }) {
           variant="primary"
           onClick={() => {
             setConfirmRemove(null);
-            void act("remove_peer", { name: leaving.name, ...ctx }, `${leaving.name} was removed. They keep the copy they already had.`);
+            void act("manage_member", { action: "remove", name: leaving.name, ...ctx }, `${leaving.name} was removed. They keep the copy they already had.`);
           }}
         >
           Remove {leaving.name}
@@ -1256,7 +1256,7 @@ function ContextsPanel({ b }: { b: Bridge }) {
   const unshownOnline = members.filter((p) => p.online).length - shown.filter((p) => p.online).length;
   const counts: Record<Tab, number | undefined> = { overview: undefined, questions: t?.open.length, claims: t?.claims.length, people: members.length, settings: undefined };
   const goOnline = (
-    <Button variant="primary" onClick={() => void act("start_sharing", { ...ctx }, "Back online: syncing with the other members.")}>
+    <Button variant="primary" onClick={() => void act("sharing", { action: "on", ...ctx }, "Back online: syncing with the other members.")}>
       Go online
     </Button>
   );
@@ -1295,7 +1295,7 @@ function ContextsPanel({ b }: { b: Bridge }) {
         >
           {a.sharing ? "Syncing" : "Offline"}
         </Badge>
-        <Button variant="ghost" onClick={() => void act(a.sharing ? "stop_sharing" : "start_sharing", { ...ctx }, a.sharing ? "Offline: not syncing until you go online again." : "Back online: syncing with the other members.")}>
+        <Button variant="ghost" onClick={() => void act("sharing", { action: a.sharing ? "off" : "on", ...ctx }, a.sharing ? "Offline: not syncing until you go online again." : "Back online: syncing with the other members.")}>
           {a.sharing ? "Go offline" : "Go online"}
         </Button>
         <Divider orientation="vertical" aria-hidden="true" />
@@ -1435,7 +1435,7 @@ function ContextsPanel({ b }: { b: Bridge }) {
               {heldMine.map((c) => (
                 <Split key={c.id}>
                   <Text>{short(c.summary, 140)}</Text>
-                  <Button variant="primary" onClick={() => void act("take_back", { id: c.id, ...ctx }, "Taken back. It never left this machine.")}>
+                  <Button variant="primary" onClick={() => void act("withdraw", { id: c.id, undo_only: true, ...ctx }, "Taken back. It never left this machine.")}>
                     Undo
                   </Button>
                 </Split>
@@ -1775,7 +1775,7 @@ function ContextsPanel({ b }: { b: Bridge }) {
                   aria-label={`Role of ${p.name}`}
                   fullWidth={false}
                   value={p.role}
-                  onChange={(v) => v && v !== p.role && void act("set_peer_role", { name: p.name, role: v, ...ctx }, `${p.name} is now ${v}.`)}
+                  onChange={(v) => v && v !== p.role && void act("manage_member", { action: "set_role", name: p.name, role: v, ...ctx }, `${p.name} is now ${v}.`)}
                   options={ROLES.map((r) => ({ value: r, label: r }))}
                 />
                 <Button onClick={() => setConfirmRemove(p.fingerprint)}>Remove</Button>
@@ -1824,7 +1824,7 @@ function ContextsPanel({ b }: { b: Bridge }) {
                           </Text>
                           {i.id === made && <Toned tone="ok"> · new: send it now</Toned>}
                         </Text>
-                        <Button onClick={() => void act("revoke_invite", { id: i.id, ...ctx }, "Cancelled: that code no longer works.")}>Cancel</Button>
+                        <Button onClick={() => void act("manage_member", { action: "revoke_invite", invite: i.id, ...ctx }, "Cancelled: that code no longer works.")}>Cancel</Button>
                       </Split>
                       <HStack gap="xs">
                         <TextField readOnly value={sendLine(i.code)} onFocus={(e) => e.currentTarget.select()} aria-label="Message to send" />

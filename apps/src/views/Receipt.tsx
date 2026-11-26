@@ -24,7 +24,7 @@ interface ReceiptData {
   title: string;
   input: Record<string, unknown>;
   result: Record<string, unknown> | null;
-  undo: { take_back: boolean; withdraw: boolean } | null;
+  undo: { held: boolean; withdraw: boolean } | null;
   where: string;
 }
 
@@ -53,7 +53,7 @@ export function Receipt({ b, open }: { b: Bridge; open?: (p: Panel) => void }) {
   const change = typeof d.result?.change === "string" ? d.result.change : undefined;
   const item = typeof d.result?.id === "string" ? d.result.id : undefined;
   const left = Math.ceil((sharedAt - now) / 1000);
-  const held = Boolean(d.undo?.take_back && change && left > 0);
+  const held = Boolean(d.undo?.held && change && left > 0);
   const canWithdraw = Boolean(d.undo?.withdraw && item && !held && (d.tool === "add_claim" || d.tool === "ask_question"));
 
   const run = async (tool: string, args: Record<string, unknown>, done: string) => {
@@ -68,7 +68,7 @@ export function Receipt({ b, open }: { b: Bridge; open?: (p: Panel) => void }) {
       setBusy(false);
     }
   };
-  const undo = () => run("take_back", { id: change }, "Taken back. It never left this machine.");
+  const undo = () => run("withdraw", { id: change, undo_only: true }, "Taken back. It never left this machine.");
   const withdraw = () => run("withdraw", { id: item }, "Withdrawn. The other members have it, so it stays in the graph's history.");
 
   return (

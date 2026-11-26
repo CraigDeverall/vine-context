@@ -3,7 +3,7 @@
 // STUN servers only tell a machine its public address; two public ones are the
 // default. A TURN server carries the data between two machines that can't
 // reach each other directly (strict NAT). There is none by default: a person
-// who needs one sets it with `vine turn set` (or the set_turn_server tool),
+// who needs one sets it with `vine turn set` (or the turn_server tool),
 // and it is kept in <data dir>/network.json for every Vine process on the
 // machine. Each new link reads it, so a running host picks up a change.
 //

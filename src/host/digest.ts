@@ -143,7 +143,7 @@ export async function digest(changes: Change[], ctx: DigestContext): Promise<str
   const head = others.length >= 3 ? [`Caught up ${others.length} changes from ${authors.join(", ")}.`] : [];
   const shown = [...head, ...lines].slice(0, MAX_LINES);
   const more = head.length + lines.length - shown.length;
-  return more > 0 ? [...shown, `…and ${more} more (context_activity lists them).`] : shown;
+  return more > 0 ? [...shown, `…and ${more} more (recent with activity lists them).`] : shown;
 }
 
 /** For someone who has just joined: what the context holds, and what is open or disputed. */

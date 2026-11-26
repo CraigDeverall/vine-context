@@ -60,7 +60,7 @@ const waitFor = async (cond: () => Promise<boolean> | boolean, ms = 20_000) => {
 describe("the agent hook", () => {
   it("tells a chat's agent what its context is for, then reminds it where the chat records", async () => {
     const a = await agent("alice", "launch", "chat-brief");
-    await a.call("describe_context", { description: "Decisions about the spring launch" });
+    await a.call("update_context", { purpose: "Decisions about the spring launch" });
     await a.call("add_claim", { text: "The launch is on 3 March" });
     await waitFor(() => (a.hook("session-start") ?? "").includes("1 claim"));
 

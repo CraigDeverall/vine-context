@@ -37,7 +37,7 @@ describe("vine mcp", () => {
     const { tools } = await client.listTools();
     const names = tools.map((t) => t.name);
     expect(names).toEqual(
-      expect.arrayContaining(["add_claim", "search", "beliefs", "context_info", "model_guide", "share_context", "revoke_invite", "join_context", "remove_peer"]),
+      expect.arrayContaining(["add_claim", "search", "beliefs", "context_info", "model_guide", "share_context", "sharing", "manage_member", "join_context", "open_view"]),
     );
     const add = tools.find((t) => t.name === "add_claim")!;
     expect(add.inputSchema.required).toEqual(["text"]);

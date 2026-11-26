@@ -85,7 +85,7 @@ function briefing(dataDir: string, names: string[], writeTo: string | undefined)
     const s = summary(dataDir, name);
     const who = s.members > 1 ? `shared with ${plural(s.members - 1, "other member")}` : "only this machine's person so far";
     lines.push(`Vine Context: this chat uses the shared context "${name}" (${who}).`);
-    lines.push(s.description ? `What it is for: ${s.description}` : "It has no description yet (describe_context sets one).");
+    lines.push(s.description ? `What it is for: ${s.description}` : "It has no description yet (update_context sets one).");
     lines.push(`${plural(s.claims, "claim")} and ${plural(s.questions, "question")} have been recorded in it.`);
   }
   if (names.length > 1 && writeTo) lines.push(`Writes from this chat go to "${writeTo}" unless a call names another.`);
