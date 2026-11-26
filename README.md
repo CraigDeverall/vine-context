@@ -271,7 +271,7 @@ Each is explained in [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md#limits).
 - [MCP TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk) and [MCP Apps (ext-apps)](https://github.com/modelcontextprotocol/ext-apps)
 - [node-datachannel](https://github.com/murat-dogan/node-datachannel) (WebRTC)
 - [nostr-tools](https://github.com/nbd-wtf/nostr-tools) (event signing)
-- Preact running React components
+- React with the [@squonk/ui](https://ui.squonkstack.io) design system (MIT; vendored in `vendor/` because it is published to a private registry)
 - zod, yaml, esbuild, tsup, vitest
 
 Written with the help of Claude Code (Anthropic's AI coding agent).

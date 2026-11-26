@@ -69,8 +69,11 @@ export function useBridge(): Bridge | { error: string } | undefined {
       });
     app.onhostcontextchanged = (ctx) => applyContext(ctx as McpUiHostContext);
     setState({ app });
-    app
-      .connect()
+    // Connect once the page has loaded: a host that starts listening on the
+    // frame's load event would miss a handshake sent before it.
+    const loaded = document.readyState === "complete" ? Promise.resolve() : new Promise<void>((r) => window.addEventListener("load", () => r(), { once: true }));
+    loaded
+      .then(() => app.connect())
       .then(() => {
         applyContext(app.getHostContext());
         if (!app.getHostCapabilities()?.serverTools) setCanCall(false);

@@ -14,7 +14,6 @@ import { VStack } from "@squonk/ui/vstack";
 import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { Brand } from "./brand";
-import "./styles.css";
 import { VineTheme } from "./theme";
 
 interface AppTool {
@@ -76,10 +75,10 @@ function View({ client, tool: { name, title, uri }, onMessage }: { client: Clien
         const result = await client.callTool({ name: name, arguments: {} });
         if (!cancelled) await bridge!.sendToolResult(result as never);
       };
+      // Listen before the view loads, so its first message (ui/initialize) can't be missed.
+      await bridge.connect(new PostMessageTransport(iframe.contentWindow!, iframe.contentWindow!));
       // The view gets an opaque origin: scripts only, no access to this page.
       iframe.srcdoc = html;
-      await new Promise((r) => iframe.addEventListener("load", r, { once: true }));
-      await bridge.connect(new PostMessageTransport(iframe.contentWindow!, iframe.contentWindow!));
     })().catch((e: Error) => setError(e.message));
     return () => {
       cancelled = true;

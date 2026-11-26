@@ -1,6 +1,7 @@
 import { Alert } from "@squonk/ui/alert";
 import { Button } from "@squonk/ui/button";
 import { HStack } from "@squonk/ui/hstack";
+import { Presentation } from "@squonk/ui/presentation";
 import { Spinner } from "@squonk/ui/spinner";
 import { Text } from "@squonk/ui/text";
 import { VStack } from "@squonk/ui/vstack";
@@ -8,7 +9,6 @@ import { useState } from "react";
 import { createRoot } from "react-dom/client";
 import { NoToolCalls, asks, useBridge, type Bridge } from "./bridge";
 import type { Panel } from "./panel";
-import "./styles.css";
 import { VineTheme } from "./theme";
 import { Conflicts } from "./views/Conflicts";
 import { Console } from "./views/Console";
@@ -94,6 +94,8 @@ function Root() {
 
 createRoot(document.getElementById("root")!).render(
   <VineTheme>
-    <Root />
+    <Presentation register="compact">
+      <Root />
+    </Presentation>
   </VineTheme>,
 );
