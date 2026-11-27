@@ -4,7 +4,8 @@ import { packageInfo } from "../core/package-root.js";
 const pkg = packageInfo();
 const [command, ...rest] = process.argv.slice(2);
 
-const USAGE = `vine ${pkg.version}: a shared context graph of claims and questions, replicated peer to peer between people's AI agents
+const USAGE = `vine ${pkg.version}: Vine Context – P2P Shared Context Graphs
+One graph of claims and questions, replicated peer to peer between people's AI agents
 
 Usage: vine <command> [options]
 

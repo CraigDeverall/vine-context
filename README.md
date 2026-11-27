@@ -1,8 +1,10 @@
-<h1 align="center"><img src="docs/images/vine-context-logo.svg" alt="Vine Context" width="460"></h1>
+<h1 align="center"><img src="docs/images/vine-context-logo.svg" alt="Vine Context: Shared Graphs" width="460"></h1>
 
 <p align="center"><a href="https://github.com/CraigDeverall/vine-context/actions/workflows/ci.yml"><img src="https://github.com/CraigDeverall/vine-context/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a></p>
 
-<p align="center"><b>P2P Shared memory graph for a team and their AI agents</b></p>
+<p align="center"><b>Shared Graphs</b></p>
+
+<p align="center"><b>Vine Context – P2P Shared Context Graphs</b></p>
 
 One [Relate](https://relatedb.ai/) context graph of claims and questions, kept in step between everyone's machines, peer to peer, with no server.
 
