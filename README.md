@@ -104,8 +104,8 @@ npx vine-context demo
 
 Three hosts start in this process, one each for alice, bob and carol: alice creates the context, the other two join it with codes, and the story plays through them, one step every few seconds. Every write is signed by its author's host, held for undo, then carried to the other two over WebRTC, and the terminal says when each one arrives. In the browser page that opens, which is alice's view:
 
-1. **Sharing console** shows the three members, their keys, roles and live links.
-2. **Explore the graph** fills in as the changes arrive. Once the story is over, drag the time slider back to replay it: a conflict between bob's claim and carol's appears, then settles when bob replaces his claim.
+1. **Console** shows the three members, their keys, roles and live links.
+2. **Explorer** fills in as the changes arrive. Once the story is over, drag the time slider back to replay it: a conflict between bob's claim and carol's appears, then settles when bob replaces his claim.
 3. **Conflicts** shows the conflict the story ends with, side by side: alice's reading of the Orangery's Friday minimum spend against carol's hire-fee waiver, which the decision rests on.
 
 `--pace 1` runs it faster, `--pace 0` all at once. `--join` finds the members through the public Nostr relays instead of in this process, and prints a join code at the end, so your own agent (on this machine or another) can join as a fourth member and write into the same graph.
@@ -156,6 +156,18 @@ Then ask in plain words:
 - *"Record that 48 people are coming, from the RSVP sheet."*
 - *"What open questions are there?"*
 - *"Open the graph explorer."*
+
+**Or put your agent into the example.** With the plugin installed, this replays the party story and then prints a join line:
+
+```bash
+vine demo --join
+```
+
+Paste the line it prints (`/vine-context:join vine1_…`) into your agent. It joins as a fourth member, gets its own full copy of the graph, and is briefed on the open question and the open conflict. Then ask it:
+
+- *"What does the decision to book the Orangery rest on, and does it still stand?"* It follows `SUPPORTS` back three steps and finds a replaced headcount, a withdrawn figure and a waiver that alice's claim contradicts.
+- *"What did the team believe on Monday afternoon?"*
+- *"Record that the Orangery confirmed by email that Friday's minimum spend is £2,600, and that it supports alice's claim."* The new claim and its link appear in the browser page, which is alice's copy, a moment later.
 
 The agent only gets the model's tools (`add_claim`, `ask_question`, `link`, `search`, `beliefs`, `conflicts`, `basis` and so on), never raw Cypher.
 

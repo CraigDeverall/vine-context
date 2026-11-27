@@ -14,9 +14,9 @@ Back to the [README](../README.md).
    npx vine-context demo
    ```
 
-   Three members start in one process, join with codes, and replay the story (three colleagues planning the office Christmas party) through their own hosts, syncing peer to peer; the terminal narrates each step as it reaches the others. In the browser (alice's view): *Sharing console* for the three members and their links, *Explore the graph* to watch it grow, then drag the time slider back to replay it; *Conflicts* for the one the story ends with. `--pace 1` runs it faster.
+   Three members start in one process, join with codes, and replay the story (three colleagues planning the office Christmas party) through their own hosts, syncing peer to peer; the terminal narrates each step as it reaches the others. In the browser (alice's view): *Console* for the three members and their links, *Explorer* to watch it grow, then drag the time slider back to replay it; *Conflicts* for the one the story ends with. `--pace 1` runs it faster.
 
-   To use it with your own agent, `npx vine-context setup` installs the `vine` command and the plugin for Claude Code or Codex, printing each command before it runs it ([README](../README.md#setup-and-run)).
+   To put your own agent into the story, `npx vine-context setup` then `vine demo --join`: it prints a join line to paste into your agent, which joins as a fourth member ([README](../README.md#3-use-it-from-your-agent)). `npx vine-context setup` installs the `vine` command and the plugin for Claude Code or Codex, printing each command before it runs it ([README](../README.md#setup-and-run)).
 2. **Open the Relate store yourself.** It is a directory store that ships in the package and the repo, at [`examples/data/graphs/party`](../examples/data/graphs/party). `npx vine-context example /tmp/party` copies it out, and [Relate's CLI](https://relatedb.ai/docs/get-started/install/) opens the copy. [Eight queries to try](RELATE.md#explore-the-example-store), from *where did the team disagree?* to *what does the decision rest on, and does it still stand?*
 3. **Read how Relate is used:** [README](../README.md#how-it-uses-relate) for the short form, [RELATE.md](RELATE.md) for each feature and its Cypher.
 4. **Watch the demo video:** link to be added with the Devpost submission.

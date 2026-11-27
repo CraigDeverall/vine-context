@@ -150,7 +150,7 @@ async function demo(args: string[]): Promise<number> {
 Open this on this machine (it acts as alice; don't share it):
 ${server.url}
 
-Sharing console: the three members and their live links. Explore a context: the graph as it grows; drag the time slider back to replay it. Conflicts: bob and carol, until bob gives way.
+Console: the three members and their live links. Explorer: the graph as it grows; drag the time slider back to replay it. Conflicts: the one the story ends with, which the decision rests on.
 `);
   if (!values["no-open"]) {
     const { spawn } = await import("node:child_process");
