@@ -193,9 +193,12 @@ export function Explorer({ b }: { b: Bridge }) {
         <div style={{ flex: 1, minWidth: 0 }}>
           <TextField placeholder="Filter items" value={filter} onChange={(e) => setFilter(e.target.value)} aria-label="Filter items" fullWidth />
         </div>
-        <Button variant="secondary" disabled={busy} onClick={() => (setAt(undefined), load())}>
-          Now
-        </Button>
+        {/* Only while an earlier moment is shown: with nothing to go back from, the button did nothing. */}
+        {at !== undefined && (
+          <Button variant="secondary" disabled={busy} onClick={() => (setAt(undefined), load())}>
+            Back to now
+          </Button>
+        )}
       </HStack>
       {range && range.max > range.min && (
         <HStack gap="sm" align="center">
