@@ -324,6 +324,39 @@ tools:
                  + [(x)-[r]->(n) | {direction: 'in', type: type(r), id: x.id, text: x.text, recorded_at: r.recorded_at, recorded_by: r.recorded_by}] AS links
         single: true
 
+  - name: basis
+    title: What a claim rests on
+    kind: read
+    description: >-
+      Follow SUPPORTS back from one claim to everything it rests on, however many
+      steps away: each piece of evidence, how far back it is, and whether it
+      still stood at that moment (default now). Evidence that was replaced or
+      withdrawn, or that a current claim contradicts, is marked, so you can say
+      when a belief rests on something the group no longer holds. Use it before
+      relying on a claim, and when asked why the group believes something.
+    input:
+      id: { type: id, required: true, description: The claim to trace back }
+      at: { type: datetime, description: Trace it as the graph stood at this time (ISO 8601). Default now. }
+      depth: { type: integer, min: 1, max: 6, default: 4, description: How many steps of support to follow back }
+    steps:
+      - cypher: |
+          OPTIONAL MATCH (c:Claim {id: $id})
+          RETURN CASE WHEN c IS NULL THEN 'No claim ' + $id + '.' END AS _error
+      - cypher: |
+          WITH datetime(coalesce($at, $now)) AS T
+          MATCH p = (e:Claim)-[:SUPPORTS*1..6]->(c:Claim {id: $id})
+          WHERE length(p) <= $depth AND all(r IN relationships(p) WHERE r.recorded_at <= T)
+          WITH e, T, min(length(p)) AS steps
+          RETURN e.id AS id, e.text AS text, e.source AS source,
+                 e.recorded_at AS recorded_at, e.recorded_by AS recorded_by,
+                 steps,
+                 [(e)-[r:SUPPORTS]->(x:Claim) WHERE r.recorded_at <= T | x.id] AS supports,
+                 {{current_claim e}} AS current,
+                 e.withdrawn_at IS NOT NULL AND e.withdrawn_at <= T AS withdrawn,
+                 [(n:Claim)-[r:REPLACES]->(e) WHERE r.recorded_at <= T | n.id] AS replaced_by,
+                 [(o:Claim)-[r:CONTRADICTS]-(e) WHERE r.recorded_at <= T AND {{current_claim o}} | o.id] AS contradicted_by
+          ORDER BY steps, recorded_at
+
   - name: recent
     title: Recent changes
     kind: read

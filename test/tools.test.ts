@@ -57,12 +57,12 @@ async function agent(user: string, o: { graph?: string; holdMs?: number; browser
 }
 
 describe("the tool list", () => {
-  it("is the 25 tools, and the server's own are the reserved names", async () => {
+  it("is the 26 tools, and the server's own are the reserved names", async () => {
     const me = await agent("alice", { browserView: async () => "http://127.0.0.1:1/#token=t" });
     const names = (await me.tools()).map((t) => t.name).sort();
-    const model = ["add_claim", "ask_question", "beliefs", "conflicts", "history", "link", "open_questions", "recent", "reply", "search", "thread", "withdraw"];
+    const model = ["add_claim", "ask_question", "basis", "beliefs", "conflicts", "history", "link", "open_questions", "recent", "reply", "search", "thread", "withdraw"];
     expect(names).toEqual([...model, ...RESERVED_TOOL_NAMES].sort());
-    expect(names).toHaveLength(25);
+    expect(names).toHaveLength(26);
   });
 
   it("lists dates as a plain format, with no validation pattern", async () => {

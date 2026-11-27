@@ -68,7 +68,7 @@ It keeps working offline, and when the person who created it is away.
 | What do we believe now, and what did we believe on Tuesday? | `REPLACES` between claims, read *as of* any moment |
 | Where do we disagree? | `CONTRADICTS` between claims that are both still current |
 | Which questions are still open? | `ANSWERS` from a current claim to a question |
-| What is this based on? | `SUPPORTS` chains, followed back to the evidence |
+| What does this rest on, and does that still stand? | `SUPPORTS` chains, followed back any number of steps, each link tested against `REPLACES` and `CONTRADICTS` |
 | What has been said about an open question? | `REPLIES_TO` from the messages in its thread |
 
 **Who it's for:** a small group (up to about 20 people) working on the same thing, each with their own AI agent: an incident, a research question, a design decision, a project.
@@ -106,7 +106,7 @@ Three hosts start in this process, one each for alice, bob and carol: alice crea
 
 1. **Sharing console** shows the three members, their keys, roles and live links.
 2. **Explore the graph** fills in as the changes arrive. Once the story is over, drag the time slider back to replay it: a conflict between bob's claim and carol's appears, then settles when bob replaces his claim.
-3. **Conflicts** shows the two claims side by side while they contradict each other.
+3. **Conflicts** shows the conflict the story ends with, side by side: alice's reading of the Orangery's Friday minimum spend against carol's hire-fee waiver, which the decision rests on.
 
 `--pace 1` runs it faster, `--pace 0` all at once. `--join` finds the members through the public Nostr relays instead of in this process, and prints a join code at the end, so your own agent (on this machine or another) can join as a fourth member and write into the same graph.
 
@@ -157,7 +157,7 @@ Then ask in plain words:
 - *"What open questions are there?"*
 - *"Open the graph explorer."*
 
-The agent only gets the model's tools (`add_claim`, `ask_question`, `link`, `search`, `beliefs`, `conflicts` and so on), never raw Cypher.
+The agent only gets the model's tools (`add_claim`, `ask_question`, `link`, `search`, `beliefs`, `conflicts`, `basis` and so on), never raw Cypher.
 
 ### 4. Share it
 

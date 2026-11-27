@@ -32,14 +32,21 @@ describe("vine demo", () => {
     expect(a).not.toContain("The Riverside Room can take the whole party on Friday 12 Dec");
     expect(a).not.toContain("Last year's party cost £2,300, so £2,400 is plenty");
 
-    // The conflict settled, one question still open (replied to, not answered), on every copy.
+    // The first conflict settled and a second is open, one question still open (replied to, not answered), on every copy.
+    // The decision rests on evidence three steps deep, some of which no longer stands.
     for (const m of [alice, bob, carol]) {
-      expect(await m.call<Row[]>("conflicts", {})).toHaveLength(0);
+      const conflicts = (await m.call<Row[]>("conflicts", {})) as Row[];
+      expect(conflicts.map((c) => c.contradicts.text)).toEqual(["The Orangery waives its hire fee at a £1,800 minimum spend on food and drink, which fits the £2,400 budget"]);
+      const decision = ((await m.call<Row[]>("beliefs", {})) as Row[]).find((c) => c.text.startsWith("The party is at the Orangery"))!;
+      const basis = (await m.call<Row[]>("basis", { id: decision.id })) as Row[];
+      expect(basis.map((e) => e.steps)).toEqual([1, 1, 2, 2, 3]);
+      expect(basis.filter((e) => !e.current).map((e) => [e.steps, e.withdrawn, e.replaced_by.length])).toEqual([[2, false, 1], [3, true, 0]]);
+      expect(basis.filter((e) => e.contradicted_by.length)).toHaveLength(1);
       const open = (await m.call<Row[]>("open_questions", {})) as Row[];
       expect(open.map((q) => q.text)).toEqual(["Should partners be invited, and is there budget for them?"]);
       const thread = (await m.call<Row>("thread", { question: open[0]!.id })) as Row;
       expect(JSON.stringify(thread)).toContain("January drinks evening");
-      expect(await m.call<Row[]>("beliefs", {})).toHaveLength(6);
+      expect(await m.call<Row[]>("beliefs", {})).toHaveLength(7);
     }
 
     // Every step was narrated, and alice's agent was told what bob's and carol's writes meant for her.

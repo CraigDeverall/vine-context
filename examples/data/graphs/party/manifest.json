@@ -6,15 +6,15 @@
   "commit_ts": 6,
   "node_parts": [
     {
-      "path": "nodes/0-262144-7987dd27c85668d4810609133f705907.parquet",
+      "path": "nodes/0-262144-02fe04862dc2f9f6993e9d23cdb279c3.parquet",
       "id_lo": 0,
       "id_hi": 262144,
       "rows": 1,
-      "bytes": 1941
+      "bytes": 1957
     }
   ],
   "rel_parts": [],
-  "bytes_per_node": 1941.0,
+  "bytes_per_node": 1957.0,
   "bytes_per_rel": 0.0,
   "codec": "parquet",
   "indexes": [
@@ -164,7 +164,7 @@
             },
             "vector.dimensions": {
               "t": "int",
-              "v": 256
+              "v": 384
             },
             "vector.hnsw.ef_construction": {
               "t": "int",

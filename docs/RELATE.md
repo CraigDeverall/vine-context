@@ -63,7 +63,7 @@ The questions a team asks are questions about how statements relate, not about a
 - **"What do we believe?"** is every claim that no later claim `REPLACES` and that hasn't been withdrawn.
 - **"Where do we disagree?"** is every `CONTRADICTS` between two claims that are both still current.
 - **"What's still open?"** is every question with no current claim that `ANSWERS` it.
-- **"Why do we think that?"** is the `SUPPORTS` chain behind a claim.
+- **"Why do we think that, and does it still hold?"** is the `SUPPORTS` chain behind a claim, however long, with each link in it tested for whether it has been replaced, withdrawn or contradicted.
 - **"What did we believe on Tuesday?"** is any of the above, counting only nodes and relationships recorded by Tuesday.
 
 An agent without the graph would have to re-read every statement and guess which ones still stand. With it, the agent follows links that people and other agents recorded on purpose.
@@ -77,7 +77,8 @@ An agent without the graph would have to re-read every statement and guess which
 | Vector index and full-text index across labels | `search_embedding` and `search_text`, over `Claim` and `Question` |
 | Hybrid search: `SEARCH … COMBINE (VECTOR …, FULLTEXT …) USING WRRF` (the `hybrid-search` preview) | The `search` tool, and the check for a new claim that overlaps an existing one |
 | Temporal values and `EXISTS {}` subqueries | The *as of* reads: `beliefs`, `conflicts`, `open_questions` |
-| Pattern comprehensions and traversal | `beliefs` and `history`; the explorer's snapshot |
+| Pattern comprehensions | `beliefs` and `history`; the explorer's snapshot |
+| Variable-length paths (`SUPPORTS*1..6`) with a time test on every relationship in the path | `basis`: what a claim rests on, as of a moment |
 | Transactions (`begin` / `commit` / `rollback`) | Every read is one transaction. Every applied change is one. A write's checks run in one that is rolled back |
 
 The hybrid search query, from [`models/temporal-claims/tools.yaml`](../models/temporal-claims/tools.yaml):
@@ -93,7 +94,7 @@ The embedder is a small sentence model (bge-small, 384 numbers) that installs wi
 
 ## Explore the example store
 
-The example is a bit of office life in miniature: Alice, Bob and Carol planning the Christmas party over three days in November 2026. It holds 8 claims (one withdrawn), 3 questions, 3 replies and 14 relationships, of every kind.
+The example is a bit of office life in miniature: Alice, Bob and Carol planning the Christmas party over three days in November 2026. It holds 10 claims (one withdrawn, two replaced), 3 questions, 3 replies and 16 relationships, of every kind. The decision at its centre rests on evidence three steps deep, and by the end some of that evidence no longer stands.
 
 Install [Relate's CLI](https://relatedb.ai/docs/get-started/install/), then work on a copy, because Relate rewrites a store's files when it opens one. This makes the copy, from the npm package or from a clone of this repo:
 
@@ -101,19 +102,19 @@ Install [Relate's CLI](https://relatedb.ai/docs/get-started/install/), then work
 npx vine-context example /tmp/party
 ```
 
-**What's in it?** Two `ABOUT`, five `SUPPORTS`, one `CONTRADICTS`, two `ANSWERS`, one `REPLACES` and three `REPLIES_TO`.
+**What's in it?** Two `ABOUT`, five `SUPPORTS`, two `CONTRADICTS`, two `ANSWERS`, two `REPLACES` and three `REPLIES_TO`.
 
 ```bash
 relate -d /tmp/party --mode table "MATCH ()-[r]->() RETURN type(r) AS relationship, count(*) AS n"
 ```
 
-**Where did the team disagree?** Carol's reading of the Riverside Room's licence (40 seated) contradicts Bob's claim that it takes the whole party of 48.
+**Where did the team disagree, and is it settled?** Twice. Carol's reading of the Riverside Room's licence (40 seated) contradicted Bob's claim that it takes the whole party; Bob settled that by replacing his claim. Alice's reading of the Orangery's events pack (a £2,600 minimum on a Friday) contradicts Carol's hire-fee waiver, and nobody has settled it.
 
 ```bash
-relate -d /tmp/party --mode table "MATCH (a:Claim)-[:CONTRADICTS]->(b:Claim) RETURN a.recorded_by AS who, a.text AS claim, b.recorded_by AS against, b.text AS other"
+relate -d /tmp/party --mode table "MATCH (a:Claim)-[:CONTRADICTS]->(b:Claim) RETURN a.recorded_by AS who, a.text AS claim, b.recorded_by AS against, b.text AS other, EXISTS { MATCH (:Claim)-[:REPLACES]->(b) } AS settled"
 ```
 
-**How was it settled?** Bob replaced his own claim on Tuesday at 16:45: the party is at the Orangery on 19 Dec.
+**What was replaced?** Bob replaced his own Riverside claim on Tuesday at 16:45: the party is at the Orangery on 19 Dec. On Wednesday Carol replaced the headcount: 55 are coming, not 48.
 
 ```bash
 relate -d /tmp/party --mode table "MATCH (new:Claim)-[r:REPLACES]->(old:Claim) RETURN old.text AS was, new.text AS now, new.recorded_by AS by, r.recorded_at AS at"
@@ -131,10 +132,18 @@ relate -d /tmp/party --mode table "MATCH (q:Question) OPTIONAL MATCH (c:Claim)-[
 relate -d /tmp/party --mode table "MATCH (m:Reply)-[:REPLIES_TO]->(q:Question) RETURN q.text AS question, m.recorded_by AS who, m.text AS reply"
 ```
 
-**What is the decision based on?** Follow `SUPPORTS` back to the evidence: the Orangery's availability, its hire-fee waiver, the budget. The withdrawn claim's link is still in the graph (nothing is deleted), so leave it out by its `withdrawn_at`.
+**What does the decision rest on, and does it still stand?** Follow `SUPPORTS` back from the decision, any number of steps, and test each piece of evidence against the other relationships. The decision is still current, but of the five things it rests on, one has been replaced (the headcount, two steps back), one was withdrawn (last year's cost, three steps back) and one is contradicted by a claim nobody has answered (the waiver). No single statement says that; only the paths do.
 
 ```bash
-relate -d /tmp/party --mode table "MATCH p=(a:Claim)-[:SUPPORTS*1..3]->(b:Claim) WHERE a.withdrawn_at IS NULL RETURN [n IN nodes(p) | n.text] AS chain"
+relate -d /tmp/party --mode table "MATCH (d:Claim) WHERE d.text STARTS WITH 'The party is at' MATCH p = (e:Claim)-[:SUPPORTS*1..6]->(d) RETURN length(p) AS steps, e.recorded_by AS who, e.text AS evidence, e.withdrawn_at IS NOT NULL AS withdrawn, EXISTS { MATCH (:Claim)-[:REPLACES]->(e) } AS replaced, EXISTS { MATCH (o:Claim)-[:CONTRADICTS]-(e) WHERE o.withdrawn_at IS NULL AND NOT EXISTS { MATCH (:Claim)-[:REPLACES]->(o) } } AS contested ORDER BY steps"
+```
+
+Agents get the same answer from the `basis` tool, as of any moment: at 17:00 on Tuesday every piece of that evidence still stood.
+
+**Which claims are about the day of the party?** A claim can say which days it is about (`about_from` to `about_to`), apart from when it was recorded. Two claims are about Friday 19 Dec, both recorded a month before it.
+
+```bash
+relate -d /tmp/party --mode table "MATCH (c:Claim) WHERE c.about_from <= date('2026-12-19') AND c.about_to >= date('2026-12-19') RETURN c.recorded_by AS who, c.text AS claim, c.recorded_at AS recorded"
 ```
 
 **What did the team believe on Monday afternoon?** Only what had been recorded by then, and not yet replaced or withdrawn. At 16:00 on Monday 17 Nov, Bob's Riverside Room claim and Carol's contradicting one were both current.
@@ -143,7 +152,7 @@ relate -d /tmp/party --mode table "MATCH p=(a:Claim)-[:SUPPORTS*1..3]->(b:Claim)
 relate -d /tmp/party --mode table "WITH datetime('2026-11-17T16:00:00Z') AS T MATCH (c:Claim) WHERE c.recorded_at <= T AND (c.withdrawn_at IS NULL OR c.withdrawn_at > T) AND NOT EXISTS { MATCH (:Claim)-[r:REPLACES]->(c) WHERE r.recorded_at <= T } RETURN c.recorded_by AS who, c.text AS believed ORDER BY c.recorded_at"
 ```
 
-Change the time to `2026-11-19T10:00:00Z` and the answer changes: the Riverside Room is gone, the Orangery has taken its place, and last year's cost (recorded and withdrawn on Tuesday) never shows.
+Change the time to `2026-11-19T10:00:00Z` and the answer changes: the Riverside Room is gone, the Orangery has taken its place, and last year's cost (recorded and withdrawn on Tuesday) never shows. Change it to `2026-11-19T12:00:00Z` and the headcount is 55.
 
 The same store, seen in the explorer with `vine demo`:
 
@@ -163,5 +172,6 @@ Agents never write Cypher. They get the model's tools over MCP, each with a desc
 | `search` | Hybrid search over current claims and live questions |
 | `beliefs`, `conflicts`, `open_questions` | What is current, where it conflicts, what is unanswered: now, or as of a given moment |
 | `thread`, `history`, `recent` | A question's replies, every link into and out of one item (replaced and withdrawn ones too), the latest changes |
+| `basis` | Everything a claim rests on, following `SUPPORTS` back any number of steps, with whether each piece of evidence still stands: now, or as of a given moment |
 
 The tools are defined in [`models/temporal-claims/tools.yaml`](../models/temporal-claims/tools.yaml), and the guidance agents follow when writing is in [`models/temporal-claims/instructions.md`](../models/temporal-claims/instructions.md). Write tools only check a change. The change itself is applied by fixed code in [`src/core/graph.ts`](../src/core/graph.ts), the same way on every member's machine.

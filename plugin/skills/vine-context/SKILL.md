@@ -23,7 +23,7 @@ The tools are on the `vine-context` MCP server:
   before you first write in a conversation, and follow it.**
 - The model's tools: `add_claim`, `ask_question`, `reply`, `link`,
   `withdraw`, `search`, `beliefs`, `open_questions`, `thread`, `conflicts`,
-  `history`, `recent`. They act on this chat's context; with several, they
+  `history`, `basis`, `recent`. They act on this chat's context; with several, they
   take a `context` argument. `withdraw` is also Undo for a write you just
   made (see below).
 
