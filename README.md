@@ -248,6 +248,7 @@ Each is explained in [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md#limits).
 | [docs/RELATE.md](docs/RELATE.md) | The graph model, each Relate feature and where it is used, and queries to run on the example store |
 | [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md) | Hosts, signed changes, the mesh, join codes, files on disk, limits |
 | [docs/REPLICATION.md](docs/REPLICATION.md) | The replication design and the decisions behind it |
+| [docs/MEASURED.md](docs/MEASURED.md) | Whether members who come and go end up with the same graph: 100 runs, how to rerun them |
 | [docs/HACKATHON.md](docs/HACKATHON.md) | The Relate hackathon entry: what to run, how it meets each judging criterion, what is new, AI tools used |
 
 ## Built with

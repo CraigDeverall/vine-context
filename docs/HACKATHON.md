@@ -46,7 +46,7 @@ Search is hybrid, vector plus full text, on Relate's own indexes. [RELATE.md](RE
 
 ### Functionality and completeness (25 points)
 
-It works end to end: create, invite, join, record, link, search, sync, undo, withdraw, roles and removal. `vine demo` runs the whole path between three members in one process. There are over 180 automated tests, run in CI on Linux, macOS and Windows (`npm run check`). What has not been tested is said plainly under [Limits](HOW-IT-WORKS.md#limits).
+It works end to end: create, invite, join, record, link, search, sync, undo, withdraw, roles and removal. `vine demo` runs the whole path between three members in one process. There are over 180 automated tests, run in CI on Linux, macOS and Windows (`npm run check`). In 100 runs of five members coming and going and writing while apart, all five copies ended identical every time ([what was measured](MEASURED.md)). What has not been tested is said plainly under [Limits](HOW-IT-WORKS.md#limits).
 
 ### Usefulness (20 points)
 
