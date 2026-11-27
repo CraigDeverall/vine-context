@@ -109,6 +109,8 @@ export type Filters = {
 
 const NAME_RE = /^[a-z0-9][a-z0-9-]{0,62}$/;
 
+/** A line as a person reads it: without the item ids that are there for agents. */
+export const plain = (s: string) => s.replace(/\s*\b[cqr]_[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b/g, "").replace(/\breplied to:/, "replied:");
 export const short = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 /** A path cut from the front, so its last folders (the telling part) stay. */
 export const tail = (s: string, n: number) => (s.length > n ? `…${s.slice(s.length - n + 1)}` : s);

@@ -28,8 +28,8 @@ export const NAMES: Name[] = ["alice", "bob", "carol"];
 /** What each member's install says about itself, as the console shows it. */
 const ABOUT: Record<Name, { agent: string; platform: string }> = {
   alice: { agent: "claude-code", platform: `${process.platform} ${process.arch}` },
-  bob: { agent: "codex", platform: "linux x64" },
-  carol: { agent: "claude-code", platform: "win32 x64" },
+  bob: { agent: "codex", platform: `${process.platform} ${process.arch}` },
+  carol: { agent: "claude-code", platform: `${process.platform} ${process.arch}` },
 };
 
 export interface Member {
@@ -125,7 +125,7 @@ export async function startDemo(o: DemoOptions = {}): Promise<Demo> {
   for (const n of NAMES) {
     members[n].local.on("event", (e: { event: string; data: any }) => {
       if (e.event === "changed" && e.data?.from) say(`  ↳ reached ${n} (from ${e.data.from})`);
-      if (e.event === "digest" && n === "alice") for (const line of e.data?.lines ?? []) say(`  ↳ alice's agent is told: ${line}`);
+      if (e.event === "digest" && n === "alice") for (const line of e.data?.lines ?? []) say(`  ↳ alice's agent is told: ${String(line).replace(/\s*\b[cqr]_[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b/g, "")}`);
     });
   }
 

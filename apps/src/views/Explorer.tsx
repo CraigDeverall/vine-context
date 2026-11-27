@@ -93,6 +93,18 @@ function endedNote(n: SNode): string {
   return typeof reason === "string" && reason ? `ended: ${reason}` : "ended";
 }
 
+// How the Claims and Questions relationships are drawn, so agreement, conflict
+// and replacement can be told apart at a glance. Any other model's
+// relationships take a colour each from the series palette.
+const LINK_STYLE: Record<string, { tone?: string; variant?: "solid" | "dashed"; thickness?: number }> = {
+  SUPPORTS: { tone: "success", thickness: 2 },
+  CONTRADICTS: { tone: "error", variant: "dashed", thickness: 2.5 },
+  REPLACES: { tone: "warning", thickness: 2 },
+  ANSWERS: { tone: "info", thickness: 2 },
+  ABOUT: { tone: "neutral", variant: "dashed" },
+  REPLIES_TO: { tone: "neutral" },
+};
+
 const struck = { textDecoration: "line-through" } as const;
 
 export function Explorer({ b }: { b: Bridge }) {
@@ -130,8 +142,8 @@ export function Explorer({ b }: { b: Bridge }) {
   }, [snap?.schema]);
   const linkKinds = useMemo<NetworkGraphLinkKinds>(() => {
     const k: NetworkGraphLinkKinds = {};
-    snap?.schema.relationships.forEach((r) => {
-      k[r.type] = { label: r.type };
+    snap?.schema.relationships.forEach((r, i) => {
+      k[r.type] = LINK_STYLE[r.type] ? { label: r.type, ...LINK_STYLE[r.type] } : { label: r.type, slot: (((i % 8) + 1) as 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8) };
     });
     return k;
   }, [snap?.schema]);

@@ -63,6 +63,7 @@ import {
   prop,
   relations,
   sendLine,
+  plain,
   short,
   tail,
   threads,
@@ -98,8 +99,9 @@ const RECENT = 5;
 const HEADER_PEOPLE = 6;
 // The "you claimed:" part of an activity line is who-did-what metadata: drawn muted so the claim itself reads first.
 const lead = (c: Change) => {
-  const i = /^(claim|question|reply|describe)$/.test(c.kind) ? c.summary.indexOf(": ") : -1;
-  return i < 0 ? { head: "", body: c.summary } : { head: c.summary.slice(0, i + 2), body: c.summary.slice(i + 2) };
+  const summary = plain(c.summary);
+  const i = /^(claim|question|reply|describe)$/.test(c.kind) ? summary.indexOf(": ") : -1;
+  return i < 0 ? { head: "", body: summary } : { head: summary.slice(0, i + 2), body: summary.slice(i + 2) };
 };
 /** A way out of a step (Cancel, Done, Back) leads with a back chevron, so it reads as going back. */
 const backLabel = (label: string) => label.replace(/^‹\s*/, "");
@@ -1263,7 +1265,7 @@ function ContextsPanel({ b }: { b: Bridge }) {
   // The latest news from someone else: what their changes meant for you if that's newest, else their latest change.
   const digest = a.digest?.at(-1);
   const latest = a.recent.find((c) => !c.mine && !c.held && c.kind !== "create");
-  const news = digest?.lines[0] && (!latest || digest.at >= latest.at) ? `${short(digest.lines[0], 90)} (${ago(digest.at, now)})` : latest ? `${latest.by} ${short(latest.summary, 80)} (${ago(latest.at, now)})` : "";
+  const news = digest?.lines[0] && (!latest || digest.at >= latest.at) ? `${short(plain(digest.lines[0]), 90)} (${ago(digest.at, now)})` : latest ? `${latest.by} ${short(plain(latest.summary), 80)} (${ago(latest.at, now)})` : "";
 
   const header = (
     <VStack gap="sm">
@@ -1377,7 +1379,8 @@ function ContextsPanel({ b }: { b: Bridge }) {
     );
     const needs = [
       !a.sharing && need("offline", "warn", "You’re offline: what you write stays on this machine, and you don’t see what others add, until you’re back.", goOnline),
-      a.sharing && a.relays_up === 0 && need("relays", "warn", "No signalling relay is reachable, so the other members can’t find this machine right now.", null),
+      // Members already linked need no relay: it only matters for finding each other.
+      a.sharing && a.relays_up === 0 && a.online.length === 0 && a.members > 1 && need("relays", "warn", "No signalling relay is reachable, so the other members can’t find this machine right now.", null),
       rel.conflicts.length > 0 &&
         need(
           "conflicts",
@@ -1434,7 +1437,7 @@ function ContextsPanel({ b }: { b: Bridge }) {
               <Text tone="warning">Just written, still only on this machine:</Text>
               {heldMine.map((c) => (
                 <Split key={c.id}>
-                  <Text>{short(c.summary, 140)}</Text>
+                  <Text>{short(plain(c.summary), 140)}</Text>
                   <Button variant="primary" onClick={() => void act("withdraw", { id: c.id, undo_only: true, ...ctx }, "Taken back. It never left this machine.")}>
                     Undo
                   </Button>
@@ -1456,7 +1459,7 @@ function ContextsPanel({ b }: { b: Bridge }) {
             <SectionTitle>What changed for you</SectionTitle>
             <Box tone="accent">
               <VStack gap="sm">
-                <Folded list={digest.lines.map((line, i) => ({ line, i }))} first={3} what="changes" one="change" render={({ line, i }) => <Text key={i}>{line}</Text>} />
+                <Folded list={digest.lines.map((line, i) => ({ line, i }))} first={3} what="changes" one="change" render={({ line, i }) => <Text key={i}>{plain(line)}</Text>} />
                 <Meta>{ago(digest.at, now)}</Meta>
               </VStack>
             </Box>

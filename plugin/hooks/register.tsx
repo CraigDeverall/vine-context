@@ -114,6 +114,8 @@ const TABS: { tab: Tab; icon: string; label: string }[] = [
   { tab: 'settings', icon: '⚙', label: 'Settings' },
 ]
 
+/** A line as a person reads it: without the item ids that are there for agents. */
+const plain = (s: string) => s.replace(/\s*\b[cqr]_[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b/g, '').replace(/\breplied to:/, 'replied:')
 const short = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s)
 /** A path cut from the front, so its last folders (the telling part) stay. */
 export const tail = (s: string, n: number) => (s.length > n ? `…${s.slice(s.length - n + 1)}` : s)
@@ -374,12 +376,12 @@ async function refresh($: Engine) {
     const others = a.recent.filter(c => !c.mine && !c.held)
     if (seen) {
       const fresh = others.filter(c => !seen!.has(c.id) && ['claim', 'question', 'reply', 'add_member', 'withdraw', 'remove_member'].includes(c.kind))
-      for (const c of fresh.slice(0, 3)) $.ui.toast(`${c.by} ${short(c.summary, 90)}`)
+      for (const c of fresh.slice(0, 3)) $.ui.toast(`${c.by} ${short(plain(c.summary), 90)}`)
     }
     seen = new Set(a.recent.map(c => c.id))
     // What others' changes meant for you (the sync digest): its first line as a toast.
     const d = a.digest?.at(-1)
-    if (d && seenDigest !== undefined && d.at !== seenDigest && d.lines[0]) $.ui.toast(`${a.context}: ${short(d.lines[0], 110)}`)
+    if (d && seenDigest !== undefined && d.at !== seenDigest && d.lines[0]) $.ui.toast(`${a.context}: ${short(plain(d.lines[0]), 110)}`)
     seenDigest = d?.at ?? ''
     const top = others.find(c => c.kind !== 'create')
     await update($, latest, (): Latest | null => (top ? { by: top.by, summary: top.summary, at: top.at } : null))
@@ -596,7 +598,7 @@ export const register: Register = on => {
     const d = a.digest?.at(-1)
     const main = a.contexts.find(c => c.writes_here)?.name ?? a.context
     // The latest news: what others' changes meant for you if that's newest, else the latest change from someone else.
-    const news = d && (!l || d.at >= l.at) ? `${short(d.lines[0] ?? '', 70)} (${ago(d.at, now)})` : l ? `${l.by} ${short(l.summary, 60)} (${ago(l.at, now)})` : ''
+    const news = d && (!l || d.at >= l.at) ? `${short(plain(d.lines[0] ?? ''), 70)} (${ago(d.at, now)})` : l ? `${l.by} ${short(plain(l.summary), 60)} (${ago(l.at, now)})` : ''
     const more = a.contexts.filter(c => c.name !== main).map(c => ` +${c.name}`).join('')
     return (
       <Box flexDirection="row" gap={1} alignItems="center" width="100%">
@@ -737,7 +739,7 @@ export const register: Register = on => {
                 <Text weight="semibold" bold>
                   {last.mine ? 'you' : last.by}
                 </Text>{' '}
-                {short(last.summary, 80)}
+                {short(plain(last.summary), 80)}
               </Text>
             </Box>
           )}
@@ -1825,8 +1827,9 @@ export const register: Register = on => {
       const feed = a.recent
       // The "you claimed:" part of an activity line is who-did-what metadata: drawn dim so the claim itself reads first.
       const lead = (c: Change) => {
-        const i = /^(claim|question|reply|describe)$/.test(c.kind) ? c.summary.indexOf(': ') : -1
-        return i < 0 ? { head: '', body: c.summary } : { head: c.summary.slice(0, i + 2), body: c.summary.slice(i + 2) }
+        const summary = plain(c.summary)
+        const i = /^(claim|question|reply|describe)$/.test(c.kind) ? summary.indexOf(': ') : -1
+        return i < 0 ? { head: '', body: summary } : { head: summary.slice(0, i + 2), body: summary.slice(i + 2) }
       }
       const ICON: Record<string, string> = { claim: '📌', question: '❓', reply: '↳', link: '🔗', withdraw: '✕', add_member: '👋', remove_member: '🚪', set_role: '🔑', rename: '✎', describe: '✎', create: '✦' }
       const need = (key: string, tone: string, text: unknown, button: unknown) => card(`need-${key}`, split(`need-row-${key}`, <Text wrap="wrap">{text}</Text>, button, 'center'), tone)
@@ -1876,7 +1879,7 @@ export const register: Register = on => {
                 {heldMine.map((c: Change) =>
                   split(
                     `held-${c.id}`,
-                    <Text wrap="wrap">{short(c.summary, 140)}</Text>,
+                    <Text wrap="wrap">{short(plain(c.summary), 140)}</Text>,
                     <Button key={`undo-change-${c.id}`} label="Undo" variant="primary" onPress={() => void act($, 'withdraw', { id: c.id, undo_only: true, ...ctx }, 'Taken back. It never left this machine.')} />,
                     'center',
                   ),
@@ -1894,7 +1897,7 @@ export const register: Register = on => {
                 <Box flexDirection="column" gap="xs">
                   {folded('digest', digest.lines, 3, 'changes', 'change', (line, i) => (
                     <Text key={`digest-${i}`} wrap="wrap">
-                      {line}
+                      {plain(line)}
                     </Text>
                   ))}
                   {meta(ago(digest.at, now))}
