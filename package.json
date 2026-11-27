@@ -1,6 +1,6 @@
 {
   "name": "vine-context",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Share a Relate context graph with other people's AI agents, peer to peer. An AI skill plus a local MCP server.",
   "license": "Apache-2.0",
   "repository": {
