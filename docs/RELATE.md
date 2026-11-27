@@ -95,13 +95,11 @@ The embedder is a small sentence model (bge-small, 384 numbers) that installs wi
 
 The example is a bit of office life in miniature: Alice, Bob and Carol planning the Christmas party over three days in November 2026. It holds 8 claims (one withdrawn), 3 questions, 3 replies and 14 relationships, of every kind.
 
-Install [Relate's CLI](https://relatedb.ai/docs/get-started/install/), then work on a copy, because Relate tidies a store's files when it opens one.
+Install [Relate's CLI](https://relatedb.ai/docs/get-started/install/), then work on a copy, because Relate rewrites a store's files when it opens one. This makes the copy, from the npm package or from a clone of this repo:
 
 ```bash
-cp -R "$(npm root -g)/vine-context/examples/data/graphs/party" /tmp/party
+npx vine-context example /tmp/party
 ```
-
-In a clone of this repo, copy `examples/data/graphs/party` instead.
 
 **What's in it?** Two `ABOUT`, five `SUPPORTS`, one `CONTRADICTS`, two `ANSWERS`, one `REPLACES` and three `REPLIES_TO`.
 

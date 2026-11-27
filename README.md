@@ -4,15 +4,21 @@
 
 <p align="center"><b>Shared Graphs</b></p>
 
-<p align="center"><b>Vine Context – P2P Shared Context Graphs</b></p>
+**Vine Context – P2P Shared Context Graphs.** One [Relate](https://relatedb.ai/) context graph of claims and questions for a team and their AI agents, kept in step between everyone's machines, peer to peer, with no server.
 
-One [Relate](https://relatedb.ai/) context graph of claims and questions, kept in step between everyone's machines, peer to peer, with no server.
+**See it in one command.** It needs Node 20 or later and nothing else: no install, account, API key, compiler or model download, and it touches nothing of yours.
+
+```bash
+npx vine-context demo
+```
+
+`demo` runs three members in one process: alice creates the example context, bob and carol join it with codes, and the three replay the planning of an office Christmas party, each writing through their own host and syncing peer to peer. Your browser shows alice's view of it, live.
+
+**Use it with your own agent.** One command installs the `vine` command and the plugin for Claude Code or Codex, checks the machine and its network, and repairs it if you run it again. `--dry-run` shows what it would do without changing anything.
 
 ```bash
 npx vine-context setup
 ```
-
-One command installs the `vine` command and the plugin for Claude Code or Codex, checks the machine and its network, and repairs it if you run it again. `--dry-run` shows what it would do without changing anything.
 
 <details><summary>By hand</summary>
 
@@ -23,17 +29,11 @@ claude plugin install vine-context@vine-context
 vine doctor
 ```
 
-Codex and other MCP agents: see [the guide](docs/GUIDE.md#install-by-hand). To run it from a clone of this repo instead, see [Setup and run](#1-install-it).
+Codex and other MCP agents: see [the guide](docs/GUIDE.md#install-by-hand). To run it from a clone of this repo instead, see [Setup and run](#1-see-it-about-two-minutes).
 
 </details>
 
-Then tell your agent *"start a context called incident-42"*, or look first with no agent at all:
-
-```bash
-vine demo
-```
-
-`demo` runs three members in one process: alice creates the example context, bob and carol join it with codes, and the three replay the planning of an office Christmas party, each writing through their own host and syncing peer to peer. Your browser shows alice's view of it, live. Nothing of yours is touched, and no network is needed. You need Node 20 or later, and no account, API key, compiler or model download.
+Then tell your agent *"start a context called incident-42"*.
 
 ![The graph explorer on the example party graph](docs/images/explorer.jpg)
 
@@ -45,6 +45,7 @@ vine demo
 | See what Relate does here | [How it uses Relate](#how-it-uses-relate), then [docs/RELATE.md](docs/RELATE.md) |
 | Query the example graph yourself | [Where the data lives](#where-the-data-lives) |
 | Use it with your own team | [docs/GUIDE.md](docs/GUIDE.md) |
+| Change a setting | [docs/GUIDE.md](docs/GUIDE.md#settings) |
 | Understand the peer-to-peer design | [How it works](#how-it-works), then [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md) |
 | Judge it for the Relate hackathon | [docs/HACKATHON.md](docs/HACKATHON.md) |
 
@@ -93,9 +94,23 @@ The Relate features in use: an embedded directory store, uniqueness constraints,
 
 ## Setup and run
 
-**Prerequisites:** Node 20 or later, and git. Tested on macOS arm64 and, in CI, on Linux x64, macOS and Windows x64. The native parts (Relate and node-datachannel) ship prebuilt binaries.
+**Prerequisites:** Node 20 or later. git only if you clone the repo. Tested on macOS arm64 and, in CI, on Linux x64, macOS and Windows x64. The native parts (Relate and node-datachannel) ship prebuilt binaries.
 
-### 1. Install it
+### 1. See it (about two minutes)
+
+```bash
+npx vine-context demo
+```
+
+Three hosts start in this process, one each for alice, bob and carol: alice creates the context, the other two join it with codes, and the story plays through them, one step every few seconds. Every write is signed by its author's host, held for undo, then carried to the other two over WebRTC, and the terminal says when each one arrives. In the browser page that opens, which is alice's view:
+
+1. **Sharing console** shows the three members, their keys, roles and live links.
+2. **Explore the graph** fills in as the changes arrive. Once the story is over, drag the time slider back to replay it: a conflict between bob's claim and carol's appears, then settles when bob replaces his claim.
+3. **Conflicts** shows the two claims side by side while they contradict each other.
+
+`--pace 1` runs it faster, `--pace 0` all at once. `--join` finds the members through the public Nostr relays instead of in this process, and prints a join code at the end, so your own agent (on this machine or another) can join as a fourth member and write into the same graph.
+
+### 2. Install it for your agent
 
 ```bash
 npx vine-context setup
@@ -131,20 +146,6 @@ vine demo
 
 </details>
 
-### 2. See it (about two minutes)
-
-```bash
-vine demo
-```
-
-Three hosts start in this process, one each for alice, bob and carol: alice creates the context, the other two join it with codes, and the story plays through them, one step every few seconds. Every write is signed by its author's host, held for undo, then carried to the other two over WebRTC, and the terminal says when each one arrives. In the browser page that opens, which is alice's view:
-
-1. **Sharing console** shows the three members, their keys, roles and live links.
-2. **Explore the graph** fills in as the changes arrive. Once the story is over, drag the time slider back to replay it: a conflict between bob's claim and carol's appears, then settles when bob replaces his claim.
-3. **Conflicts** shows the two claims side by side while they contradict each other.
-
-`--pace 1` runs it faster, `--pace 0` all at once. `--join` finds the members through the public Nostr relays instead of in this process, and prints a join code at the end, so your own agent (on this machine or another) can join as a fourth member and write into the same graph.
-
 ### 3. Use it from your agent
 
 `vine setup` installed the plugin. It brings the MCP server, the skills and the `/vine-context:join` command, and in Claude Code a live panel beside the chat. Codex uses the same plugin, and any other MCP agent can run `vine mcp` directly: see [the guide](docs/GUIDE.md#install).
@@ -168,17 +169,17 @@ Join codes, roles, undo, working offline and removing someone are covered in [th
 
 ## Where the data lives
 
-**The example store is in this repo**, at [`examples/data/graphs/party`](examples/data/graphs/party): 8 claims (one withdrawn), 3 questions, 3 replies and 14 relationships. It is an ordinary Relate directory store, so [Relate's CLI](https://relatedb.ai/docs/get-started/install/) opens it:
+**The example store is in this repo**, at [`examples/data/graphs/party`](examples/data/graphs/party). It is an ordinary Relate directory store, so [Relate's CLI](https://relatedb.ai/docs/get-started/install/) opens it. Work on a copy, because Relate rewrites a store's files when it opens one. This makes the copy, from the npm package or from a clone:
 
 ```bash
-cp -R "$(npm root -g)/vine-context/examples/data/graphs/party" /tmp/party
+npx vine-context example /tmp/party
 ```
 
 ```bash
 relate -d /tmp/party --mode table "MATCH (a:Claim)-[:CONTRADICTS]->(b:Claim) RETURN a.recorded_by, a.text, b.recorded_by, b.text"
 ```
 
-Work on a copy, because Relate tidies a store's files when it opens one. In a clone of this repo the store is at `examples/data/graphs/party`. More queries to try, including *what did the team believe on Monday afternoon?*, are in [docs/RELATE.md](docs/RELATE.md#explore-the-example-store).
+More queries to try, including *what did the team believe on Monday afternoon?* and *what does the decision rest on?*, are in [docs/RELATE.md](docs/RELATE.md#explore-the-example-store).
 
 - The signed change log the store was built from: [`examples/data/hosts/party/changes.jsonl`](examples/data/hosts/party/changes.jsonl).
 - The script that makes both: [`scripts/make-examples.ts`](scripts/make-examples.ts) (`npm run examples`).
@@ -217,36 +218,6 @@ flowchart LR
 
 The full account is in [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md), and the design reasoning in [docs/REPLICATION.md](docs/REPLICATION.md).
 
-## Settings
-
-Everything works without settings. These change the defaults, and `vine --help` lists them too.
-
-**Command options**
-
-| Command | Options |
-|---|---|
-| `vine setup` | `--yes` takes the default answer to every question (secrets are still typed, unseen) · `--agent claude,codex` or `none` picks which agents get the plugin (default: those found) · `--turn cloudflare`, `custom` or `none` instead of asking · `--json` prints the results as JSON · `--dry-run` runs only the read-only checks and prints what it would do |
-| `vine demo` | `--pace SECONDS` between steps (default 4; `0` plays it all at once) · `--join` meets through the public Nostr relays and prints a join code for your own agent · `--port N` for the browser page · `--no-open` doesn't open the browser · `--verbose` |
-
-**Environment variables**
-
-| Variable | What it changes | Default |
-|---|---|---|
-| `VINE_USER` | Your name in contexts | The name you saved (`update_context`, or `vine setup`), else git's `user.name`, else your computer account's full name, else a made-up one |
-| `VINE_DATA_DIR` | Where contexts live | `~/.local/share/vine-context` |
-| `VINE_CONTEXT` | The context a new chat starts with when its folder has none linked | None: the agent asks |
-| `VINE_CHAT` | The chat's id, used to remember its context | Claude Code's or Codex's session id |
-| `VINE_EMBEDDER` | How search turns text into vectors: `auto`, `hash` (words only) or `bge-small` | `auto`: `bge-small` when its package runs here, else `hash` |
-| `VINE_AUTO_SHARE` | `off`: new contexts don't sync until you share them | On |
-| `VINE_HOOKS` | `quiet`: no reminder beside each prompt (the session briefing and others' news stay) · `off`: the hooks say nothing | On |
-| `VINE_HOLD_MS` | How long a write waits on this machine, so Undo can remove it, before it is sent | `10000` (10 seconds) |
-| `VINE_RELAYS` | Nostr relays members use to find each other, comma-separated | Four public relays |
-| `VINE_ICE` | STUN and TURN servers, comma-separated; replaces the defaults and the `vine turn` setting | Google's and Cloudflare's STUN |
-| `VINE_TURN_PASSWORD` | The TURN server's password, when it was saved with `--store env` | None |
-| `VINE_CLOUDFLARE_TURN_SECRET` | The Cloudflare TURN key's secret, when it was saved with `--store env` | None |
-
-The other commands (`vine doctor`, `vine status`, `vine turn`, `vine autostart` and the rest) are listed in [the guide](docs/GUIDE.md#commands).
-
 ## Limits
 
 - **Search matches meaning with a small model that installs with vine,** on the CPU, offline. Its packages are built and tested in CI for macOS (arm64, x64), Linux (x64, arm64) and Windows x64; anywhere else, or where it doesn't run, search matches words and word fragments instead, and `vine doctor` says which is in use.
@@ -265,7 +236,7 @@ Each is explained in [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md#limits).
 | [docs/RELATE.md](docs/RELATE.md) | The graph model, each Relate feature and where it is used, and queries to run on the example store |
 | [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md) | Hosts, signed changes, the mesh, join codes, files on disk, limits |
 | [docs/REPLICATION.md](docs/REPLICATION.md) | The replication design and the decisions behind it |
-| [docs/HACKATHON.md](docs/HACKATHON.md) | The Relate hackathon entry: how it meets each judging criterion, what is new, AI tools used |
+| [docs/HACKATHON.md](docs/HACKATHON.md) | The Relate hackathon entry: what to run, how it meets each judging criterion, what is new, AI tools used |
 
 ## Built with
 

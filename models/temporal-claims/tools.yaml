@@ -1,4 +1,4 @@
-# Tools for the temporal-claims model. See docs/model-packs.md for the format.
+# Tools for the temporal-claims model. src/core/pack.ts reads this format.
 #
 # Write tools only check their input against the graph here (steps that return
 # `_error`); `apply` names the change they make, which src/core/graph.ts applies

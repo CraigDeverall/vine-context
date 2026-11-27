@@ -20,6 +20,7 @@ Back to the [README](../README.md).
 - [Removing someone](#removing-someone)
 - [The Claude Code panel](#the-claude-code-panel)
 - [Commands](#commands)
+- [Settings](#settings)
 - [Trying it with two identities on one machine](#trying-it-with-two-identities-on-one-machine)
 
 ## Install
@@ -248,6 +249,7 @@ The panel never writes a claim or question itself: your agent does, from what yo
 |---|---|
 | `vine setup` | Set the machine up, or repair it ([install](#install)); `npx vine-context setup` before `vine` is installed |
 | `vine demo` | Three members in one process replay the example, syncing peer to peer; `--join` lets your agent join as a fourth |
+| `vine example [DIR]` | Copy the example Relate store to a folder, to open with Relate's own CLI |
 | `vine mcp` | Run the MCP server (your agent starts this) |
 | `vine doctor` | Check Node, Relate, WebRTC, the model, the data directory, the network (does it need TURN?) and the TURN server |
 | `vine status --graph <name>` | Members, live links and relay reachability for one context |
@@ -255,7 +257,37 @@ The panel never writes a claim or question itself: your agent does, from what yo
 | `vine turn set \| show \| test \| clear` | Set (`--provider cloudflare`, or a server of your own), show, check or remove a TURN server ([strict networks](#turn-and-stun-on-strict-networks)) |
 | `vine autostart on` | Keep contexts syncing after login (macOS) |
 
-Every option and environment variable, with its default, is listed in the README's [Settings](../README.md#settings) section.
+Every option and environment variable, with its default, is under [Settings](#settings).
+
+## Settings
+
+Everything works without settings. These change the defaults, and `vine --help` lists them too.
+
+**Command options**
+
+| Command | Options |
+|---|---|
+| `vine setup` | `--yes` takes the default answer to every question (secrets are still typed, unseen) · `--agent claude,codex` or `none` picks which agents get the plugin (default: those found) · `--turn cloudflare`, `custom` or `none` instead of asking · `--json` prints the results as JSON · `--dry-run` runs only the read-only checks and prints what it would do |
+| `vine demo` | `--pace SECONDS` between steps (default 4; `0` plays it all at once) · `--join` meets through the public Nostr relays and prints a join code for your own agent · `--port N` for the browser page · `--no-open` doesn't open the browser · `--verbose` |
+
+**Environment variables**
+
+| Variable | What it changes | Default |
+|---|---|---|
+| `VINE_USER` | Your name in contexts | The name you saved (`update_context`, or `vine setup`), else git's `user.name`, else your computer account's full name, else a made-up one |
+| `VINE_DATA_DIR` | Where contexts live | `~/.local/share/vine-context` |
+| `VINE_CONTEXT` | The context a new chat starts with when its folder has none linked | None: the agent asks |
+| `VINE_CHAT` | The chat's id, used to remember its context | Claude Code's or Codex's session id |
+| `VINE_EMBEDDER` | How search turns text into vectors: `auto`, `hash` (words only) or `bge-small` | `auto`: `bge-small` when its package runs here, else `hash` |
+| `VINE_AUTO_SHARE` | `off`: new contexts don't sync until you share them | On |
+| `VINE_HOOKS` | `quiet`: no reminder beside each prompt (the session briefing and others' news stay) · `off`: the hooks say nothing | On |
+| `VINE_HOLD_MS` | How long a write waits on this machine, so Undo can remove it, before it is sent | `10000` (10 seconds) |
+| `VINE_RELAYS` | Nostr relays members use to find each other, comma-separated | Four public relays |
+| `VINE_ICE` | STUN and TURN servers, comma-separated; replaces the defaults and the `vine turn` setting | Google's and Cloudflare's STUN |
+| `VINE_TURN_PASSWORD` | The TURN server's password, when it was saved with `--store env` | None |
+| `VINE_CLOUDFLARE_TURN_SECRET` | The Cloudflare TURN key's secret, when it was saved with `--store env` | None |
+
+The other commands are listed under [Commands](#commands).
 
 ## Trying it with two identities on one machine
 

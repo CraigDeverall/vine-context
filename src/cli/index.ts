@@ -20,6 +20,7 @@ Commands:
   autostart on|off                    Run \`vine up\` at login (macOS), so your contexts sync after a reboot
   demo [--pace SECONDS] [--join] [--port N] [--no-open] [--verbose]
                                       Three members in one process replay the example, syncing peer to peer (nothing of yours changes; --join lets your agent join)
+  example [DIR]                       Copy the example Relate store to DIR (default ./party), to open with Relate's own CLI
   ui [--context NAME] [--port N] [--open]
                                       Show the console and explorer in a browser
   status [--context NAME]             Show a context's host: sharing, members, links, relays, invites
@@ -491,6 +492,25 @@ if (help) {
   }
 }
 
+// Copies the example store that ships with vine, because Relate rewrites a
+// store's files when it opens one: a judge should open a copy, not the package's.
+async function example(args: string[]): Promise<number> {
+  const { cp } = await import("node:fs/promises");
+  const { existsSync } = await import("node:fs");
+  const { join, resolve } = await import("node:path");
+  const { packageRoot } = await import("../core/package-root.js");
+  const to = resolve(args[0] ?? "party");
+  if (existsSync(to)) {
+    console.error(`${to} already exists. Name a folder that doesn't, for example: vine example /tmp/party-2`);
+    return 1;
+  }
+  await cp(join(packageRoot(), "examples", "data", "graphs", "party"), to, { recursive: true });
+  console.log(`The example Relate store is at ${to}`);
+  console.log(`Open it with Relate's CLI (https://relatedb.ai/docs/get-started/install/):`);
+  console.log(`  relate -d ${JSON.stringify(to)} --mode table "MATCH ()-[r]->() RETURN type(r) AS relationship, count(*) AS n"`);
+  return 0;
+}
+
 async function run(): Promise<void> {
 switch (command) {
   case "--version":
@@ -510,6 +530,9 @@ switch (command) {
     if (code >= 0) process.exitCode = code;
     break;
   }
+  case "example":
+    process.exitCode = await example(rest);
+    break;
   case "ui": {
     const code = await ui(rest);
     if (code >= 0) process.exitCode = code;
