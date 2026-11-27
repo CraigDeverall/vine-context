@@ -47,7 +47,7 @@ export type Invite = { id: string; label: string | null; role: Role; code: strin
 
 export type ChatContext = { name: string; description: string | null; role: Role | null; writes_here: boolean };
 
-/** What `context_activity` (and `open_contexts`) return for a chat that has a context. */
+/** What `recent` with `activity` (and `open_view`'s contexts panel) return for a chat that has a context. */
 export type Activity = {
   using: string;
   you: { name: string; role: Role | null; fingerprint: string };
@@ -75,7 +75,7 @@ export type Activity = {
 /** What they return for a chat with no context yet. */
 export type NoContext = { context: null; your_contexts: string[] };
 
-/** One of this machine's contexts in full (`context_details`). */
+/** One of this machine's contexts in full (`context_info` with `details`). */
 export type ContextDetails = {
   name: string;
   id: string | null;
@@ -240,43 +240,34 @@ export function asks(tool: string, args: Record<string, unknown>): string {
   const there = ctx ? ` in the context '${ctx}'` : "";
   const of = ctx ? ` the context '${ctx}'` : " this chat's context";
   switch (tool) {
-    case "explore_context":
-      return s("at") ? `Open the context explorer as it was at ${s("at")}.` : "Open the context explorer.";
-    case "open_console":
-      return "Open the Vine console.";
-    case "open_contexts":
-      return "Open this chat's contexts.";
+    case "open_view":
+      if (args.view === "explorer") return s("at") ? `Open the context explorer as it was at ${s("at")}.` : "Open the context explorer.";
+      return args.view === "console" ? "Open the Vine console." : "Open this chat's contexts.";
     case "use_context":
+      if (args.mode === "remove") return `Stop using the context '${name}' in this chat.`;
+      if (args.mode === "add") {
+        if (s("description")) return `Create a context called '${name}' and add it to this chat. It's for: ${s("description")}`;
+        return args.write_here ? `Record new items in the context '${name}' unless another of this chat's contexts fits better.` : `Add the context '${name}' to this chat.`;
+      }
       return s("description") ? `Create a context called '${name}' and use it in this chat. It's for: ${s("description")}` : `Use the context '${name}' in this chat.`;
-    case "add_context":
-      if (s("description")) return `Create a context called '${name}' and add it to this chat. It's for: ${s("description")}`;
-      return args.write_here ? `Record new items in the context '${name}' unless another of this chat's contexts fits better.` : `Add the context '${name}' to this chat.`;
-    case "remove_context":
-      return `Stop using the context '${name}' in this chat.`;
     case "link_folder":
       return args.off ? `Stop starting new chats in this folder with the context '${name}'.` : `Start new chats in this folder with the context '${name}'.`;
-    case "describe_context":
-      return `Change the description of${of} to: ${s("description")}`;
+    case "update_context":
+      if (s("my_name")) return `Change my name in Vine Context to '${s("my_name")}'.`;
+      if (s("rename_to")) return `Rename${of} to '${s("rename_to")}' on this machine.`;
+      return `Change the description of${of} to: ${s("purpose")}`;
     case "delete_context":
       return `Delete this machine's copy of the context '${name}' for good. I typed its name to confirm.`;
-    case "set_my_name":
-      return `Change my name in Vine Context to '${name}'.`;
     case "share_context":
       return `Make a join code${s("label") ? ` for ${s("label")}` : ""}${s("role") ? ` with the role ${s("role")}` : ""}${there}.`;
-    case "revoke_invite":
-      return `Cancel the join code ${s("id")}${there}.`;
-    case "set_peer_role":
-      return `Change ${name}'s role to ${s("role")}${there}.`;
-    case "remove_peer":
+    case "manage_member":
+      if (args.action === "revoke_invite") return `Cancel the join code ${s("invite")}${there}.`;
+      if (args.action === "set_role") return `Change ${name}'s role to ${s("role")}${there}.`;
       return `Remove ${name} from${of}.`;
-    case "start_sharing":
-      return `Go back online with${of}.`;
-    case "stop_sharing":
-      return `Go offline with${of}.`;
-    case "take_back":
-      return `Take back the change ${s("id")}${there}, before it's sent to the other members.`;
+    case "sharing":
+      return args.action === "off" ? `Go offline with${of}.` : `Go back online with${of}.`;
     case "withdraw":
-      return `Withdraw ${s("id")}${there}.`;
+      return args.undo_only ? `Take back the change ${s("id")}${there}, before it's sent to the other members.` : `Withdraw ${s("id")}${there}.`;
     default:
       return `Run the Vine Context tool ${tool}${Object.keys(args).length ? ` with ${JSON.stringify(args)}` : ""}.`;
   }

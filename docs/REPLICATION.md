@@ -214,7 +214,7 @@ The mesh needs the same protections as the star, and a few more:
 - **Done:** relays are pinged and replaced when they go silent, and
   reconnection never gives up (`src/p2p/nostr.ts`).
 - **Done:** sharing is on by default and survives a restart; only
-  `stop_sharing` turns it off (`start_sharing` turns it back on).
+  `sharing` with the action `off` turns it off (`on` turns it back on).
 - **To do:** WebRTC links pinged the same way; a dead link is dropped and
   set up again through the room.
 - **To do:** each machine's vine starts at login (a login item / launch
@@ -273,10 +273,10 @@ None at the moment. The four earlier ones are decided in section 2.
 - **Contexts.** What people and agents see calls each graph a *context*
   (context graph); the code still says graph. Tools: `context_info`,
   `use_context`, `join_context`, `link_folder`, `share_context`,
-  `explore_context`, `context_activity`, `describe_context`.
+  `open_view`, `recent` (with `activity`), `update_context`.
 - **A chat's contexts** (2026-11-20; before, a conversation had a set of
   attached contexts from a `.p2p-context` file per folder). A chat usually
-  has one context and may add more (`add_context`, `remove_context`). The set
+  has one context and may add more (`use_context` with mode `add` or `remove`). The set
   and the write context are remembered in the data folder's `links.json`
   under the chat's id (`VINE_CHAT`, else `CLAUDE_CODE_SESSION_ID`), so a
   reopened chat gets them back. A new chat starts with its folder's linked

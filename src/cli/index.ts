@@ -33,7 +33,7 @@ Commands:
   --version                           Print the version
 
 Environment:
-  VINE_USER        Your name in contexts (default: the name you set with set_my_name, else git's user.name, else your computer account's full name, else your login name, else a made-up one)
+  VINE_USER        Your name in contexts (default: the name you set (update_context, or vine setup), else git's user.name, else your computer account's full name, else your login name, else a made-up one)
   VINE_CONTEXT     The context a new chat starts with when its folder has none linked (default: none; the agent asks)
   VINE_CHAT        The chat's id, to remember its context (default: Claude Code's session id)
   VINE_DATA_DIR    Where contexts live (default: ~/.local/share/vine-context)

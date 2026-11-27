@@ -8,6 +8,7 @@ import { VStack } from "@squonk/ui/vstack";
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
 import { NoToolCalls, asks, useBridge, type Bridge } from "./bridge";
+import { LinkButton } from "./linkbutton";
 import type { Panel } from "./panel";
 import { VineTheme } from "./theme";
 import { Conflicts } from "./views/Conflicts";
@@ -30,7 +31,6 @@ const VIEWS: Record<string, (p: { b: Bridge; open?: (p: Panel) => void }) => Rea
   conflicts: Conflicts,
 };
 
-const PANEL_TOOL: Record<Panel, string> = { explorer: "explore_context", console: "open_console" };
 
 function Root() {
   const b = useBridge();
@@ -57,11 +57,11 @@ function Root() {
   const open = async (view: Panel) => {
     setError(undefined);
     try {
-      setPanel({ view, data: await b.call(PANEL_TOOL[view]) });
+      setPanel({ view, data: await b.call("open_view", { view }) });
       await setMode(["fullscreen", "pip"]);
     } catch (e) {
       if (!(e instanceof NoToolCalls)) return setError((e as Error).message);
-      await b.say(asks(PANEL_TOOL[view], {}));
+      await b.say(asks("open_view", { view }));
     }
   };
   const back = async () => {
@@ -82,7 +82,26 @@ function Root() {
       </VStack>
     );
   }
-  const View = VIEWS[window.__VINE_VIEW__ ?? ""];
+  // ui://vine/view serves open_view, which shows any of three views: which one comes with the call (its result, else its input).
+  let name = window.__VINE_VIEW__ ?? "";
+  if (name === "view") {
+    const data = b.data as { view?: string; url?: string } | undefined;
+    if (data?.view === "browser" && data.url)
+      return (
+        <Alert tone="info" variant="tinted" title="The views are open in your browser">
+          <LinkButton onClick={() => void b.app.openLink({ url: data.url! }).catch(() => undefined)}>Open them again</LinkButton>. The link works on this machine only, and acts as you: don't share it.
+        </Alert>
+      );
+    name = data?.view ?? (b.input ? String(b.input.view ?? "contexts") : "");
+    if (!name)
+      return (
+        <HStack gap="xs" align="center">
+          <Spinner label="Opening" />
+          <Text tone="muted">Opening…</Text>
+        </HStack>
+      );
+  }
+  const View = VIEWS[name];
   if (!View) return <Alert tone="error">Unknown view.</Alert>;
   return (
     <VStack gap="sm">

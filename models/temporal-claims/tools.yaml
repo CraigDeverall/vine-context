@@ -42,13 +42,12 @@ tools:
     view: receipt
     undo: { tool: withdraw }
     description: >-
-      Record one statement you or the person believe is true, in one or two
-      sentences. Use it in the course of ordinary work, without being asked:
-      when the chat reaches a decision, establishes a fact or settles how
-      something works, and it fits what the context is for.
-      Link it to existing claims it supports, contradicts or replaces,
-      and to questions it answers. Use replaces to correct or update an earlier
-      claim rather than withdrawing it. Returns the new claim's id.
+      Record one statement you or the person believe is true. Use it in the
+      course of ordinary work, without being asked: when the chat reaches a
+      decision, establishes a fact or settles how something works, and it fits
+      what the context is for. Link it to the claims it supports, contradicts or
+      replaces and the questions it answers; to correct an earlier claim, use
+      replaces rather than withdrawing it.
     input:
       text: { type: string, required: true, max_length: 2000, description: The statement, in one or two sentences }
       source: { type: string, max_length: 500, description: Where it came from (URL, file, meeting, person) }
@@ -159,9 +158,9 @@ tools:
     kind: write
     apply: withdraw
     description: >-
-      Take back a claim, question or reply you recorded, for example one made by
-      mistake. It stays in the graph's history. To correct a claim, prefer
-      add_claim with replaces. Only its author or an admin can withdraw it.
+      Take back a claim, question or reply, for example one made by mistake
+      (only its author or an admin can). It stays in the history. To correct a
+      claim, prefer add_claim with replaces.
     input:
       id: { type: id, required: true, description: The claim, question or reply to withdraw }
       reason: { type: string, max_length: 500, description: Why it is withdrawn }
@@ -179,14 +178,13 @@ tools:
     title: Search
     kind: read
     description: >-
-      Find claims and questions related to a text, ranked by hybrid search (meaning
-      plus keywords). Returns only claims that are current and questions that are
-      not withdrawn, unless include_ended; questions show whether they are
+      Find claims and questions related to a text, by hybrid search (meaning
+      plus keywords): current claims, and questions with whether they are
       answered. Search before adding, to avoid duplicates and to find what to
       link to.
     input:
       query: { type: string, required: true, max_length: 1000, description: What to look for }
-      include_ended: { type: boolean, default: false, description: Also find claims that were replaced or withdrawn and questions that were withdrawn (each row says whether it is current) }
+      include_ended: { type: boolean, default: false, description: Also find replaced or withdrawn claims and withdrawn questions (each row says whether it is current) }
       kind: { type: enum, values: [any, claim, question], default: any, description: Only claims, only questions, or both }
       at: { type: datetime, description: Search the graph as it stood at this time (ISO 8601). Default now. }
       limit: { type: integer, min: 1, max: 50, default: 10, description: How many results }
@@ -220,9 +218,7 @@ tools:
     kind: read
     description: >-
       List the claims that were current at a moment (default now), newest first,
-      with what each supports, contradicts, replaces and answers. Give at to see
-      what the group believed back then. Give about_from/about_to to keep only
-      claims about that period.
+      with what each supports, contradicts, replaces and answers.
     input:
       at: { type: datetime, description: The moment to look at (ISO 8601). Default now. }
       about_from: { type: date, description: Keep claims about days on or after this (YYYY-MM-DD) }

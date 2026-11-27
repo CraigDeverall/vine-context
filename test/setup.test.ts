@@ -111,7 +111,7 @@ describe("vine setup", () => {
       vineVersion: "0.2.0",
       claudePlugins: "  ❯ vine-context@vine-context\n    Version: 0.2.0",
       codexPlugins: "vine-context@vine-context  installed, enabled  0.2.0",
-      name: { name: "Craig", source: "set_my_name" },
+      name: { name: "Craig", source: "chosen" },
       turn: { turn: "Cloudflare Realtime TURN (turn.cloudflare.com)", provider: "cloudflare", works: true },
       autostart: true,
     });

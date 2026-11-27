@@ -188,12 +188,12 @@ export async function runSetup(o: SetupOptions, d: SetupDeps): Promise<{ steps: 
     const cur = d.name.current();
     if (cur.source === "VINE_USER") record({ step: "name", status: "ok", detail: `${cur.name} (from VINE_USER)` });
     else {
-      const from = { set_my_name: "set before", git: "from git", os: "from your computer account", login: "your login name", generated: "made up" }[cur.source] ?? cur.source;
+      const from = { chosen: "set before", git: "from git", os: "from your computer account", login: "your login name", generated: "made up" }[cur.source] ?? cur.source;
       // A found name is offered to keep or change; a guess is only the fallback, so ask for theirs.
       const guessed = cur.source === "login" || cur.source === "generated";
       const question = guessed ? `  Your name, as others will see it (Enter keeps ${cur.name}, ${from})` : `  The name others see you as (${from})`;
       const name = (await d.prompt.ask(question, cur.name)).trim().slice(0, 60);
-      if (cur.source === "set_my_name" && name === cur.name) record({ step: "name", status: "ok", detail: `${name}` });
+      if (cur.source === "chosen" && name === cur.name) record({ step: "name", status: "ok", detail: `${name}` });
       else if (!name) record({ step: "name", status: "skipped", detail: `kept ${cur.name}` });
       // A kept guess isn't saved, so a better name found later (or given here next time) replaces it.
       else if (guessed && name === cur.name) record({ step: "name", status: "skipped", detail: `using ${cur.name} for now (${from}); set your own with \`vine setup\`` });

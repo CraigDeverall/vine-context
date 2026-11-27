@@ -74,7 +74,7 @@ export type Invite = {
   expires_at: string
 }
 
-/** One of this machine's contexts in full (the server's `context_details`), for the panel's details view. */
+/** One of this machine's contexts in full (the server's `context_info` with `details`), for the panel's details view. */
 export type ContextDetails = {
   name: string
   id: string | null
@@ -133,7 +133,7 @@ declare module 'claude-code' {
       creating: { error: string | null } | null
       /** A context that's off for this chat (by name), shown on its own page: it can't be opened. Null is the list. */
       managing: string | null
-      /** The details (`context_details`) of that context, or of the open context's Settings tab, once the server has answered. */
+      /** The details (`context_info` with `details`) of that context, or of the open context's Settings tab, once the server has answered. */
       details: ContextDetails | null
       /** The context whose deletion is being confirmed (the panel shows only that), with what's wrong with what was typed. */
       deleting: { name: string; error: string | null } | null

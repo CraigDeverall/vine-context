@@ -230,7 +230,7 @@ Everything works without settings. These change the defaults, and `vine --help` 
 
 | Variable | What it changes | Default |
 |---|---|---|
-| `VINE_USER` | Your name in contexts | The name saved with `set_my_name`, else git's `user.name`, else your computer account's full name, else a made-up one |
+| `VINE_USER` | Your name in contexts | The name you saved (`update_context`, or `vine setup`), else git's `user.name`, else your computer account's full name, else a made-up one |
 | `VINE_DATA_DIR` | Where contexts live | `~/.local/share/vine-context` |
 | `VINE_CONTEXT` | The context a new chat starts with when its folder has none linked | None: the agent asks |
 | `VINE_CHAT` | The chat's id, used to remember its context | Claude Code's or Codex's session id |

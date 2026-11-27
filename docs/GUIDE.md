@@ -157,19 +157,19 @@ Each code is for one person's machine.
 - Whoever uses it first is let in. Anyone else who uses it is turned away, and told to warn you that it may have leaked.
 - There is no approval step: the single-use code is the credential, so send it privately.
 - An unused code expires after 24 hours (*"invite Sam, valid for a week"* changes that).
-- The console and `sharing_status` list the invites. *Cancel*, or `revoke_invite`, stops one working.
+- The console and `sharing` (action `status`) list the invites. *Cancel*, or `manage_member` with `revoke_invite`, stops one working.
 - A code isn't needed again. A joined context is on the member's machine, so *"use the incident-42 context"* brings it back in any later chat.
 
 ## A chat's contexts
 
 A chat usually uses one context, and keeps it when you reopen the chat. The choice is remembered on your machine under the chat's id (Claude Code's session id, or `VINE_CHAT`), with nothing written into your project.
 
-- *"Use the incident-42 context"* (`use_context`) sets or switches it. A new name starts a new context, and the agent asks what it's for. That description can be changed later (`describe_context`, or ✎ in the panel).
-- *"Also use the infra context"* (`add_context`) adds another, and `remove_context` takes one out. With several, reads search them all, and the agent puts each write in the one whose description fits.
+- *"Use the incident-42 context"* (`use_context`) sets or switches it. A new name starts a new context, and the agent asks what it's for. That description can be changed later (`update_context`, or ✎ in the panel).
+- *"Also use the infra context"* (`use_context` with mode `add`) adds another, and mode `remove` takes one out. With several, reads search them all, and the agent puts each write in the one whose description fits.
 - There is no default. A new chat has no context until you choose, so the agent asks before its first write.
 - Pin contexts to a folder (`link_folder`; the 📌 on each context in the panel): new chats started in that folder, or below it, start with the pinned ones. That is kept on your machine too.
 - *"Delete the old-draft context"* (`delete_context`) deletes this machine's copy for good, after you confirm it by name; other members keep theirs. In the panel it's under a context's **Settings**.
-- *"Rename the incident-42 context to checkout-slowdown"* (`rename_context`) changes this machine's name for it; other members keep their own name for it. A context's **Settings** in the panel (the same whether it's on for the chat or not) changes its name and description, invites people and takes it offline.
+- *"Rename the incident-42 context to checkout-slowdown"* (`update_context` with `rename_to`) changes this machine's name for it; other members keep their own name for it. A context's **Settings** in the panel (the same whether it's on for the chat or not) changes its name and description, invites people and takes it offline.
 
 ## Questions have threads
 
@@ -188,7 +188,7 @@ Nothing is linked automatically. The agent records `SUPPORTS`, `CONTRADICTS` or 
 
 ## Undo and withdraw
 
-A write stays on your machine for 10 seconds before it is sent. *Undo* on the receipt (or `take_back`) removes it without trace in that time, so a slip such as personal details in the wrong chat never reaches anyone.
+A write stays on your machine for 10 seconds before it is sent. *Undo* on the receipt (or `withdraw`, which undoes instead of withdrawing while the write is still on your machine) removes it without trace in that time, so a slip such as personal details in the wrong chat never reaches anyone.
 
 After that it can only be *withdrawn*, which keeps it in everyone's history.
 
@@ -207,7 +207,7 @@ If two machines can't reach each other directly (some networks block it), one of
 - `vine turn set turn.example.org --user sam` asks for the password in the terminal and keeps it in a file only you can read (`--store keychain` uses the macOS Keychain or the Linux secret service; `--store env` keeps nothing and reads `VINE_TURN_PASSWORD`). `--tcp` and `--tls` pick how the server is reached.
 - `vine turn show`, `vine turn test` and `vine turn clear` show, check and remove it; `vine doctor` checks it too.
 - It applies to every context on the machine from the next connection on, with nothing to restart. `vine status` and the console say which links are direct and which are relayed.
-- An agent can set the server and username (`set_turn_server`) but never takes the password: it's read from `VINE_TURN_PASSWORD`, or you run `vine turn set` yourself.
+- An agent can set the server and username (`turn_server`) but never takes the password: it's read from `VINE_TURN_PASSWORD`, or you run `vine turn set` yourself.
 
 **STUN servers.** To find a route between two machines, Vine asks public STUN servers for each machine's public address: by default `stun.l.google.com:19302` and `stun.cloudflare.com:3478`. Those servers see your public IP address, nothing else. To use your own, or none, set `VINE_ICE` where vine runs (for Claude Code, in the environment it starts with), then stop each running context's host (`vine host stop --context NAME`) so it picks it up:
 

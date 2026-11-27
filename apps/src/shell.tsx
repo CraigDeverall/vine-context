@@ -16,11 +16,21 @@ import { createRoot } from "react-dom/client";
 import { Brand } from "./brand";
 import { VineTheme } from "./theme";
 
+/** One tab: a tool that shows a view, and the arguments to call it with. */
 interface AppTool {
+  key: string;
   name: string;
+  args: Record<string, unknown>;
   title: string;
   uri: string;
 }
+
+/** open_view shows any of these, so it is a tab for each. */
+const OPEN_VIEWS = [
+  ["contexts", "Contexts"],
+  ["console", "Console"],
+  ["explorer", "Explorer"],
+] as const;
 
 // The token comes in the URL fragment, so it never reaches a server log or a Referer header.
 const token = new URLSearchParams(location.hash.slice(1)).get("token") ?? "";
@@ -38,10 +48,14 @@ async function appTools(client: Client): Promise<AppTool[]> {
   const { tools } = await client.listTools();
   return tools
     .filter((t) => typeof (t._meta as any)?.ui?.resourceUri === "string" && !(t.inputSchema.required ?? []).length)
-    .map((t) => ({ name: t.name, title: t.title ?? t.name, uri: (t._meta as any).ui.resourceUri as string }));
+    .flatMap((t) => {
+      const uri = (t._meta as any).ui.resourceUri as string;
+      if (t.name === "open_view") return OPEN_VIEWS.map(([view, title]) => ({ key: view, name: t.name, args: { view }, title, uri }));
+      return [{ key: t.name, name: t.name, args: {}, title: t.title ?? t.name, uri }];
+    });
 }
 
-function View({ client, tool: { name, title, uri }, onMessage }: { client: Client; tool: AppTool; onMessage: (text: string) => void }) {
+function View({ client, tool: { name, args, title, uri }, onMessage }: { client: Client; tool: AppTool; onMessage: (text: string) => void }) {
   const frame = useRef<HTMLIFrameElement>(null);
   const [height, setHeight] = useState(480);
   const [error, setError] = useState<string>();
@@ -71,8 +85,8 @@ function View({ client, tool: { name, title, uri }, onMessage }: { client: Clien
         return {};
       };
       bridge.oninitialized = async () => {
-        await bridge!.sendToolInput({ arguments: {} });
-        const result = await client.callTool({ name: name, arguments: {} });
+        await bridge!.sendToolInput({ arguments: args });
+        const result = await client.callTool({ name: name, arguments: args });
         if (!cancelled) await bridge!.sendToolResult(result as never);
       };
       // Listen before the view loads, so its first message (ui/initialize) can't be missed.
@@ -84,7 +98,7 @@ function View({ client, tool: { name, title, uri }, onMessage }: { client: Clien
       cancelled = true;
       void bridge?.close();
     };
-  }, [client, name, uri, onMessage]);
+  }, [client, name, args, uri, onMessage]);
 
   return (
     <>
@@ -97,7 +111,7 @@ function View({ client, tool: { name, title, uri }, onMessage }: { client: Clien
 function Shell() {
   const [client, setClient] = useState<Client>();
   const [tools, setTools] = useState<AppTool[]>([]);
-  const [active, setActive] = useState<string>(new URLSearchParams(location.search).get("view") ?? "open_console");
+  const [active, setActive] = useState<string>(new URLSearchParams(location.search).get("view") ?? "console");
   const [error, setError] = useState<string>();
   const [message, setMessage] = useState<string>();
   const [gen, setGen] = useState(0);
@@ -111,14 +125,14 @@ function Shell() {
       .catch((e: Error) => setError(`Can't reach vine: ${e.message}. Is \`vine ui\` still running?`));
   }, []);
 
-  const pick = async (name: string) => {
-    setActive(name);
+  const pick = async (key: string) => {
+    setActive(key);
     setGen((g) => g + 1);
     if (client) setTools(await appTools(client)); // the model's tools change after use_context or a role change
-    history.replaceState(null, "", `?view=${name}${location.hash}`);
+    history.replaceState(null, "", `?view=${key}${location.hash}`);
   };
 
-  const tool = tools.find((t) => t.name === active) ?? tools[0];
+  const tool = tools.find((t) => t.key === active) ?? tools[0];
   const label = (t: AppTool) => t.title.replace(/^Open the /, "").replace(/^./, (c) => c.toUpperCase());
   return (
     <Container size="desktop">
@@ -140,12 +154,12 @@ function Shell() {
         {tools.length > 0 && (
           <Tabs
             listLabel="Views"
-            value={tool?.name}
+            value={tool?.key}
             onValueChange={pick}
             items={tools.map((t) => ({
-              value: t.name,
+              value: t.key,
               label: label(t),
-              content: client && tool?.name === t.name ? <View key={`${t.name}:${gen}`} client={client} tool={t} onMessage={setMessage} /> : null,
+              content: client && tool?.key === t.key ? <View key={`${t.key}:${gen}`} client={client} tool={t} onMessage={setMessage} /> : null,
             }))}
           />
         )}

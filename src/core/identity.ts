@@ -31,7 +31,7 @@ function storedName(dataDir: string): string | undefined {
 }
 
 /** Where a display name came from, strongest first. */
-export type NameSource = "VINE_USER" | "set_my_name" | "git" | "os" | "login" | "generated";
+export type NameSource = "VINE_USER" | "chosen" | "git" | "os" | "login" | "generated";
 
 /**
  * Sources that are a guess rather than the person's own name: ask them for a
@@ -108,13 +108,13 @@ export function generatedName(publicKey: string): string {
 
 /**
  * Your display name in graphs and where it came from: VINE_USER, else the name
- * you set (set_my_name), else git's user.name, else the full name on your
+ * you set (update_context, or `vine setup`), else git's user.name, else the full name on your
  * computer account, else your login name, else a name made up from your key.
  */
 export function resolveName(dataDir: string, probes: NameProbes = systemProbes): { name: string; source: NameSource } {
   if (process.env.VINE_USER) return { name: process.env.VINE_USER, source: "VINE_USER" };
   const stored = storedName(dataDir);
-  if (stored) return { name: stored, source: "set_my_name" };
+  if (stored) return { name: stored, source: "chosen" };
   for (const source of ["git", "os", "login"] as const) {
     const name = usable(probes[source]());
     if (name) return { name, source };

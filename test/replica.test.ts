@@ -236,7 +236,7 @@ describe("replicated graphs", () => {
     expect(bob.events.filter((e) => e.event === "digest").flatMap((e) => e.data.lines).join("\n")).not.toMatch(/bob replaced/);
   });
 
-  it("keeps sharing across a restart, and stop_sharing stays off", async () => {
+  it("keeps sharing across a restart, and going offline stays off", async () => {
     const alice = await member("alice", `team${++n}`);
     expect((await alice.local.request<Row>("status")).sharing).toBe(true);
     await alice.restart();
