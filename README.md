@@ -6,34 +6,21 @@
 
 **Vine Context – P2P Shared Context Graphs.** One [Relate](https://relatedb.ai/) context graph of claims and questions for a team and their AI agents, kept in step between everyone's machines, peer to peer, with no server: everyone holds a full copy on their own machine, and [no third party stores or reads it](#who-can-read-it).
 
-**See it in one command.** It needs Node 20 or later and nothing else: no install, account, API key, compiler or model download, and it touches nothing of yours.
-
-```bash
-npx vine-context demo
-```
-
-`demo` runs four members in one process. Craig creates the example context, and Craigslist, Craigosaurus Rex and Craiginator join it with codes. Then they replay the building of this project for the hackathon, each writing through their own host and syncing peer to peer. Part way through, Craig goes offline, the other three carry on, and he catches up when he is back. Your browser shows Craig's view of it, live.
-
-**Use it with your own agent.** One command installs the `vine` command and the plugin for Claude Code or Codex, checks the machine and its network, and repairs it if you run it again. `--dry-run` shows what it would do without changing anything.
+**Set it up.** You need Node 20 or later, and an AI agent that can start a local MCP server: Claude Code, Codex, Cursor, VS Code with Copilot, Gemini CLI and others ([which agents](#which-agents-it-works-with)).
 
 ```bash
 npx vine-context setup
 ```
 
-<details><summary>By hand</summary>
+One command installs the `vine` command, adds the plugin to Claude Code and Codex, prints the lines to paste for any other agent, checks the machine and its network, and repairs it if you run it again. `--dry-run` shows what it would do without changing anything.
+
+**Then start a group.** Tell your agent *"start a context called team-dinner"*, then *"invite Sam"*. Sam pastes the code into their own agent, and from then on what either of you records reaches the other: [Start a group](#start-a-group).
+
+**Or look first, with no agent.** This replays an example between four members in one process and shows it in your browser. It installs nothing and touches nothing of yours: [more](#look-first-with-no-agent).
 
 ```bash
-npm install -g vine-context
-claude plugin marketplace add CraigDeverall/vine-context
-claude plugin install vine-context@vine-context
-vine doctor
+npx vine-context demo
 ```
-
-Codex and other MCP agents: see [the guide](docs/GUIDE.md#install-by-hand). To run it from a clone of this repo instead, see [Setup and run](#1-see-it-about-two-minutes).
-
-</details>
-
-Then tell your agent *"start a context called incident-42"*.
 
 ![The graph explorer on the example graph](docs/images/explorer.jpg)
 
@@ -41,7 +28,9 @@ Then tell your agent *"start a context called incident-42"*.
 
 | If you want to… | Go to |
 |---|---|
-| Install it and try it | [Setup and run](#setup-and-run) |
+| Install it | [Set it up](#set-it-up) |
+| Try it with other people | [Start a group](#start-a-group) |
+| See an example without installing anything | [Look first, with no agent](#look-first-with-no-agent) |
 | See what Relate does here | [How it uses Relate](#how-it-uses-relate), then [docs/RELATE.md](docs/RELATE.md) |
 | Query the example graph yourself | [Where the data lives](#where-the-data-lives) |
 | See what was measured | [What was measured](#what-was-measured), then [docs/MEASURED.md](docs/MEASURED.md) |
@@ -49,7 +38,7 @@ Then tell your agent *"start a context called incident-42"*.
 | Use it with your own team | [docs/GUIDE.md](docs/GUIDE.md) |
 | Change a setting | [docs/GUIDE.md](docs/GUIDE.md#settings) |
 | Understand the peer-to-peer design | [How it works](#how-it-works), then [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md) |
-| Judge it for the Relate hackathon | [docs/HACKATHON.md](docs/HACKATHON.md) |
+| Read about the hackathon it was built for | [docs/HACKATHON.md](docs/HACKATHON.md) |
 
 ## Use case
 
@@ -96,43 +85,23 @@ flowchart LR
 
 The Relate features in use: an embedded directory store, uniqueness constraints, a vector index and a full-text index, hybrid search (`SEARCH … COMBINE (VECTOR …, FULLTEXT …)`), temporal values with `EXISTS {}` subqueries, pattern comprehensions, and transactions around every read and write. [docs/RELATE.md](docs/RELATE.md) shows where each one is used, with the Cypher.
 
-## Setup and run
+## Set it up
 
-**Prerequisites:** Node 20 or later. git only if you clone the repo. Tested on macOS arm64 and, in CI, on Linux x64, macOS and Windows x64. The native parts (Relate and node-datachannel) ship prebuilt binaries.
-
-### 1. See it (about two minutes)
-
-```bash
-npx vine-context demo
-```
-
-Four hosts start in this process, one each for Craig, Craigslist, Craigosaurus Rex and Craiginator. Craig creates the context, the other three join it with codes, and the story plays through them, one step every few seconds. Every write is signed by its author's host, held for undo, then carried to the others over WebRTC, and the terminal says when each one arrives. In the browser page that opens, which is Craig's view:
-
-1. **Console** shows the four members, their keys, roles and live links.
-2. **Explorer** fills in as the changes arrive. Once the story is over, drag the time slider back to replay it.
-3. **Conflicts** shows two claims side by side while they contradict each other. The story ends with one still open: the judging weights, which the last decision rests on.
-
-What to watch for in the story:
-
-| When | What happens | What it shows |
-|---|---|---|
-| 15 to 17 Nov | Craigosaurus Rex's design, one machine that hosts the graph and is its only writer, is replaced by Craig's: every member keeps a full copy | A claim replaced by someone else, and two questions answered by it |
-| 16 to 25 Nov | Craiginator's claim about the search embedder is replaced twice | A chain of `REPLACES`, and what was believed on any day |
-| 17 Nov | Craigosaurus Rex withdraws his claim about model packs | Nothing is deleted: it stays in the history |
-| 23 Nov | Craigslist re-reads the rules, which contradict the judging weights Craig recorded | A conflict nobody can settle yet, so it stays open |
-| 25 Nov | Craig goes offline and asks a question from his own copy. The others find out why CI was blocked, disagree, and settle it | Writing while offline, and a conflict settled |
-| 25 Nov | Craig comes back | His question reaches the others and is answered, and his agent is told what the morning's changes mean for him |
-| 25 Nov | Craig replaces the example story with this one, and links what that decision rests on | A chain of `SUPPORTS` three steps deep, with one claim replaced since and one contested |
-
-`--pace 1` runs it faster, `--pace 0` all at once. `--join` finds the members through the public Nostr relays instead of in this process, and prints a join code at the end, so your own agent (on this machine or another) can join as a fifth member and write into the same graph.
-
-### 2. Install it for your agent
+**You need** Node 20 or later, and an AI agent that can start a local MCP server. git only if you clone the repo. Tested on macOS arm64 and, in CI, on Linux x64, macOS and Windows x64. The native parts (Relate and node-datachannel) ship prebuilt binaries, so there is nothing to compile.
 
 ```bash
 npx vine-context setup
 ```
 
-One command sets the machine up, and repairs it if you run it again. It installs the `vine` command and the plugin for Claude Code or Codex (printing each command before it runs it), confirms your name, checks the machine and its network, sets up a TURN server if the network looks like it needs one, and offers autostart on macOS. `--dry-run` shows what it would do without changing anything.
+It says what it found at each step, and prints every command before it runs it:
+
+1. installs the `vine` command;
+2. adds the plugin to Claude Code and Codex, if it finds them, and prints the lines to paste for any other agent;
+3. confirms the name others will see;
+4. checks the machine and its network, and sets up a TURN server only if the network looks like it needs one;
+5. on macOS, offers to keep your contexts syncing after a restart.
+
+Run it again at any time: it only fixes what is missing or broken. `--dry-run` shows what it would do without changing anything. Then restart your agent, so it loads the plugin.
 
 <details><summary>By hand</summary>
 
@@ -143,7 +112,7 @@ claude plugin install vine-context@vine-context
 vine doctor
 ```
 
-Codex and other MCP agents: see [the guide](docs/GUIDE.md#install-by-hand).
+Codex and other agents: see [the guide](docs/GUIDE.md#install-by-hand).
 
 </details>
 
@@ -155,45 +124,68 @@ cd vine-context
 npm ci
 npm run build
 npm link
-vine demo
+vine setup
 ```
 
-`npm link` puts this clone's `vine` command on your PATH, so the plugin steps above work with it too. `npm run check` runs the typecheck, the tests and the build, as CI does.
+`npm link` puts this clone's `vine` command on your PATH. `npm run check` runs the typecheck, the tests and the build, as CI does.
 
 </details>
 
-### 3. Use it from your agent
+### Which agents it works with
 
-`vine setup` installed the plugin. It brings the MCP server, the skills and the `/vine-context:join` command, and in Claude Code a live panel beside the chat. Codex uses the same plugin, and any other MCP agent can run `vine mcp` directly: see [the guide](docs/GUIDE.md#install).
+Any agent that can start a local MCP server. The members of a context don't need to use the same one.
 
-Then ask in plain words:
+| Your agent | What to do |
+|---|---|
+| Claude Code, Codex | `npx vine-context setup` installs the plugin: the MCP server, the skills and a join command, and in Claude Code a live panel beside the chat |
+| Cursor, VS Code with Copilot, Gemini CLI, GitHub Copilot CLI, Grok CLI, Claude Desktop, Windsurf, Zed, opencode | Run `npx vine-context setup`, then add `vine mcp` to the agent as a local MCP server. Setup prints the lines, and [the guide](docs/GUIDE.md#other-mcp-agents) has them for each agent |
+| ChatGPT, and other assistants that only reach remote MCP servers; phones | These can't connect yet. [Look first, with no agent](#look-first-with-no-agent) still works |
 
-- *"Start a context called incident-42."*
-- *"Record that 48 people are coming, from the RSVP sheet."*
-- *"What open questions are there?"*
-- *"Open the graph explorer."*
+Vine is tested with Claude Code and Codex. The lines for the others follow each agent's own documentation.
 
-**Or put your agent into the example.** With the plugin installed, this replays the example story and then prints a join line:
+## Start a group
+
+Vine is for a group, so it shows best with two or more people, each on their own machine with their own agent. Everyone runs `npx vine-context setup` first. Then:
+
+1. **One person starts a context.** *"Start a context called team-dinner, for planning Friday's dinner."*
+2. **They invite each person.** *"Invite Sam to this context."* The agent gives a line to send to Sam privately: `/vine-context:join vine1_…`. A code is for one person, so ask for one each.
+3. **Each person joins.** They paste the line into their own agent while the inviter's machine is online. (In an agent without the plugin, *"join this context: vine1_…"* does the same.) They get a full copy of the graph, and a briefing on what it holds. Everyone in the context is told who joined.
+4. **Everyone uses it.** Whatever anyone records reaches the others the next time their machines are online together.
+
+Things to try together:
+
+| Try | Say to your agent |
+|---|---|
+| Record what you know | *"Record that the venue holds 40 people."* |
+| Disagree | Someone else: *"Record that the venue only holds 25. It contradicts Sam's claim."* Then anyone: *"Where do we disagree?"* |
+| Change your mind | *"Replace my claim about the venue: it holds 30."* Then: *"What did we believe ten minutes ago?"* |
+| Ask, and answer | *"Ask who is booking the venue."* Someone else: *"Answer that: Priya is booking it."* Then: *"What questions are still open?"* |
+| Work offline | Turn your Wi-Fi off, record something, and turn it back on. It reaches the others then |
+| See the graph | *"Open the graph explorer."* |
+
+Any subject works where people know different things and may disagree: where to hold a team dinner, which library to pick, what goes into a release, why something broke.
+
+**If two machines don't connect,** run `vine doctor` on each. Most home, office and café networks connect directly. Some corporate networks, guest Wi-Fi and phone hotspots need a TURN server, which `vine setup` offers to set up: [do I need a TURN server?](docs/GUIDE.md#do-i-need-a-turn-server)
+
+The agent only gets the model's tools (`add_claim`, `ask_question`, `link`, `search`, `beliefs`, `conflicts`, `basis` and so on), never raw Cypher. Join codes, roles, undo and removing someone are covered in [the guide](docs/GUIDE.md).
+
+## Look first, with no agent
 
 ```bash
-vine demo --join
+npx vine-context demo
 ```
 
-Paste the line it prints (`/vine-context:join vine1_…`) into your agent. It joins as a fifth member, gets its own full copy of the graph, and is briefed on the open questions and the open conflict. Then ask it:
+Four hosts start in this process, one each for Craig, Craigslist, Craigosaurus Rex and Craiginator. Craig creates a context, the other three join it with codes, and they replay the building of this project, one step every few seconds. Every write is signed by its author's host, held for undo, then carried to the others over WebRTC, and the terminal says when each one arrives. Part way through, Craig goes offline, the other three carry on, and he catches up when he is back.
 
-- *"What does the decision to make this the example story rest on, and does it all still stand?"* It follows `SUPPORTS` back three steps and finds an embedder claim that has since been replaced, and the judging weights, which Craigslist's claim contradicts.
-- *"What did the team believe on the Monday evening, before it changed its mind?"*
-- *"Record that the rules page was updated on 24 Nov to the 100-point weights, and that it supports Craig's claim."* The new claim and its link appear in the browser page, which is Craig's copy, a moment later.
+The browser page that opens is Craig's view:
 
-The agent only gets the model's tools (`add_claim`, `ask_question`, `link`, `search`, `beliefs`, `conflicts`, `basis` and so on), never raw Cypher.
+1. **Console** shows the four members, their keys, roles and live links.
+2. **Explorer** fills in as the changes arrive. Once the story is over, drag the time slider back to replay it.
+3. **Conflicts** shows two claims side by side while they contradict each other. The story ends with one still open.
 
-### 4. Share it
+`--pace 1` runs it faster, `--pace 0` all at once. [The guide](docs/GUIDE.md#the-example-story) says what to watch for in the story.
 
-1. **You:** *"Invite Sam to my context."* Your agent gives you a line to send privately: `/vine-context:join vine1_…`
-2. **Sam:** pastes it into their agent while your machine is online. They get a full copy and a briefing: what the context holds, the open questions, the conflicts.
-3. **Everyone in the context is told** who joined. From then on, whatever anyone records reaches the others the next time their machines are online together.
-
-Join codes, roles, undo, working offline and removing someone are covered in [the guide](docs/GUIDE.md).
+**To put your own agent into the example,** set it up first, then run `vine demo --join`. It meets the members through the public Nostr relays and prints a join line. Paste that into your agent: it joins as a fifth member with its own full copy, and what it records appears in the browser page a moment later. Then ask it *"What did the team believe on the Monday evening, before it changed its mind?"* or *"What does the decision to make this the example story rest on, and does it all still stand?"*
 
 ## Where the data lives
 
@@ -292,7 +284,7 @@ Each is explained in [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md#limits).
 | [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md) | Hosts, signed changes, the mesh, join codes, files on disk, limits |
 | [docs/REPLICATION.md](docs/REPLICATION.md) | The replication design and the decisions behind it |
 | [docs/MEASURED.md](docs/MEASURED.md) | Two measurements, how to rerun them, and what they don't show |
-| [docs/HACKATHON.md](docs/HACKATHON.md) | The Relate hackathon entry: what to run, how it meets each judging criterion, what is new, AI tools used |
+| [docs/HACKATHON.md](docs/HACKATHON.md) | Built for the Relate by Neo4j Hackathon: where to start, what it offers, what is new, the tools used |
 
 ## Built with
 
@@ -303,7 +295,7 @@ Each is explained in [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md#limits).
 - React with the [@squonk/ui](https://ui.squonkstack.io) design system (MIT; vendored in `vendor/` because it is published to a private registry)
 - zod, yaml, esbuild, tsup, vitest
 
-Written with the help of Claude Code (Anthropic's AI coding agent).
+Written with the help of AI coding assistants.
 
 ## Licence
 
