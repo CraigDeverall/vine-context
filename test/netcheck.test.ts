@@ -50,8 +50,8 @@ describe("STUN", () => {
   });
 
   it("asks both servers from one socket: the same mapping means direct connections should work", async () => {
-    const a = await fakeStun((p) => ({ address: "203.0.113.9", port: p + 1000 }));
-    const b = await fakeStun((p) => ({ address: "203.0.113.9", port: p + 1000 }));
+    const a = await fakeStun((p) => ({ address: "203.0.113.9", port: p > 60000 ? p - 1000 : p + 1000 }));
+    const b = await fakeStun((p) => ({ address: "203.0.113.9", port: p > 60000 ? p - 1000 : p + 1000 }));
     const got = await probeStun([a, b], 2000);
     expect(got.every((g) => g.address === "203.0.113.9")).toBe(true);
     expect(got[0]!.port).toBe(got[1]!.port);
