@@ -248,7 +248,7 @@ The panel never writes a claim or question itself: your agent does, from what yo
 | Command | What it does |
 |---|---|
 | `vine setup` | Set the machine up, or repair it ([install](#install)); `npx vine-context setup` before `vine` is installed |
-| `vine demo` | Three members in one process replay the example, syncing peer to peer; `--join` lets your agent join as a fourth |
+| `vine demo` | Four members in one process replay the example, syncing peer to peer; `--join` lets your agent join as a fifth |
 | `vine example [DIR]` | Copy the example Relate store to a folder, to open with Relate's own CLI |
 | `vine mcp` | Run the MCP server (your agent starts this) |
 | `vine doctor` | Check Node, Relate, WebRTC, the model, the data directory, the network (does it need TURN?) and the TURN server |
@@ -297,4 +297,4 @@ Each `VINE_DATA_DIR` is a separate person, so two MCP servers side by side can p
 claude mcp add vine-bob -e VINE_DATA_DIR="$HOME/.local/share/vine-bob" -e VINE_USER=bob -- vine mcp
 ```
 
-To point an agent at a live replicated graph, run `vine demo` and use the `VINE_DATA_DIR=… vine mcp --context party` line it prints (that is alice's copy), or run `vine demo --join` and give your agent the join code it prints at the end.
+To point an agent at a live replicated graph, run `vine demo` and use the `VINE_DATA_DIR=… vine mcp --context vine-entry` line it prints (that is Craig's copy), or run `vine demo --join` and give your agent the join code it prints at the end.

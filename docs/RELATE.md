@@ -94,71 +94,83 @@ The embedder is a small sentence model (bge-small, 384 numbers) that installs wi
 
 ## Explore the example store
 
-The example is a bit of office life in miniature: Alice, Bob and Carol planning the Christmas party over three days in November 2026. It holds 10 claims (one withdrawn, two replaced), 3 questions, 3 replies and 16 relationships, of every kind. The decision at its centre rests on evidence three steps deep, and by the end some of that evidence no longer stands.
+The example is the building of this project: four people, 15 to 25 Nov 2026, and the decisions, changes of mind and breakages the project really went through. The cast is made up (all four are versions of the one Craig who built it with his agents). It holds 23 claims (one withdrawn, seven replaced), 7 questions, 2 replies and 32 relationships, of every kind. The last decision in it rests on evidence three steps deep, and by the end some of that evidence no longer stands.
 
 Install [Relate's CLI](https://relatedb.ai/docs/get-started/install/), then work on a copy, because Relate rewrites a store's files when it opens one. This makes the copy, from the npm package or from a clone of this repo:
 
 ```bash
-npx vine-context example /tmp/party
+npx vine-context example /tmp/vine-entry
 ```
 
-**What's in it?** Two `ABOUT`, five `SUPPORTS`, two `CONTRADICTS`, two `ANSWERS`, two `REPLACES` and three `REPLIES_TO`.
+**What's in it?** Nine `SUPPORTS`, seven `REPLACES`, six `ANSWERS`, six `ABOUT`, two `CONTRADICTS` and two `REPLIES_TO`.
 
 ```bash
-relate -d /tmp/party --mode table "MATCH ()-[r]->() RETURN type(r) AS relationship, count(*) AS n"
+relate -d /tmp/vine-entry --mode table "MATCH ()-[r]->() RETURN type(r) AS relationship, count(*) AS n"
 ```
 
-**Where did the team disagree, and is it settled?** Twice. Carol's reading of the Riverside Room's licence (40 seated) contradicted Bob's claim that it takes the whole party; Bob settled that by replacing his claim. Alice's reading of the Orangery's events pack (a £2,600 minimum on a Friday) contradicts Carol's hire-fee waiver, and nobody has settled it.
+**Where did the team disagree?** Twice. Craigslist's reading of the rules (five criteria, weighted equally) contradicts the 100-point weights Craig recorded on the first day. And Craigslist's finding that the month's CI allowance was used up contradicts Craiginator's claim that a payment failed.
 
 ```bash
-relate -d /tmp/party --mode table "MATCH (a:Claim)-[:CONTRADICTS]->(b:Claim) RETURN a.recorded_by AS who, a.text AS claim, b.recorded_by AS against, b.text AS other, EXISTS { MATCH (:Claim)-[:REPLACES]->(b) } AS settled"
+relate -d /tmp/vine-entry --mode table "MATCH (a:Claim)-[:CONTRADICTS]->(b:Claim) RETURN a.recorded_by AS who, a.text AS claim, b.recorded_by AS against, b.text AS other"
 ```
 
-**What was replaced?** Bob replaced his own Riverside claim on Tuesday at 16:45: the party is at the Orangery on 19 Dec. On Wednesday Carol replaced the headcount: 55 are coming, not 48.
+**Which disagreement is still open?** The one where neither claim has been replaced. Craiginator gave way on CI and replaced his claim, so that one is settled. Nobody could tell which judging weights hold, so that one is not.
 
 ```bash
-relate -d /tmp/party --mode table "MATCH (new:Claim)-[r:REPLACES]->(old:Claim) RETURN old.text AS was, new.text AS now, new.recorded_by AS by, r.recorded_at AS at"
+relate -d /tmp/vine-entry --mode table "MATCH (a:Claim)-[:CONTRADICTS]->(b:Claim) WHERE NOT EXISTS { MATCH (:Claim)-[:REPLACES]->(a) } AND NOT EXISTS { MATCH (:Claim)-[:REPLACES]->(b) } RETURN a.text AS claim, b.text AS against"
 ```
 
-**Which questions are answered, and which is still open?** The venue and the budget questions have answers; whether partners are invited has none.
+**What did the team change its mind about, and who changed it?** Seven claims were replaced, four of them by someone other than their author. The biggest is the design itself: Craigosaurus Rex's one machine that hosts the graph gave way to Craig's full copy for every member.
 
 ```bash
-relate -d /tmp/party --mode table "MATCH (q:Question) OPTIONAL MATCH (c:Claim)-[:ANSWERS]->(q) RETURN q.text AS question, c.text AS answer"
+relate -d /tmp/vine-entry --mode table "MATCH (new:Claim)-[r:REPLACES]->(old:Claim) RETURN old.recorded_by AS theirs, old.text AS was, new.recorded_by AS by, new.text AS now, r.recorded_at AS at"
 ```
 
-**What was said in the threads?** A reply is a message in a question's thread, not an answer. Two of these threads were closed by a claim that answers the question; the partners question has only its reply, so it stays open.
+**What changed more than once?** Follow `REPLACES` further. The search embedder went from hash-256, to a semantic one that could be switched on, to semantic by default.
 
 ```bash
-relate -d /tmp/party --mode table "MATCH (m:Reply)-[:REPLIES_TO]->(q:Question) RETURN q.text AS question, m.recorded_by AS who, m.text AS reply"
+relate -d /tmp/vine-entry --mode table "MATCH p=(:Claim)-[:REPLACES*2..]->(:Claim) RETURN [n IN nodes(p) | n.text] AS newest_first"
 ```
 
-**What does the decision rest on, and does it still stand?** Follow `SUPPORTS` back from the decision, any number of steps, and test each piece of evidence against the other relationships. The decision is still current, but of the five things it rests on, one has been replaced (the headcount, two steps back), one was withdrawn (last year's cost, three steps back) and one is contradicted by a claim nobody has answered (the waiver). No single statement says that; only the paths do.
+**Which questions are answered, and which are still open?** Four have answers. Three have none: which judging weights hold, who records the demo video, and whether one person's two machines should count as one member.
 
 ```bash
-relate -d /tmp/party --mode table "MATCH (d:Claim) WHERE d.text STARTS WITH 'The party is at' MATCH p = (e:Claim)-[:SUPPORTS*1..6]->(d) RETURN length(p) AS steps, e.recorded_by AS who, e.text AS evidence, e.withdrawn_at IS NOT NULL AS withdrawn, EXISTS { MATCH (:Claim)-[:REPLACES]->(e) } AS replaced, EXISTS { MATCH (o:Claim)-[:CONTRADICTS]-(e) WHERE o.withdrawn_at IS NULL AND NOT EXISTS { MATCH (:Claim)-[:REPLACES]->(o) } } AS contested ORDER BY steps"
+relate -d /tmp/vine-entry --mode table "MATCH (q:Question) OPTIONAL MATCH (c:Claim)-[:ANSWERS]->(q) RETURN q.text AS question, collect(c.text) AS answers"
 ```
 
-Agents get the same answer from the `basis` tool, as of any moment: at 17:00 on Tuesday every piece of that evidence still stood.
-
-**Which claims are about the day of the party?** A claim can say which days it is about (`about_from` to `about_to`), apart from when it was recorded. Two claims are about Friday 19 Dec, both recorded a month before it.
+**What does the last decision rest on, and does it all still stand?** Follow `SUPPORTS` back from the decision, any number of steps, and test each piece of evidence against the other relationships. The decision to make the team's own build the example story is still current, but of the six things it rests on, one has been replaced (the hash-256 embedder, two steps back) and one is contradicted by a claim nobody has settled (the judging weights). No single statement says that; only the paths do.
 
 ```bash
-relate -d /tmp/party --mode table "MATCH (c:Claim) WHERE c.about_from <= date('2026-12-19') AND c.about_to >= date('2026-12-19') RETURN c.recorded_by AS who, c.text AS claim, c.recorded_at AS recorded"
+relate -d /tmp/vine-entry --mode table "MATCH (d:Claim) WHERE d.text STARTS WITH 'The example story is this one' MATCH p = (e:Claim)-[:SUPPORTS*1..6]->(d) RETURN length(p) AS steps, e.recorded_by AS who, e.text AS evidence, e.withdrawn_at IS NOT NULL AS withdrawn, EXISTS { MATCH (:Claim)-[:REPLACES]->(e) } AS replaced, EXISTS { MATCH (o:Claim)-[:CONTRADICTS]-(e) WHERE o.withdrawn_at IS NULL AND NOT EXISTS { MATCH (:Claim)-[:REPLACES]->(o) } } AS contested ORDER BY steps"
 ```
 
-**What did the team believe on Monday afternoon?** Only what had been recorded by then, and not yet replaced or withdrawn. At 16:00 on Monday 17 Nov, Bob's Riverside Room claim and Carol's contradicting one were both current.
+Agents get the same answer from the `basis` tool, as of any moment.
+
+**Which claims are about one day?** A claim can say which days it is about (`about_from` to `about_to`), apart from when it was recorded. Two claims are about Wednesday 25 Nov: the repo going public, and the size of the field.
 
 ```bash
-relate -d /tmp/party --mode table "WITH datetime('2026-11-17T16:00:00Z') AS T MATCH (c:Claim) WHERE c.recorded_at <= T AND (c.withdrawn_at IS NULL OR c.withdrawn_at > T) AND NOT EXISTS { MATCH (:Claim)-[r:REPLACES]->(c) WHERE r.recorded_at <= T } RETURN c.recorded_by AS who, c.text AS believed ORDER BY c.recorded_at"
+relate -d /tmp/vine-entry --mode table "MATCH (c:Claim) WHERE c.about_from <= date('2026-11-25') AND c.about_to >= date('2026-11-25') RETURN c.recorded_by AS who, c.text AS claim, c.recorded_at AS recorded"
 ```
 
-Change the time to `2026-11-19T10:00:00Z` and the answer changes: the Riverside Room is gone, the Orangery has taken its place, and last year's cost (recorded and withdrawn on Tuesday) never shows. Change it to `2026-11-19T12:00:00Z` and the headcount is 55.
+**What was said in the threads?** A reply is a message in a question's thread, not an answer. One of these threads was later closed by a claim that answers its question. The other has only its reply, so the question stays open.
+
+```bash
+relate -d /tmp/vine-entry --mode table "MATCH (m:Reply)-[:REPLIES_TO]->(q:Question) RETURN q.text AS question, m.recorded_by AS who, m.text AS reply"
+```
+
+**What did the team believe on the Monday evening, before it changed its mind?** Only what had been recorded by then, and not yet replaced or withdrawn. At 18:00 on Monday 16 Nov, the graph still said one machine hosts the graph, search used hash-256, and a team could install its own model pack.
+
+```bash
+relate -d /tmp/vine-entry --mode table "WITH datetime('2026-11-16T18:00:00Z') AS T MATCH (c:Claim) WHERE c.recorded_at <= T AND (c.withdrawn_at IS NULL OR c.withdrawn_at > T) AND NOT EXISTS { MATCH (:Claim)-[r:REPLACES]->(c) WHERE r.recorded_at <= T } RETURN c.recorded_by AS who, c.text AS believed ORDER BY c.recorded_at"
+```
+
+Change the time to `2026-11-17T18:00:00Z` and the answer changes: every member keeps a full copy, and the model packs claim, withdrawn that afternoon, is gone.
 
 The same store, seen in the explorer with `vine demo`:
 
-![The graph explorer on the example party graph](images/explorer.jpg)
+![The graph explorer on the example graph](images/explorer.jpg)
 
-The store was built by [`scripts/make-examples.ts`](../scripts/make-examples.ts) from the signed change log in [`examples/data/hosts/party/changes.jsonl`](../examples/data/hosts/party/changes.jsonl). `npm run examples` rebuilds both.
+The store was built by [`scripts/make-examples.ts`](../scripts/make-examples.ts) from the signed change log in [`examples/data/hosts/vine-entry/changes.jsonl`](../examples/data/hosts/vine-entry/changes.jsonl). The story itself is in [`src/demo/scenario.ts`](../src/demo/scenario.ts). `npm run examples` rebuilds both.
 
 ## How agents reach the graph
 

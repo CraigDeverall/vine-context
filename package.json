@@ -46,7 +46,8 @@
     "build:embedder": "node scripts/build-embedder.mjs",
     "pack:embedder": "node scripts/pack-embedder.mjs --pack",
     "examples": "tsx scripts/make-examples.ts",
-    "bench:churn": "tsx scripts/bench-churn.ts"
+    "bench:churn": "tsx scripts/bench-churn.ts",
+    "bench:recall": "tsx scripts/bench-recall.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",

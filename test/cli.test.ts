@@ -24,7 +24,7 @@ describe("vine cli", () => {
   it("copies the example store, and won't overwrite a folder", () => {
     const dir = mkdtempSync(join(tmpdir(), "vine-example-"));
     try {
-      const to = join(dir, "party");
+      const to = join(dir, "vine-entry");
       const r = vine("example", to);
       expect(r.status).toBe(0);
       expect(existsSync(join(to, "manifest.json"))).toBe(true);

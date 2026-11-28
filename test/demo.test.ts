@@ -1,9 +1,10 @@
-// `vine demo`: three members in one process, joined with real codes, playing
-// the example story through their own hosts and syncing over WebRTC.
+// `vine demo`: four members in one process, joined with real codes, playing
+// the example story through their own hosts and syncing over WebRTC. One of
+// them goes offline part way through, writes to his own copy, and catches up.
 
 import { afterAll, describe, expect, it } from "vitest";
 import { startDemo, type Demo, type Member } from "../src/demo/live.js";
-import { STEPS } from "../src/demo/scenario.js";
+import { CREATOR, NAMES, STEPS } from "../src/demo/scenario.js";
 import { tempDir } from "./helpers.js";
 
 type Row = Record<string, any>;
@@ -13,45 +14,51 @@ afterAll(async () => demo?.stop());
 const texts = async (m: Member) => ((await m.call<Row[]>("beliefs", {})) as Row[]).map((r) => r.text).sort();
 
 describe("vine demo", () => {
-  it("joins three members, plays the story, and every copy ends the same", async () => {
+  it("joins four members, plays the story with one of them offline for part of it, and every copy ends the same", async () => {
     const lines: string[] = [];
-    demo = await startDemo({ paceMs: 0, holdMs: 150, tmp: tempDir(), narrate: (l) => lines.push(l) });
-    const { alice, bob, carol } = demo.members;
+    demo = await startDemo({ paceMs: 0, holdMs: 150, tmp: tempDir(), narrate: (l: string) => lines.push(l) });
+    const all = NAMES.map((n) => demo!.members[n]);
 
-    // Linked before the story: each sees the other two online.
-    for (const m of [alice, bob, carol]) expect(m.host.status().links.filter((l) => l.state === "active")).toHaveLength(2);
-    expect(lines.some((l) => l.includes("bob joins with a code"))).toBe(true);
+    // Linked before the story: each sees the other three online.
+    for (const m of all) expect(m.host.status().links.filter((l) => l.state === "active")).toHaveLength(3);
+    expect(lines.some((l) => l.includes("Craigslist joins with a code"))).toBe(true);
 
     await demo.story;
 
-    // The same beliefs everywhere, and the story's ending: the Riverside claim replaced, last year's cost withdrawn.
-    const a = await texts(alice);
-    expect(a).toEqual(await texts(bob));
-    expect(a).toEqual(await texts(carol));
-    expect(a).toContain("The party is at the Orangery on Friday 19 Dec, not the Riverside Room");
-    expect(a).not.toContain("The Riverside Room can take the whole party on Friday 12 Dec");
-    expect(a).not.toContain("Last year's party cost £2,300, so £2,400 is plenty");
+    // The same beliefs everywhere, and the story's ending: each replaced or withdrawn claim gone from the current view.
+    const a = await texts(all[0]!);
+    for (const m of all) expect(await texts(m)).toEqual(a);
+    expect(a.some((t) => t.startsWith("Every member keeps a full copy of the graph"))).toBe(true);
+    expect(a.some((t) => t.startsWith("One machine hosts the graph"))).toBe(false);
+    expect(a.some((t) => t.startsWith("The semantic embedder is the default"))).toBe(true);
+    expect(a.some((t) => t.includes("hash-256 stays the default"))).toBe(false);
+    expect(a.some((t) => t.startsWith("A team can install its own model pack"))).toBe(false);
+    expect(a.some((t) => t.includes("a payment failed"))).toBe(false);
 
-    // The first conflict settled and a second is open, one question still open (replied to, not answered), on every copy.
-    // The decision rests on evidence three steps deep, some of which no longer stands.
-    for (const m of [alice, bob, carol]) {
+    for (const m of all) {
+      // One conflict settled (why CI was blocked), one left open (the judging weights).
       const conflicts = (await m.call<Row[]>("conflicts", {})) as Row[];
-      expect(conflicts.map((c) => c.contradicts.text)).toEqual(["The Orangery waives its hire fee at a £1,800 minimum spend on food and drink, which fits the £2,400 budget"]);
-      const decision = ((await m.call<Row[]>("beliefs", {})) as Row[]).find((c) => c.text.startsWith("The party is at the Orangery"))!;
+      expect(conflicts).toHaveLength(1);
+      expect(JSON.stringify(conflicts)).toContain("weighted equally");
+      // The last decision rests on evidence three steps deep: one claim replaced since, one contested.
+      const decision = ((await m.call<Row[]>("beliefs", {})) as Row[]).find((c) => c.text.startsWith("The example story is this one"))!;
       const basis = (await m.call<Row[]>("basis", { id: decision.id })) as Row[];
-      expect(basis.map((e) => e.steps)).toEqual([1, 1, 2, 2, 3]);
-      expect(basis.filter((e) => !e.current).map((e) => [e.steps, e.withdrawn, e.replaced_by.length])).toEqual([[2, false, 1], [3, true, 0]]);
-      expect(basis.filter((e) => e.contradicted_by.length)).toHaveLength(1);
-      const open = (await m.call<Row[]>("open_questions", {})) as Row[];
-      expect(open.map((q) => q.text)).toEqual(["Should partners be invited, and is there budget for them?"]);
-      const thread = (await m.call<Row>("thread", { question: open[0]!.id })) as Row;
-      expect(JSON.stringify(thread)).toContain("January drinks evening");
-      expect(await m.call<Row[]>("beliefs", {})).toHaveLength(7);
+      expect(basis.map((e) => e.steps)).toEqual([1, 1, 2, 2, 2, 3]);
+      expect(basis.filter((e) => !e.current).map((e) => [e.steps, e.withdrawn, e.replaced_by.length])).toEqual([[2, false, 1]]);
+      expect(basis.filter((e) => e.contradicted_by.length).map((e) => e.steps)).toEqual([1]);
+      // Three questions still open; the one Craig asked while offline reached everyone and was answered.
+      const open = ((await m.call<Row[]>("open_questions", {})) as Row[]).map((q) => q.text).sort();
+      expect(open).toHaveLength(3);
+      expect(open.some((t) => t.startsWith("Who records the two-minute demo video"))).toBe(true);
+      expect(open.some((t) => t.startsWith("Why did CI never start"))).toBe(false);
+      expect(await m.call<Row[]>("beliefs", {})).toHaveLength(a.length);
     }
 
-    // Every step was narrated, and alice's agent was told what bob's and carol's writes meant for her.
+    // Every step was narrated; Craig went offline and came back to news of what the others' writes meant for him.
     expect(lines.filter((l) => new RegExp(`^\\d+/${STEPS.length} `).test(l))).toHaveLength(STEPS.length);
-    expect(lines.some((l) => l.includes("alice's agent is told"))).toBe(true);
-    expect(lines.some((l) => l.includes("reached bob"))).toBe(true);
-  }, 90_000);
+    expect(lines.some((l) => l.includes(`${CREATOR} is offline: 3 machines are still linked`))).toBe(true);
+    expect(lines.some((l) => l.includes(`${CREATOR} is back and caught up`))).toBe(true);
+    expect(lines.some((l) => l.includes(`${CREATOR}'s agent is told`))).toBe(true);
+    expect(lines.some((l) => l.includes("reached Craiginator"))).toBe(true);
+  }, 180_000);
 });

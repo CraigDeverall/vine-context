@@ -1,12 +1,13 @@
-// Builds the example graph in examples/data from one scenario: three people
-// (alice, bob, carol) planning the office Christmas party. Every change is
-// backdated, so the explorer's time slider and the `at` reads show the story
-// unfold: a contradiction appears and is settled, a mistaken claim is
-// withdrawn, two questions are answered and one gets a reply.
+// Builds the example graph in examples/data from one scenario: four people
+// (all versions of Craig) building this project for the Relate hackathon.
+// Every change is backdated, so the explorer's time slider and the `at` reads
+// show the story unfold: designs are replaced, a claim is withdrawn, one
+// conflict is settled and one stays open, questions are answered or left open.
 //
-// The graph is a replicated graph like any other: alice created it, bob and
-// carol are members, and every write is a change signed by its author. The
-// example ships alice's (throwaway) key, so the demo runs as her, the admin.
+// The graph is a replicated graph like any other: Craig created it, the other
+// three are members, and every write is a change signed by its author. The
+// example ships Craig's (throwaway) key, so an agent pointed at it acts as
+// him, the admin.
 //
 //   npm run examples        (rewrites examples/data)
 
@@ -18,7 +19,7 @@ import { Graph, type Caller } from "../src/core/graph.ts";
 import { fingerprint, loadIdentity, type Identity } from "../src/core/identity.ts";
 import { packageRoot } from "../src/core/package-root.ts";
 import { b64u } from "../src/p2p/link.ts";
-import { GRAPH_DESCRIPTION, GRAPH_NAME, playScenario, storyTime } from "../src/demo/scenario.ts";
+import { CAST, CREATOR, GRAPH_DESCRIPTION, GRAPH_NAME, isPresence, playScenario, storyTime } from "../src/demo/scenario.ts";
 
 type Row = Record<string, any>;
 const out = join(packageRoot(), "examples", "data");
@@ -58,7 +59,8 @@ class Writer {
 
 /** Plays the story through the writer, backdated to when each step happened. */
 async function story(w: Writer, callers: Record<string, Caller>) {
-  await playScenario((step, args) => w.call(callers[step.who]!, storyTime(step), step.tool, args));
+  // Going offline and coming back write nothing: the log only shows that the others carried on.
+  await playScenario(async (step, args) => (isPresence(step) ? undefined : w.call(callers[step.who]!, storyTime(step), step.tool, args)));
 }
 
 async function build() {
@@ -66,17 +68,15 @@ async function build() {
   mkdirSync(out, { recursive: true });
   const scratch = join(keys, "scratch");
   const ids = new Map<string, Identity>();
-  for (const name of ["alice", "bob", "carol"]) ids.set(name, loadIdentity(name === "alice" ? out : join(keys, name), name));
-  const callers = Object.fromEntries(
-    [...ids].map(([name, i]) => [name, { id: name, key: i.publicKey, role: name === "alice" ? "admin" : "contributor" } as Caller]),
-  );
-  const graphId = uuidv7(Date.parse(at(17, "09:00")));
+  for (const c of CAST) ids.set(c.name, loadIdentity(c.name === CREATOR ? out : join(keys, c.dir), c.name));
+  const callers = Object.fromEntries([...ids].map(([name, i]) => [name, { id: name, key: i.publicKey, role: name === CREATOR ? "admin" : "contributor" } as Caller]));
+  const graphId = uuidv7(Date.parse(at(15, "08:30")));
   const g = await Graph.open({ dataDir: scratch, name: GRAPH_NAME });
   const w = new Writer(graphId, g, ids);
-  const alice = ids.get("alice")!;
-  w.member(alice, "create", at(17, "09:00"), { name: GRAPH_NAME, creator_name: "alice", description: GRAPH_DESCRIPTION }, graphId);
-  for (const name of ["bob", "carol"])
-    w.member(alice, "add_member", at(17, "09:01"), { key: ids.get(name)!.publicKey, name, role: "contributor", invite: { id: `inv_${name}`, label: `for ${name}` }, about: { agent: "claude-code", platform: "macOS arm64" } });
+  const creator = ids.get(CREATOR)!;
+  w.member(creator, "create", at(15, "08:30"), { name: GRAPH_NAME, creator_name: CREATOR, description: GRAPH_DESCRIPTION }, graphId);
+  for (const c of CAST.filter((c) => c.name !== CREATOR))
+    w.member(creator, "add_member", at(15, "08:40"), { key: ids.get(c.name)!.publicKey, name: c.name, role: "contributor", invite: { id: `inv_${c.dir}`, label: `for ${c.name}` }, about: { agent: c.agent, platform: c.platform } });
   await story(w, callers);
 
   const hostDir = join(out, "hosts", GRAPH_NAME);
@@ -85,13 +85,13 @@ async function build() {
   writeFileSync(join(hostDir, "changes.jsonl"), w.changes.map((c) => JSON.stringify(c)).join("\n") + "\n");
   writeFileSync(join(hostDir, "sharing.json"), JSON.stringify({ on: false }) + "\n");
   rmSync(keys, { recursive: true, force: true });
-  console.log(`examples: ${GRAPH_NAME} -> examples/data: ${w.changes.length} changes by alice (${fingerprint(alice.publicKey)}), bob and carol`);
+  console.log(`examples: ${GRAPH_NAME} -> examples/data: ${w.changes.length} changes by ${CAST.map((c) => c.name).join(", ")} (${CREATOR}: ${fingerprint(creator.publicKey)})`);
 }
 
 /** Builds the store from the log in a process of its own: a Relate store is only complete on disk once the process that wrote it exits. */
 async function buildStore() {
   const { Host } = await import("../src/host/host.ts");
-  const h = await Host.start({ dataDir: out, graph: GRAPH_NAME, user: "alice" });
+  const h = await Host.start({ dataDir: out, graph: GRAPH_NAME, user: CREATOR });
   const info = await h.info();
   h.stop();
   console.log(`examples: store built: ${JSON.stringify(info.nodes)}`);

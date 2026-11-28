@@ -14,12 +14,13 @@ Back to the [README](../README.md).
    npx vine-context demo
    ```
 
-   Three members start in one process, join with codes, and replay the story (three colleagues planning the office Christmas party) through their own hosts, syncing peer to peer; the terminal narrates each step as it reaches the others. In the browser (alice's view): *Console* for the three members and their links, *Explorer* to watch it grow, then drag the time slider back to replay it; *Conflicts* for the one the story ends with. `--pace 1` runs it faster.
+   Four members start in one process, join with codes, and replay the story through their own hosts, syncing peer to peer; the terminal narrates each step as it reaches the others. The story is the building of this entry: its real decisions, changes of mind and breakages, told by an invented cast of four Craigs. Part way through, the member who created the context goes offline, and the other three carry on without him. In the browser (Craig's view): *Console* for the four members and their links, *Explorer* to watch it grow, then drag the time slider back to replay it; *Conflicts* for the one the story ends with. `--pace 1` runs it faster.
 
-   To put your own agent into the story, `npx vine-context setup` then `vine demo --join`: it prints a join line to paste into your agent, which joins as a fourth member ([README](../README.md#3-use-it-from-your-agent)). `npx vine-context setup` installs the `vine` command and the plugin for Claude Code or Codex, printing each command before it runs it ([README](../README.md#setup-and-run)).
-2. **Open the Relate store yourself.** It is a directory store that ships in the package and the repo, at [`examples/data/graphs/party`](../examples/data/graphs/party). `npx vine-context example /tmp/party` copies it out, and [Relate's CLI](https://relatedb.ai/docs/get-started/install/) opens the copy. [Eight queries to try](RELATE.md#explore-the-example-store), from *where did the team disagree?* to *what does the decision rest on, and does it still stand?*
-3. **Read how Relate is used:** [README](../README.md#how-it-uses-relate) for the short form, [RELATE.md](RELATE.md) for each feature and its Cypher.
-4. **Watch the demo video:** link to be added with the Devpost submission.
+   To put your own agent into the story, `npx vine-context setup` then `vine demo --join`: it prints a join line to paste into your agent, which joins as a fifth member ([README](../README.md#3-use-it-from-your-agent)). `npx vine-context setup` installs the `vine` command and the plugin for Claude Code or Codex, printing each command before it runs it ([README](../README.md#setup-and-run)).
+2. **Open the Relate store yourself.** It is a directory store that ships in the package and the repo, at [`examples/data/graphs/vine-entry`](../examples/data/graphs/vine-entry). `npx vine-context example /tmp/vine-entry` copies it out, and [Relate's CLI](https://relatedb.ai/docs/get-started/install/) opens the copy. [Eight queries to try](RELATE.md#explore-the-example-store), from *where did the team disagree?* to *what does the last decision rest on, and does it all still stand?*
+3. **See what was measured:** [MEASURED.md](MEASURED.md) has two measurements you can rerun, and what they don't show.
+4. **Read how Relate is used:** [README](../README.md#how-it-uses-relate) for the short form, [RELATE.md](RELATE.md) for each feature and its Cypher.
+5. **Watch the demo video:** link to be added with the Devpost submission.
 
 ## The idea in one paragraph
 
@@ -40,17 +41,19 @@ The relationships do the answering. Each of these is a traversal, not a lookup, 
 | What is still open? | Questions with no current claim that `ANSWERS` them |
 | What does this decision rest on, and does that still stand? | `SUPPORTS` followed back any number of steps, each piece of evidence tested against `REPLACES`, `CONTRADICTS` and withdrawal |
 
-The last one is the reason for a graph. In the example, the decision to book the Orangery is still current, but of the five things it rests on, one was replaced, one was withdrawn and one is contradicted by a claim nobody has answered. No single statement says so: only the paths do ([the query](RELATE.md#explore-the-example-store), or the `basis` tool).
+The last one is the reason for a graph. In the example, the decision to make the team's own build the example story is still current, but of the six things it rests on, one has been replaced and one is contradicted by a claim nobody has settled. No single statement says so: only the paths do ([the query](RELATE.md#explore-the-example-store), or the `basis` tool).
 
 Search is hybrid, vector plus full text, on Relate's own indexes. [RELATE.md](RELATE.md) lists each feature used, with its Cypher. The store is a directory any judge can open with the `relate` CLI.
 
 ### Functionality and completeness (25 points)
 
-It works end to end: create, invite, join, record, link, search, sync, undo, withdraw, roles and removal. `vine demo` runs the whole path between three members in one process. There are over 180 automated tests, run in CI on Linux, macOS and Windows (`npm run check`). In 100 runs of five members coming and going and writing while apart, all five copies ended identical every time ([what was measured](MEASURED.md)). What has not been tested is said plainly under [Limits](HOW-IT-WORKS.md#limits).
+It works end to end: create, invite, join, record, link, search, sync, undo, withdraw, roles and removal. `vine demo` runs the whole path between four members in one process, one of them offline for part of it. There are over 180 automated tests, run in CI on Linux, macOS and Windows (`npm run check`). In 100 runs of five members coming and going and writing while apart, all five copies ended identical every time; and of 18 questions about the example story, the most one member can answer from their own notes is 8, where the shared graph answers 18 ([what was measured](MEASURED.md)). What has not been tested is said plainly under [Limits](HOW-IT-WORKS.md#limits).
 
 ### Usefulness (20 points)
 
-The problem is the one most teams using AI agents have now: each person's sessions are a silo, and what one agent learns nobody else's sees. Findings get repeated, contradictions go unnoticed, and a week later nobody can say what the team believed when it made a call. A shared graph of claims and questions fixes that for any small group working on one problem, and each agent is told what a sync means for its person: your claim was replaced, your question was answered, a new conflict appeared. The [party example](../README.md#use-case) is a worked case: nothing technical, just three people who need to agree on a venue, a date and a budget.
+The problem is the one most teams using AI agents have now: each person's sessions are a silo, and what one agent learns nobody else's sees. Findings get repeated, contradictions go unnoticed, and a week later nobody can say what the team believed when it made a call. A shared graph of claims and questions fixes that for any small group working on one problem, and each agent is told what a sync means for its person: your claim was replaced, your question was answered, a new conflict appeared. The [example](../README.md#use-case) is a worked case: four people building this entry, who change their minds about the design, disagree about why CI broke, and still don't know which judging weights hold.
+
+Nothing the team writes goes to a service that stores or searches it. Each member's copy is on their own machine, search runs there, and the relays that help machines find each other only carry sealed handshakes. [Who can read it](../README.md#who-can-read-it) says exactly what each party sees, and what Vine does not protect.
 
 ### Documentation and reproducibility (15 points)
 

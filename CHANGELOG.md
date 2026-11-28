@@ -8,10 +8,18 @@
 of steps, as of a moment, and marks evidence that was replaced, withdrawn or is
 contradicted by a current claim. The MCP server lists 26 tools.
 
-The example story is longer to show it. The decision rests on evidence three
-steps deep; by the end the headcount is replaced, one figure is withdrawn and a
-second conflict is open. The example store holds 10 claims, 3 questions, 3
-replies and 16 relationships.
+### A new example story
+
+The example is now four people (Craig, Craigslist, Craigosaurus Rex and
+Craiginator, all versions of the one Craig) building this project for the
+hackathon, 15 to 25 Nov 2026. It replaces the Christmas party story in
+`vine demo`, the shipped store (`examples/data/graphs/vine-entry`), the tests
+and the docs. In `vine demo` the member who created the context goes offline
+part way through, writes to his own copy, and catches up when he is back.
+
+The last decision in the story rests on evidence three steps deep; by the end
+one piece of it has been replaced and one is contested. The example store holds
+23 claims, 7 questions, 2 replies and 32 relationships.
 
 ### Other changes
 
@@ -24,6 +32,9 @@ replies and 16 relationships.
   under the mark is "Shared Graphs".
 - `npm run bench:churn` measures whether members who come and go end up with
   the same graph ([docs/MEASURED.md](docs/MEASURED.md)).
+- `npm run bench:recall` measures how much of the example story one member
+  can answer from their own notes, against the shared graph.
+- The README has a "Who can read it" section.
 
 ### Fewer, smaller MCP tools
 

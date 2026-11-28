@@ -4,7 +4,7 @@
 
 <p align="center"><b>Shared Graphs</b></p>
 
-**Vine Context – P2P Shared Context Graphs.** One [Relate](https://relatedb.ai/) context graph of claims and questions for a team and their AI agents, kept in step between everyone's machines, peer to peer, with no server.
+**Vine Context – P2P Shared Context Graphs.** One [Relate](https://relatedb.ai/) context graph of claims and questions for a team and their AI agents, kept in step between everyone's machines, peer to peer, with no server: everyone holds a full copy on their own machine, and [no third party stores or reads it](#who-can-read-it).
 
 **See it in one command.** It needs Node 20 or later and nothing else: no install, account, API key, compiler or model download, and it touches nothing of yours.
 
@@ -12,7 +12,7 @@
 npx vine-context demo
 ```
 
-`demo` runs three members in one process: alice creates the example context, bob and carol join it with codes, and the three replay the planning of an office Christmas party, each writing through their own host and syncing peer to peer. Your browser shows alice's view of it, live.
+`demo` runs four members in one process. Craig creates the example context, and Craigslist, Craigosaurus Rex and Craiginator join it with codes. Then they replay the building of this project for the hackathon, each writing through their own host and syncing peer to peer. Part way through, Craig goes offline, the other three carry on, and he catches up when he is back. Your browser shows Craig's view of it, live.
 
 **Use it with your own agent.** One command installs the `vine` command and the plugin for Claude Code or Codex, checks the machine and its network, and repairs it if you run it again. `--dry-run` shows what it would do without changing anything.
 
@@ -35,7 +35,7 @@ Codex and other MCP agents: see [the guide](docs/GUIDE.md#install-by-hand). To r
 
 Then tell your agent *"start a context called incident-42"*.
 
-![The graph explorer on the example party graph](docs/images/explorer.jpg)
+![The graph explorer on the example graph](docs/images/explorer.jpg)
 
 <!-- Demo video: add the link here once it is recorded. -->
 
@@ -44,6 +44,8 @@ Then tell your agent *"start a context called incident-42"*.
 | Install it and try it | [Setup and run](#setup-and-run) |
 | See what Relate does here | [How it uses Relate](#how-it-uses-relate), then [docs/RELATE.md](docs/RELATE.md) |
 | Query the example graph yourself | [Where the data lives](#where-the-data-lives) |
+| See what was measured | [What was measured](#what-was-measured), then [docs/MEASURED.md](docs/MEASURED.md) |
+| Know who can read your team's graph | [Who can read it](#who-can-read-it) |
 | Use it with your own team | [docs/GUIDE.md](docs/GUIDE.md) |
 | Change a setting | [docs/GUIDE.md](docs/GUIDE.md#settings) |
 | Understand the peer-to-peer design | [How it works](#how-it-works), then [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md) |
@@ -51,7 +53,9 @@ Then tell your agent *"start a context called incident-42"*.
 
 ## Use case
 
-When three people work on the same thing with their own AI agents, planning the office Christmas party, say, each agent learns things the others never see. Findings get repeated, contradictions go unnoticed (one person has booked a room that another has found is too small), and a week later nobody can say what the team believed when it made a call.
+When a few people work on the same thing with their own AI agents, each agent learns things the others never see. Findings get repeated. Contradictions go unnoticed: one person is sure a failed payment has blocked CI, while another has found it was a spending limit. A decision outlives the reason it was made, and a week later nobody can say what the team believed when it made a call.
+
+The example in this repo is such a team: four people building this project for the hackathon, from 15 to 25 Nov 2026. The decisions, the changes of mind and the things that broke are the ones this project really went through. The cast is made up: Craig, Craigslist, Craigosaurus Rex and Craiginator are all the one Craig who built it with his agents.
 
 Vine Context gives the group one shared graph of **claims** and **questions**.
 
@@ -102,13 +106,25 @@ The Relate features in use: an embedded directory store, uniqueness constraints,
 npx vine-context demo
 ```
 
-Three hosts start in this process, one each for alice, bob and carol: alice creates the context, the other two join it with codes, and the story plays through them, one step every few seconds. Every write is signed by its author's host, held for undo, then carried to the other two over WebRTC, and the terminal says when each one arrives. In the browser page that opens, which is alice's view:
+Four hosts start in this process, one each for Craig, Craigslist, Craigosaurus Rex and Craiginator. Craig creates the context, the other three join it with codes, and the story plays through them, one step every few seconds. Every write is signed by its author's host, held for undo, then carried to the others over WebRTC, and the terminal says when each one arrives. In the browser page that opens, which is Craig's view:
 
-1. **Console** shows the three members, their keys, roles and live links.
-2. **Explorer** fills in as the changes arrive. Once the story is over, drag the time slider back to replay it: a conflict between bob's claim and carol's appears, then settles when bob replaces his claim.
-3. **Conflicts** shows the conflict the story ends with, side by side: alice's reading of the Orangery's Friday minimum spend against carol's hire-fee waiver, which the decision rests on.
+1. **Console** shows the four members, their keys, roles and live links.
+2. **Explorer** fills in as the changes arrive. Once the story is over, drag the time slider back to replay it.
+3. **Conflicts** shows two claims side by side while they contradict each other. The story ends with one still open: the judging weights, which the last decision rests on.
 
-`--pace 1` runs it faster, `--pace 0` all at once. `--join` finds the members through the public Nostr relays instead of in this process, and prints a join code at the end, so your own agent (on this machine or another) can join as a fourth member and write into the same graph.
+What to watch for in the story:
+
+| When | What happens | What it shows |
+|---|---|---|
+| 15 to 17 Nov | Craigosaurus Rex's design, one machine that hosts the graph and is its only writer, is replaced by Craig's: every member keeps a full copy | A claim replaced by someone else, and two questions answered by it |
+| 16 to 25 Nov | Craiginator's claim about the search embedder is replaced twice | A chain of `REPLACES`, and what was believed on any day |
+| 17 Nov | Craigosaurus Rex withdraws his claim about model packs | Nothing is deleted: it stays in the history |
+| 23 Nov | Craigslist re-reads the rules, which contradict the judging weights Craig recorded | A conflict nobody can settle yet, so it stays open |
+| 25 Nov | Craig goes offline and asks a question from his own copy. The others find out why CI was blocked, disagree, and settle it | Writing while offline, and a conflict settled |
+| 25 Nov | Craig comes back | His question reaches the others and is answered, and his agent is told what the morning's changes mean for him |
+| 25 Nov | Craig replaces the example story with this one, and links what that decision rests on | A chain of `SUPPORTS` three steps deep, with one claim replaced since and one contested |
+
+`--pace 1` runs it faster, `--pace 0` all at once. `--join` finds the members through the public Nostr relays instead of in this process, and prints a join code at the end, so your own agent (on this machine or another) can join as a fifth member and write into the same graph.
 
 ### 2. Install it for your agent
 
@@ -157,17 +173,17 @@ Then ask in plain words:
 - *"What open questions are there?"*
 - *"Open the graph explorer."*
 
-**Or put your agent into the example.** With the plugin installed, this replays the party story and then prints a join line:
+**Or put your agent into the example.** With the plugin installed, this replays the example story and then prints a join line:
 
 ```bash
 vine demo --join
 ```
 
-Paste the line it prints (`/vine-context:join vine1_…`) into your agent. It joins as a fourth member, gets its own full copy of the graph, and is briefed on the open question and the open conflict. Then ask it:
+Paste the line it prints (`/vine-context:join vine1_…`) into your agent. It joins as a fifth member, gets its own full copy of the graph, and is briefed on the open questions and the open conflict. Then ask it:
 
-- *"What does the decision to book the Orangery rest on, and does it still stand?"* It follows `SUPPORTS` back three steps and finds a replaced headcount, a withdrawn figure and a waiver that alice's claim contradicts.
-- *"What did the team believe on Monday afternoon?"*
-- *"Record that the Orangery confirmed by email that Friday's minimum spend is £2,600, and that it supports alice's claim."* The new claim and its link appear in the browser page, which is alice's copy, a moment later.
+- *"What does the decision to make this the example story rest on, and does it all still stand?"* It follows `SUPPORTS` back three steps and finds an embedder claim that has since been replaced, and the judging weights, which Craigslist's claim contradicts.
+- *"What did the team believe on the Monday evening, before it changed its mind?"*
+- *"Record that the rules page was updated on 24 Nov to the 100-point weights, and that it supports Craig's claim."* The new claim and its link appear in the browser page, which is Craig's copy, a moment later.
 
 The agent only gets the model's tools (`add_claim`, `ask_question`, `link`, `search`, `beliefs`, `conflicts`, `basis` and so on), never raw Cypher.
 
@@ -181,22 +197,31 @@ Join codes, roles, undo, working offline and removing someone are covered in [th
 
 ## Where the data lives
 
-**The example store is in this repo**, at [`examples/data/graphs/party`](examples/data/graphs/party). It is an ordinary Relate directory store, so [Relate's CLI](https://relatedb.ai/docs/get-started/install/) opens it. Work on a copy, because Relate rewrites a store's files when it opens one. This makes the copy, from the npm package or from a clone:
+**The example store is in this repo**, at [`examples/data/graphs/vine-entry`](examples/data/graphs/vine-entry). It is an ordinary Relate directory store, so [Relate's CLI](https://relatedb.ai/docs/get-started/install/) opens it. Work on a copy, because Relate rewrites a store's files when it opens one. This makes the copy, from the npm package or from a clone:
 
 ```bash
-npx vine-context example /tmp/party
+npx vine-context example /tmp/vine-entry
 ```
 
 ```bash
-relate -d /tmp/party --mode table "MATCH (a:Claim)-[:CONTRADICTS]->(b:Claim) RETURN a.recorded_by, a.text, b.recorded_by, b.text"
+relate -d /tmp/vine-entry --mode table "MATCH (a:Claim)-[:CONTRADICTS]->(b:Claim) RETURN a.recorded_by, a.text, b.recorded_by, b.text"
 ```
 
-More queries to try, including *what did the team believe on Monday afternoon?* and *what does the decision rest on?*, are in [docs/RELATE.md](docs/RELATE.md#explore-the-example-store).
+More queries to try, including *what did the team believe on the Monday evening, before it changed its mind?* and *what does the last decision rest on?*, are in [docs/RELATE.md](docs/RELATE.md#explore-the-example-store).
 
-- The signed change log the store was built from: [`examples/data/hosts/party/changes.jsonl`](examples/data/hosts/party/changes.jsonl).
+- The signed change log the store was built from: [`examples/data/hosts/vine-entry/changes.jsonl`](examples/data/hosts/vine-entry/changes.jsonl).
 - The script that makes both: [`scripts/make-examples.ts`](scripts/make-examples.ts) (`npm run examples`).
 
 **Your own contexts** live in `~/.local/share/vine-context/` (set `VINE_DATA_DIR` to move it): `graphs/<name>` is the Relate store, and `hosts/<name>/changes.jsonl` is its change log. [More detail](docs/HOW-IT-WORKS.md#files-on-your-machine).
+
+## What was measured
+
+| Question | Result |
+|---|---|
+| Do copies end up the same when members come and go, and write while apart? | In 100 runs of five members, with 11,941 changes (5,683 written offline) and 1,858 comings and goings, all five copies ended identical every time. They agreed a median of 1.8 seconds after everyone was back |
+| How much of the example story can one person answer alone? | Of 18 questions a teammate would ask, the best any one of the four can answer from their own notes is 8, and between them they hold 8 answers that are out of date. The shared graph answers all 18 |
+
+Both can be rerun (`npm run bench:churn`, `npm run bench:recall`). [docs/MEASURED.md](docs/MEASURED.md) says how each was done and what it does not show.
 
 ## How it works
 
@@ -230,6 +255,24 @@ flowchart LR
 
 The full account is in [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md), and the design reasoning in [docs/REPLICATION.md](docs/REPLICATION.md).
 
+## Who can read it
+
+Most shared memory for agents keeps a team's notes on somebody's server, which has to read them to search them. Vine has no such server.
+
+| Who | What they can read |
+|---|---|
+| Members of the context | Everything. Each holds a full copy on their own disk, where it is not encrypted |
+| The Nostr relays that help machines find each other | Nothing: they carry sealed handshakes (AES-256-GCM, with a key made from the group's secret). They can see when one was sent |
+| A TURN server, when two machines can't link directly | Nothing: it passes on traffic that WebRTC has already encrypted (DTLS) |
+| A search service | There isn't one. Search runs on your machine, and the vectors it uses are worked out there and never sent |
+| Your AI provider | Whatever your agent reads from the graph, as with anything else in a chat |
+
+So a team that can't put its notes into someone else's service can still share them. Three things Vine does not do:
+
+- It doesn't hide the graph from your AI provider. An agent that uses a claim sends it to its model.
+- It can't take back the copy held by someone you remove.
+- It doesn't hide members from each other on the network: machines that link directly see each other's IP addresses.
+
 ## Limits
 
 - **Search matches meaning with a small model that installs with vine,** on the CPU, offline. Its packages are built and tested in CI for macOS (arm64, x64), Linux (x64, arm64) and Windows x64; anywhere else, or where it doesn't run, search matches words and word fragments instead, and `vine doctor` says which is in use.
@@ -248,7 +291,7 @@ Each is explained in [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md#limits).
 | [docs/RELATE.md](docs/RELATE.md) | The graph model, each Relate feature and where it is used, and queries to run on the example store |
 | [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md) | Hosts, signed changes, the mesh, join codes, files on disk, limits |
 | [docs/REPLICATION.md](docs/REPLICATION.md) | The replication design and the decisions behind it |
-| [docs/MEASURED.md](docs/MEASURED.md) | Whether members who come and go end up with the same graph: 100 runs, how to rerun them |
+| [docs/MEASURED.md](docs/MEASURED.md) | Two measurements, how to rerun them, and what they don't show |
 | [docs/HACKATHON.md](docs/HACKATHON.md) | The Relate hackathon entry: what to run, how it meets each judging criterion, what is new, AI tools used |
 
 ## Built with

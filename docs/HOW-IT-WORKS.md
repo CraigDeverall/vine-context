@@ -120,7 +120,7 @@ Everything is under `~/.local/share/vine-context/` (set `VINE_DATA_DIR` to move 
 | `hosts/<name>/invites.json`, `sharing.json`, `host.log` | Invites still waiting, the sharing setting, the host's log |
 | `identity.json` | Your key. Keep it private: it is you in every context |
 
-The example in this repo has the same layout under [`examples/data`](../examples/data). It ships Alice's throwaway key, so an agent can be pointed at it as her; `vine demo` makes fresh keys for its three members each time it runs.
+The example in this repo has the same layout under [`examples/data`](../examples/data). It ships a throwaway key for Craig, the member who created it, so an agent can be pointed at it as him; `vine demo` makes fresh keys for its four members each time it runs.
 
 ## Limits
 
