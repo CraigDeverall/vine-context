@@ -14,7 +14,7 @@ npx vine-context setup
 
 One command installs the `vine` command, adds the plugin to Claude Code and Codex, prints the lines to paste for any other agent, checks the machine and its network, and repairs it if you run it again. `--dry-run` shows what it would do without changing anything.
 
-**Then start a group.** Tell your agent *"start a context called team-dinner"*, then *"invite Sam"*. Sam pastes the code into their own agent, and from then on what either of you records reaches the other: [Start a group](#start-a-group).
+**Then start a group.** Tell your agent *"start a context called team-dinner"*, then *"invite [their name]"*. They paste the code into their own agent, and from then on what either of you records reaches the other: [Start a group](#start-a-group).
 
 **Or look first, with no agent.** This replays an example between four members in one process and shows it in your browser. It installs nothing and touches nothing of yours: [more](#look-first-with-no-agent).
 
@@ -148,7 +148,7 @@ Vine is tested with Claude Code and Codex. The lines for the others follow each 
 Vine is for a group, so it shows best with two or more people, each on their own machine with their own agent. Everyone runs `npx vine-context setup` first. Then:
 
 1. **One person starts a context.** *"Start a context called team-dinner, for planning Friday's dinner."*
-2. **They invite each person.** *"Invite Sam to this context."* The agent gives a line to send to Sam privately: `/vine-context:join vine1_…`. A code is for one person, so ask for one each.
+2. **They invite each person.** *"Invite [their name] to this context."* The agent gives a line to send to that person privately: `/vine-context:join vine1_…`. A code is for one person, so ask for one each.
 3. **Each person joins.** They paste the line into their own agent while the inviter's machine is online. (In an agent without the plugin, *"join this context: vine1_…"* does the same.) They get a full copy of the graph, and a briefing on what it holds. Everyone in the context is told who joined.
 4. **Everyone uses it.** Whatever anyone records reaches the others the next time their machines are online together.
 
@@ -157,9 +157,9 @@ Things to try together:
 | Try | Say to your agent |
 |---|---|
 | Record what you know | *"Record that the venue holds 40 people."* |
-| Disagree | Someone else: *"Record that the venue only holds 25. It contradicts Sam's claim."* Then anyone: *"Where do we disagree?"* |
+| Disagree | Someone else: *"Record that the venue only holds 25. It contradicts the claim that it holds 40."* Then anyone: *"Where do we disagree?"* |
 | Change your mind | *"Replace my claim about the venue: it holds 30."* Then: *"What did we believe ten minutes ago?"* |
-| Ask, and answer | *"Ask who is booking the venue."* Someone else: *"Answer that: Priya is booking it."* Then: *"What questions are still open?"* |
+| Ask, and answer | *"Ask who is booking the venue."* Someone else: *"Answer that: I'm booking it."* Then: *"What questions are still open?"* |
 | Work offline | Turn your Wi-Fi off, record something, and turn it back on. It reaches the others then |
 | See the graph | *"Open the graph explorer."* |
 
