@@ -3,7 +3,8 @@
 // already there first, and only does what's missing or broken.
 //
 //   1. the global `vine` command (the plugin runs it)
-//   2. the plugin, for each agent found (Claude Code, Codex)
+//   2. the plugin, for each agent found (Claude Code, Codex), and the lines
+//      to paste into any other MCP agent
 //   3. your display name
 //   4. the `vine doctor` checks
 //   5. the network: does it look like it needs TURN?
@@ -84,6 +85,28 @@ export function older(a: string, b: string): boolean {
   return false;
 }
 
+/** Where the guide lists the lines to paste for each agent. */
+export const OTHER_AGENTS_URL = "https://github.com/CraigDeverall/vine-context/blob/main/docs/GUIDE.md#other-mcp-agents";
+
+/**
+ * What to tell someone whose agent isn't Claude Code or Codex: the command an
+ * MCP agent starts, and the entry most of them take in their MCP settings. It
+ * uses vine's full path when known, because an app started from the Dock or
+ * the Start menu often can't see the shell's PATH.
+ */
+export function otherAgentLines(vine: string | undefined): string[] {
+  const command = vine ?? "vine";
+  const entry = JSON.stringify({ mcpServers: { "vine-context": { command, args: ["mcp"] } } }, null, 2);
+  return [
+    "  Another agent (Cursor, VS Code, Gemini CLI, Claude Desktop, Windsurf…)? Vine works with any agent",
+    "  that can start a local MCP server. The command it runs is:",
+    `    ${shown(command, ["mcp"])}`,
+    "  Most take this entry in their MCP settings:",
+    ...entry.split("\n").map((l) => `    ${l}`),
+    `  Where each agent keeps its settings: ${OTHER_AGENTS_URL}`,
+  ];
+}
+
 export const MARKETPLACE = "CraigDeverall/vine-context";
 export const PLUGIN = "vine-context@vine-context";
 
@@ -152,7 +175,7 @@ export async function runSetup(o: SetupOptions, d: SetupDeps): Promise<{ steps: 
   {
     const wanted: Agent[] = o.agents === "none" ? [] : (o.agents ?? (["claude", "codex"] as Agent[]).filter((a) => d.which(a)));
     if (o.agents === "none") record({ step: "agents", status: "skipped", detail: "no agent (--agent none)" });
-    else if (!wanted.length) record({ step: "agents", status: "skipped", detail: "no Claude Code or Codex found on your PATH" });
+    else if (!wanted.length) record({ step: "agents", status: "skipped", detail: "no Claude Code or Codex found on your PATH: add vine to your own agent with the lines below" });
     for (const a of wanted) {
       const spec = AGENTS[a];
       if (!d.which(a)) {
@@ -179,7 +202,7 @@ export async function runSetup(o: SetupOptions, d: SetupDeps): Promise<{ steps: 
         commands,
       });
     }
-    d.say("  Another MCP agent? Point it at the command `vine mcp` (stdio). For example: claude mcp add vine-context -- vine mcp");
+    for (const line of otherAgentLines(d.which("vine"))) d.say(line);
   }
 
   // 3. Display name.
@@ -304,8 +327,8 @@ export async function runSetup(o: SetupOptions, d: SetupDeps): Promise<{ steps: 
 
   // 8. Next.
   heading(8, "Next");
-  d.say("  See it with an example:  vine demo");
-  d.say('  Or tell your agent:      "start a context called <name> for <what it\'s for>", then "share it with Sam".');
+  d.say('  Tell your agent:         "start a context called <name> for <what it\'s for>", then "invite Sam".');
+  d.say("  Or see an example first: vine demo");
   const failed = steps.filter((s) => s.status === "failed").length;
   d.say(failed ? `\n${failed} step(s) need attention (above). Run \`npx vine-context setup\` again to repair.` : dry ? "\nDry run done: nothing was changed." : "\nAll set.");
   return { steps, exitCode: failed ? 1 : 0 };

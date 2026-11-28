@@ -496,7 +496,7 @@ if (help) {
 }
 
 // Copies the example store that ships with vine, because Relate rewrites a
-// store's files when it opens one: a judge should open a copy, not the package's.
+// store's files when it opens one: open a copy, not the package's.
 async function example(args: string[]): Promise<number> {
   const { cp } = await import("node:fs/promises");
   const { existsSync } = await import("node:fs");

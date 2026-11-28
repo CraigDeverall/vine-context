@@ -1,6 +1,6 @@
 # Using Vine Context
 
-Day-to-day use, once the [quickstart](../README.md#setup-and-run) works. You talk to your agent in plain words; the tool names are given in brackets for reference.
+Day-to-day use, once the [setup](../README.md#set-it-up) works. You talk to your agent in plain words; the tool names are given in brackets for reference.
 
 Back to the [README](../README.md).
 
@@ -21,6 +21,7 @@ Back to the [README](../README.md).
 - [The Claude Code panel](#the-claude-code-panel)
 - [Commands](#commands)
 - [Settings](#settings)
+- [The example story](#the-example-story)
 - [Trying it with two identities on one machine](#trying-it-with-two-identities-on-one-machine)
 
 ## Install
@@ -34,7 +35,7 @@ npx vine-context setup
 It goes through eight steps, and says what it found at each one:
 
 1. **The `vine` command.** Installs it globally with npm if it's missing or older (the plugin runs it).
-2. **Your agents.** Finds Claude Code and Codex, and installs the plugin for each one that doesn't have it, printing the exact commands before running them. For other MCP agents it prints the `vine mcp` line to add.
+2. **Your agents.** Finds Claude Code and Codex, and installs the plugin for each one that doesn't have it, printing the exact commands before running them. For any other agent it prints the command to give it and the entry most take in their MCP settings ([other MCP agents](#other-mcp-agents)).
 3. **Your name.** Confirms the name others see (your git name, by default).
 4. **This machine.** Runs the `vine doctor` checks.
 5. **Your network.** Decides, without asking, whether it looks like it needs TURN (see [Do I need a TURN server?](#do-i-need-a-turn-server)).
@@ -84,11 +85,42 @@ codex plugin add vine-context@vine-context
 
 #### Other MCP agents
 
-Any agent that can start a local MCP server over stdio can use the tools without the plugin. The command to run is `vine mcp`. In Claude Code, for example:
+Any agent that can start a local MCP server over stdio can use the tools without the plugin. The command it starts is `vine mcp`. `vine setup` prints it with the full path to `vine`, which a desktop app needs when it can't see your shell's PATH (`which vine` finds it; `where vine` on Windows).
 
-```bash
-claude mcp add vine-context -- vine mcp
+Agents with a command for it:
+
+| Agent | Run |
+|---|---|
+| Gemini CLI | `gemini mcp add -s user vine-context vine mcp` |
+| GitHub Copilot CLI | `copilot mcp add vine-context -- vine mcp` |
+| Grok CLI | `grok mcp add vine-context -- vine mcp` |
+| opencode | `opencode mcp add --global vine-context -- vine mcp` |
+| VS Code with Copilot | `code --add-mcp '{"name":"vine-context","type":"stdio","command":"vine","args":["mcp"]}'` |
+| Claude Code, without the plugin | `claude mcp add vine-context -- vine mcp` |
+| Codex, without the plugin | `codex mcp add vine-context -- vine mcp` |
+
+Agents with a settings file take this entry, then need a restart:
+
+```json
+{
+  "mcpServers": {
+    "vine-context": { "command": "vine", "args": ["mcp"] }
+  }
+}
 ```
+
+| Agent | Where it goes |
+|---|---|
+| Cursor | `~/.cursor/mcp.json`. Add `"type": "stdio"` to the entry |
+| Claude Desktop | Settings, Developer, *Edit Config* (`claude_desktop_config.json`). Quit and reopen Claude afterwards |
+| Windsurf | In Cascade, *Open MCP config file* (`mcp_config.json`), then refresh |
+| Zed | Settings, AI, MCP Servers, *Add Local Server*. In `settings.json` the key is `context_servers`, not `mcpServers` |
+
+These follow each agent's own documentation as of November 2026. Vine is tested with Claude Code and Codex; if a line here is wrong for your agent, its MCP settings page has the current form, and the command to give it is still `vine mcp`.
+
+Without the plugin there is no `/vine-context:join` command and no skills. The tools are the same, so say it in words: *"join this context: vine1_…"*.
+
+ChatGPT (web and desktop), other assistants that only reach remote MCP servers, and phones can't connect yet.
 
 #### Check your machine
 
@@ -288,6 +320,22 @@ Everything works without settings. These change the defaults, and `vine --help` 
 | `VINE_CLOUDFLARE_TURN_SECRET` | The Cloudflare TURN key's secret, when it was saved with `--store env` | None |
 
 The other commands are listed under [Commands](#commands).
+
+## The example story
+
+`vine demo` replays the building of this project: four people, from 15 to 25 Nov 2026, each writing through their own host. The decisions, the changes of mind and the things that broke are the ones the project really went through; the cast is made up.
+
+What to watch for in the story:
+
+| When | What happens | What it shows |
+|---|---|---|
+| 15 to 17 Nov | Craigosaurus Rex's design, one machine that hosts the graph and is its only writer, is replaced by Craig's: every member keeps a full copy | A claim replaced by someone else, and two questions answered by it |
+| 16 to 25 Nov | Craiginator's claim about the search embedder is replaced twice | A chain of `REPLACES`, and what was believed on any day |
+| 17 Nov | Craigosaurus Rex withdraws his claim about model packs | Nothing is deleted: it stays in the history |
+| 23 Nov | Craigslist re-reads the rules, which contradict the judging weights Craig recorded | A conflict nobody can settle yet, so it stays open |
+| 25 Nov | Craig goes offline and asks a question from his own copy. The others find out why CI was blocked, disagree, and settle it | Writing while offline, and a conflict settled |
+| 25 Nov | Craig comes back | His question reaches the others and is answered, and his agent is told what the morning's changes mean for him |
+| 25 Nov | Craig replaces the example story with this one, and links what that decision rests on | A chain of `SUPPORTS` three steps deep, with one claim replaced since and one contested |
 
 ## Trying it with two identities on one machine
 

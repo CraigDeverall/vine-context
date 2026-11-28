@@ -94,6 +94,19 @@ describe("vine setup", () => {
     expect(r.exitCode).toBe(0);
   });
 
+  it("with neither Claude Code nor Codex: prints what any other MCP agent needs, with vine's full path", async () => {
+    const f = fake({ onPath: { vine: "/opt/bin/vine" }, vineVersion: "0.2.0", autostart: true });
+    const r = await f.run();
+    const said = f.said.join("\n");
+    expect(step(r.steps, "agents")).toMatchObject({ status: "skipped", detail: expect.stringContaining("add vine to your own agent") });
+    expect(said).toContain("/opt/bin/vine mcp");
+    expect(said).toContain('"command": "/opt/bin/vine"');
+    expect(said).toContain("GUIDE.md#other-mcp-agents");
+    // No other agent's own command is offered as the example.
+    expect(said).not.toContain("claude mcp add");
+    expect(r.exitCode).toBe(0);
+  });
+
   it("asks for a name when the one it found is a guess, and doesn't save the guess when it's kept", async () => {
     const f = fake({ onPath: { vine: "/bin/vine" }, vineVersion: "0.2.0", name: { name: "Brisk Otter", source: "generated" }, autostart: true });
     const r = await f.run({ agents: "none" });

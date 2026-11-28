@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Setup for any MCP agent, and docs that start with setup
+
+`vine setup` now prints, for agents other than Claude Code and Codex, the
+command to give them (with vine's full path) and the entry most take in their
+MCP settings. The guide lists where it goes for Cursor, VS Code with Copilot,
+Gemini CLI, GitHub Copilot CLI, Grok CLI, Claude Desktop, Windsurf, Zed and
+opencode. The README now starts with setup and with starting a group, with
+things to try together; `vine demo` is the way to look first with no agent.
+
 ### What a claim rests on
 
 `basis` is a new model tool: it follows `SUPPORTS` back from a claim any number
