@@ -61,6 +61,7 @@ Each question has a thread of replies, where the group works it out.
 | What's been said about a question | `thread` |
 | Disagreements to settle | `conflicts` |
 | The full story of one item | `history` |
+| What a claim rests on, and whether that evidence still stands | `basis` |
 | What changed since you last looked | `recent` |
 
 At the start of a session on a shared graph, call `recent` with a `since` of

@@ -2,7 +2,9 @@
 // the office Christmas party, 17 to 19 Nov 2026. A contradiction appears and
 // is settled, a mistaken claim is withdrawn, two questions are answered, and
 // a third stays open. Three replies show a question's thread: messages that
-// are not answers.
+// are not answers. The decision rests on evidence three steps deep, and by the
+// end some of it no longer stands: the headcount was replaced, one figure was
+// withdrawn, and a second contradiction is still open.
 //
 // Two things play it: `scripts/make-examples.ts` writes it, backdated, into
 // the example store that ships with the package, and `vine demo` runs it live
@@ -44,7 +46,7 @@ export const STEPS: Step[] = [
   },
   {
     who: "carol", day: 17, time: "14:05", tool: "add_claim",
-    args: { text: "The Riverside Room's licence caps it at 40 seated, eight short of our 48", source: "Riverside Room premises licence, on the council's register", supports: ["@headcount"], contradicts: ["@riverside"] },
+    args: { text: "The Riverside Room's licence caps it at 40 seated, eight short of our 48", source: "Riverside Room premises licence, on the council's register", contradicts: ["@riverside"] },
     note: "finds the Riverside Room's licence caps it at 40 seated. That contradicts bob, and the graph now holds a conflict",
   },
   { who: "bob", day: 17, time: "15:20", tool: "add_claim", as: "budget", args: { text: "The budget is £2,400, which is £50 a head for 48", source: "finance: events budget 2026" }, note: "records the budget: £2,400, which is £50 a head" },
@@ -56,15 +58,16 @@ export const STEPS: Step[] = [
   },
   {
     who: "carol", day: 18, time: "10:00", tool: "add_claim", as: "orangery",
-    args: { text: "The Orangery holds 60 and is free on Friday 19 Dec", source: "the Orangery's bookings page", about_from: "2026-12-19", about_to: "2026-12-19" },
+    args: { text: "The Orangery holds 60, enough for our 48, and is free on Friday 19 Dec", source: "the Orangery's bookings page", about_from: "2026-12-19", about_to: "2026-12-19" },
     note: "finds the Orangery holds 60 and is free on Friday 19 Dec",
   },
+  { who: "carol", day: 18, time: "10:01", tool: "link", args: { from: "@headcount", relation: "SUPPORTS", to: "@orangery" }, note: "links the headcount as what that rests on" },
   {
     who: "carol", day: 18, time: "10:20", tool: "add_claim", as: "waiver",
-    args: { text: "The Orangery waives its hire fee at a £1,800 minimum spend on food and drink, which fits the £2,400 budget", source: "the Orangery's events pack", supports: ["@budget"], answers: ["@coversHire"] },
+    args: { text: "The Orangery waives its hire fee at a £1,800 minimum spend on food and drink, which fits the £2,400 budget", source: "the Orangery's events pack", answers: ["@coversHire"] },
     note: "claims the Orangery waives its hire fee at a £1,800 minimum spend, which fits the budget. That answers alice's second question, and closes its thread",
   },
-  { who: "carol", day: 18, time: "10:21", tool: "link", args: { from: "@orangery", relation: "SUPPORTS", to: "@waiver" }, note: "links the Orangery's availability as support for that" },
+  { who: "carol", day: 18, time: "10:21", tool: "link", args: { from: "@budget", relation: "SUPPORTS", to: "@waiver" }, note: "links the budget as what that rests on" },
   {
     who: "bob", day: 18, time: "12:05", tool: "add_claim", as: "lastYear",
     args: { text: "Last year's party cost £2,300, so £2,400 is plenty", source: "finance: events spend 2025", about_from: "2025-12-01", about_to: "2025-12-31", supports: ["@budget"] },
@@ -75,15 +78,27 @@ export const STEPS: Step[] = [
     note: "withdraws it: that figure was the summer party. Nothing is deleted: the claim and its link stay in the history, marked as ended, and drop out of the current view",
   },
   {
-    who: "bob", day: 18, time: "16:45", tool: "add_claim",
-    args: { text: "The party is at the Orangery on Friday 19 Dec, not the Riverside Room", about_from: "2026-12-19", about_to: "2026-12-19", replaces: ["@riverside"], supports: ["@waiver"], answers: ["@whichVenue"] },
+    who: "bob", day: 18, time: "16:45", tool: "add_claim", as: "decision",
+    args: { text: "The party is at the Orangery on Friday 19 Dec, not the Riverside Room", about_from: "2026-12-19", about_to: "2026-12-19", replaces: ["@riverside"], answers: ["@whichVenue"] },
     note: "replaces his Riverside claim: the party is at the Orangery on 19 Dec. The conflict settles, and alice's first question is answered",
   },
+  { who: "bob", day: 18, time: "16:46", tool: "link", args: { from: "@orangery", relation: "SUPPORTS", to: "@decision" }, note: "links what the decision rests on: the Orangery is big enough and free" },
+  { who: "bob", day: 18, time: "16:47", tool: "link", args: { from: "@waiver", relation: "SUPPORTS", to: "@decision" }, note: "and its hire fee is waived. The decision now rests on evidence three steps deep" },
   { who: "alice", day: 19, time: "09:00", tool: "ask_question", as: "partners", args: { text: "Should partners be invited, and is there budget for them?" }, note: "asks whether partners should be invited, and whether there is budget for them" },
   {
     who: "carol", day: 19, time: "09:40", tool: "reply",
     args: { question: "@partners", text: "Finance can't stretch to partners this year. A January drinks evening for partners might work; I'll ask." },
     note: "replies in the thread: not within this year's budget, but a January drinks evening might work. Still a reply, not an answer: the question stays open",
+  },
+  {
+    who: "carol", day: 19, time: "11:15", tool: "add_claim",
+    args: { text: "55 people are coming: seven late RSVPs came in after the sheet closed", source: "RSVP sheet (reopened 19 Nov)", about_from: "2026-11-19", about_to: "2026-11-19", replaces: ["@headcount"] },
+    note: "replaces the headcount: 55 are coming, not 48. The decision still stands, but part of what it rests on has been replaced",
+  },
+  {
+    who: "alice", day: 19, time: "11:40", tool: "add_claim",
+    args: { text: "The Orangery's £1,800 waiver is for Monday to Thursday; on a Friday the minimum spend is £2,600, over the £2,400 budget", source: "the Orangery's events pack, page 3", contradicts: ["@waiver"] },
+    note: "reads the events pack again: on a Friday the minimum spend is £2,600. That contradicts carol's waiver claim, which the decision rests on, and nobody has settled it yet",
   },
 ];
 

@@ -5,7 +5,7 @@
     {
       "name": "vine-context",
       "source": "./plugin",
-      "description": "Share a Relate context graph of dated claims and open questions with other people's AI agents, peer to peer. Every member keeps a full copy, synced whenever they're online."
+      "description": "P2P Shared Context Graphs: one Relate graph of dated claims and open questions for a team and their AI agents, peer to peer. Every member keeps a full copy, synced whenever they're online."
     }
   ]
 }

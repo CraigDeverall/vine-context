@@ -33,6 +33,34 @@ describe("temporal-claims", () => {
     expect(h.links).toEqual([expect.objectContaining({ direction: "in", type: "REPLACES", id: fix.id, recorded_by: "bob" })]);
   });
 
+  it("traces what a claim rests on, and marks evidence that no longer stands", async () => {
+    const g = await openGraph();
+    const decision = (await act(g, "add_claim", { text: "We book the Orangery" }, alice)) as Row;
+    const fits = (await act(g, "add_claim", { text: "The Orangery fits the budget", supports: [decision.id] }, bob)) as Row;
+    const quote = (await act(g, "add_claim", { text: "The Orangery quoted 1,800", supports: [fits.id] }, bob)) as Row;
+    const other = (await act(g, "add_claim", { text: "Lunch is at noon" }, alice)) as Row;
+    await pause();
+    const before = new Date().toISOString();
+    await pause();
+
+    let rows = (await act(g, "basis", { id: decision.id }, reader)) as Row[];
+    expect(rows.map((r) => [r.id, r.steps, r.current])).toEqual([[fits.id, 1, true], [quote.id, 2, true]]);
+    expect(rows[1]!.supports).toEqual([fits.id]);
+    expect(ids(rows)).not.toContain(other.id);
+    expect(ids(await act(g, "basis", { id: decision.id, depth: 1 }, reader))).toEqual([fits.id]);
+
+    // The quote is replaced, and something contradicts the middle claim.
+    const dearer = (await act(g, "add_claim", { text: "The Orangery now quotes 2,600", replaces: [quote.id] }, bob)) as Row;
+    const doubt = (await act(g, "add_claim", { text: "The Orangery does not fit the budget", contradicts: [fits.id] }, alice)) as Row;
+    rows = (await act(g, "basis", { id: decision.id }, reader)) as Row[];
+    expect(rows[0]).toMatchObject({ id: fits.id, current: true, contradicted_by: [doubt.id] });
+    expect(rows[1]).toMatchObject({ id: quote.id, current: false, withdrawn: false, replaced_by: [dearer.id] });
+    // As of the earlier moment, it all still stood.
+    rows = (await act(g, "basis", { id: decision.id, at: before }, reader)) as Row[];
+    expect(rows.map((r) => [r.current, r.replaced_by, r.contradicted_by])).toEqual([[true, [], []], [true, [], []]]);
+    await expect(act(g, "basis", { id: "c_missing" }, reader)).rejects.toThrow(ToolError);
+  });
+
   it("filters beliefs by the period they are about", async () => {
     const g = await openGraph();
     const nov = (await act(g, "add_claim", { text: "November outages", about_from: "2026-11-01", about_to: "2026-11-30" }, alice)) as Row;

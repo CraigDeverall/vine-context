@@ -1,7 +1,7 @@
 {
   "name": "vine-context",
   "version": "0.1.1",
-  "description": "Share a Relate context graph with other people's AI agents, peer to peer. An AI skill plus a local MCP server.",
+  "description": "Vine Context – P2P Shared Context Graphs. One Relate graph of claims and questions for a team and their AI agents, peer to peer. An AI skill plus a local MCP server.",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
@@ -45,7 +45,8 @@
     "build:apps": "node scripts/build-apps.mjs",
     "build:embedder": "node scripts/build-embedder.mjs",
     "pack:embedder": "node scripts/pack-embedder.mjs --pack",
-    "examples": "tsx scripts/make-examples.ts"
+    "examples": "tsx scripts/make-examples.ts",
+    "bench:churn": "tsx scripts/bench-churn.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",

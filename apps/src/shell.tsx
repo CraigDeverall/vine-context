@@ -8,6 +8,8 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { Alert } from "@squonk/ui/alert";
 import { Container } from "@squonk/ui/container";
+import { HStack } from "@squonk/ui/hstack";
+import { Spinner } from "@squonk/ui/spinner";
 import { Tabs } from "@squonk/ui/tabs";
 import { Textarea } from "@squonk/ui/textarea";
 import { VStack } from "@squonk/ui/vstack";
@@ -55,17 +57,29 @@ async function appTools(client: Client): Promise<AppTool[]> {
     });
 }
 
+// A view's page is over a megabyte and never changes while this page is open: read it once.
+const pages = new Map<string, Promise<string>>();
+function page(client: Client, uri: string): Promise<string> {
+  let p = pages.get(uri);
+  if (!p) {
+    p = client.readResource({ uri }).then((res) => (res.contents[0] as { text?: string }).text ?? "");
+    p.catch(() => pages.delete(uri));
+    pages.set(uri, p);
+  }
+  return p;
+}
+
 function View({ client, tool: { name, args, title, uri }, onMessage }: { client: Client; tool: AppTool; onMessage: (text: string) => void }) {
   const frame = useRef<HTMLIFrameElement>(null);
   const [height, setHeight] = useState(480);
   const [error, setError] = useState<string>();
+  const [ready, setReady] = useState(false);
 
   useEffect(() => {
     let bridge: AppBridge | undefined;
     let cancelled = false;
     (async () => {
-      const res = await client.readResource({ uri: uri });
-      const html = (res.contents[0] as { text?: string }).text ?? "";
+      const html = await page(client, uri);
       const iframe = frame.current!;
       const theme = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
       bridge = new AppBridge(
@@ -87,7 +101,9 @@ function View({ client, tool: { name, args, title, uri }, onMessage }: { client:
       bridge.oninitialized = async () => {
         await bridge!.sendToolInput({ arguments: args });
         const result = await client.callTool({ name: name, arguments: args });
-        if (!cancelled) await bridge!.sendToolResult(result as never);
+        if (cancelled) return;
+        await bridge!.sendToolResult(result as never);
+        setReady(true);
       };
       // Listen before the view loads, so its first message (ui/initialize) can't be missed.
       await bridge.connect(new PostMessageTransport(iframe.contentWindow!, iframe.contentWindow!));
@@ -103,6 +119,12 @@ function View({ client, tool: { name, args, title, uri }, onMessage }: { client:
   return (
     <>
       {error && <Alert tone="error">{error}</Alert>}
+      {!ready && !error && (
+        <HStack gap="xs" align="center" role="status">
+          <Spinner />
+          <span>Loading…</span>
+        </HStack>
+      )}
       <iframe ref={frame} title={title} sandbox="allow-scripts" style={{ width: "100%", height, border: 0, display: "block" }} />
     </>
   );
@@ -151,6 +173,12 @@ function Shell() {
           </Alert>
         )}
         {error && <Alert tone="error">{error}</Alert>}
+        {tools.length === 0 && !error && (
+          <HStack gap="xs" align="center" role="status">
+            <Spinner />
+            <span>Loading…</span>
+          </HStack>
+        )}
         {tools.length > 0 && (
           <Tabs
             listLabel="Views"

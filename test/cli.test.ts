@@ -1,4 +1,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 describe("vine cli", () => {
@@ -16,6 +19,21 @@ describe("vine cli", () => {
     expect(r.status).toBe(0);
     expect(r.stdout).toContain(`  ${cmd} `);
     expect(r.stdout).not.toContain("Commands:");
+  });
+
+  it("copies the example store, and won't overwrite a folder", () => {
+    const dir = mkdtempSync(join(tmpdir(), "vine-example-"));
+    try {
+      const to = join(dir, "party");
+      const r = vine("example", to);
+      expect(r.status).toBe(0);
+      expect(existsSync(join(to, "manifest.json"))).toBe(true);
+      const again = vine("example", to);
+      expect(again.status).toBe(1);
+      expect(again.stderr).toContain("already exists");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("explains an unknown option without a stack trace", () => {

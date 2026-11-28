@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### What a claim rests on
+
+`basis` is a new model tool: it follows `SUPPORTS` back from a claim any number
+of steps, as of a moment, and marks evidence that was replaced, withdrawn or is
+contradicted by a current claim. The MCP server lists 26 tools.
+
+The example story is longer to show it. The decision rests on evidence three
+steps deep; by the end the headcount is replaced, one figure is withdrawn and a
+second conflict is open. The example store holds 10 claims, 3 questions, 3
+replies and 16 relationships.
+
+### Other changes
+
+- `vine example [DIR]` copies the example Relate store to a folder, to open
+  with Relate's own CLI.
+- The explorer draws each relationship type in its own colour and line.
+- The "no signalling relay" warning shows only when no member is linked.
+- Lines people read leave out item ids; what agents are told keeps them.
+- The slogan is "Vine Context – P2P Shared Context Graphs", and the byline
+  under the mark is "Shared Graphs".
+- `npm run bench:churn` measures whether members who come and go end up with
+  the same graph ([docs/MEASURED.md](docs/MEASURED.md)).
+
 ### Fewer, smaller MCP tools
 
 The MCP server lists 25 tools instead of 40, and their definitions (name,
