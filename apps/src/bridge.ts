@@ -3,6 +3,7 @@
 
 import { App, applyDocumentTheme, applyHostStyleVariables, type McpUiHostContext } from "@modelcontextprotocol/ext-apps";
 import { useEffect, useState } from "react";
+import { setHostLook } from "./theme";
 
 type CallResult = { content?: { type: string; text?: string }[]; structuredContent?: unknown; isError?: boolean };
 
@@ -42,6 +43,7 @@ function applyContext(ctx: McpUiHostContext | undefined) {
   if (!ctx) return;
   if (ctx.theme) applyDocumentTheme(ctx.theme);
   if (ctx.styles?.variables) applyHostStyleVariables(ctx.styles.variables);
+  setHostLook(ctx as Parameters<typeof setHostLook>[0]);
 }
 
 /** The host can't pass a view's tool calls on to the server (some hosts show views but don't relay their calls). */
@@ -67,8 +69,11 @@ export function useBridge(): Bridge | { error: string } | undefined {
       });
     app.onhostcontextchanged = (ctx) => applyContext(ctx as McpUiHostContext);
     setState({ app });
-    app
-      .connect()
+    // Connect once the page has loaded: a host that starts listening on the
+    // frame's load event would miss a handshake sent before it.
+    const loaded = document.readyState === "complete" ? Promise.resolve() : new Promise<void>((r) => window.addEventListener("load", () => r(), { once: true }));
+    loaded
+      .then(() => app.connect())
       .then(() => {
         applyContext(app.getHostContext());
         if (!app.getHostCapabilities()?.serverTools) setCanCall(false);

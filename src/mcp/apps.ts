@@ -1,7 +1,9 @@
 // MCP App views. All views are one React bundle, built to a single HTML file
 // (dist/apps/views.html). Each view is its own ui:// resource: the same HTML,
 // with the view's name filled in, so a host can show it next to the tool call
-// that asked for it.
+// that asked for it. A tool names one resource, so open_view (which shows any
+// of three views) names ui://vine/view, and that page picks the view from the
+// tool call's input and result.
 
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
@@ -12,6 +14,7 @@ import { packageRoot } from "../core/package-root.js";
 export const APP_MIME = "text/html;profile=mcp-app";
 
 export const VIEWS = {
+  view: "Views: the contexts panel, the sharing console or the graph explorer, whichever open_view was asked for",
   contexts: "Contexts panel: what needs you in this chat's context, its questions, claims and people, and the chat's contexts",
   console: "Sharing console: join codes, everyone in the graph, who is online, and their roles",
   explorer: "Graph explorer: the graph as it stood at any moment, with search",

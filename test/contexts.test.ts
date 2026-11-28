@@ -89,7 +89,7 @@ describe("one context per chat", () => {
     expect(none.next).toMatch(/no default/);
     expect((await first.tools()).map((t) => t.name)).toContain("add_claim"); // still offered, to explain
     await expect(first.call("search", { query: "x" })).rejects.toThrow(/Ask the person which context/);
-    expect(await first.call("context_activity")).toMatchObject({ context: null });
+    expect(await first.call("recent", { activity: true })).toMatchObject({ context: null });
 
     await first.call("use_context", { name: "lunch", description: "Where and when the team has lunch" });
     await first.call("add_claim", { text: "The team lunch is on Fridays" });
@@ -113,20 +113,20 @@ describe("one context per chat", () => {
     await c.call("use_context", { name: "ops", description: "Runbooks and on-call notes" });
     const info = await c.call("context_info");
     expect(info).toMatchObject({ context: "ops", your_contexts: ["main", "ops"] });
-    const d = await c.call("describe_context", { description: "  Runbooks:   on-call notes  " });
-    expect(d).toEqual({ context: "ops", description: "Runbooks: on-call notes" });
-    expect((await c.call("context_activity")).recent[0].summary).toMatch(/^described the context: Runbooks/);
+    const d = await c.call("update_context", { purpose: "  Runbooks:   on-call notes  " });
+    expect(d).toEqual({ purpose: { context: "ops", description: "Runbooks: on-call notes" } });
+    expect((await c.call("recent", { activity: true })).recent[0].summary).toMatch(/^described the context: Runbooks/);
     // An admin sees the open join codes (the new context's own, and one for Sam), until they're cancelled.
     const sam = await c.call("share_context", { label: "for Sam", role: "reader" });
-    const open = (await c.call("context_activity")).invites;
+    const open = (await c.call("recent", { activity: true })).invites;
     expect(open[0]).toMatchObject({ id: sam.invite.id, label: "for Sam", role: "reader", code: sam.code });
-    await c.call("revoke_invite", { id: sam.invite.id });
+    await c.call("manage_member", { action: "revoke_invite", invite: sam.invite.id });
     // Going offline and back online, without a new join code.
-    await c.call("stop_sharing");
-    expect((await c.call("context_activity")).sharing).toBe(false);
-    expect(await c.call("start_sharing")).toMatchObject({ sharing: true });
-    expect((await c.call("context_activity")).sharing).toBe(true);
-    expect((await c.call("context_activity")).invites.map((i: any) => i.id)).not.toContain(sam.invite.id);
+    await c.call("sharing", { action: "off" });
+    expect((await c.call("recent", { activity: true })).sharing).toBe(false);
+    expect(await c.call("sharing", { action: "on" })).toMatchObject({ sharing: true });
+    expect((await c.call("recent", { activity: true })).sharing).toBe(true);
+    expect((await c.call("recent", { activity: true })).invites.map((i: any) => i.id)).not.toContain(sam.invite.id);
   });
 
   it("starts new chats in a linked folder with its context, without writing into the folder", async () => {
@@ -156,7 +156,7 @@ describe("several contexts in one chat", () => {
     const me = machine("alice");
     const c = await me.chat({ id: "chat-1" });
     await c.call("use_context", { name: "incident", description: "The checkout slowdown of 10 Nov" });
-    await c.call("add_context", { name: "infra", description: "How our infrastructure is set up" });
+    await c.call("use_context", { name: "infra", description: "How our infrastructure is set up", mode: "add" });
     const info = await c.call("context_info");
     expect(info.contexts.map((x: any) => [x.name, x.writes_here])).toEqual([
       ["incident", true],
@@ -175,10 +175,10 @@ describe("several contexts in one chat", () => {
     // Reopened, the chat has both, and the same write context.
     expect((await me.chat({ id: "chat-1" }).then((x) => x.call("context_info"))).contexts.map((x: any) => x.name)).toEqual(["incident", "infra"]);
 
-    await c.call("remove_context", { name: "incident" });
+    await c.call("use_context", { name: "incident", mode: "remove" });
     expect(await c.call("context_info")).toMatchObject({ context: "infra", write_to: "infra" });
     expect((await c.tools()).find((t) => t.name === "add_claim")!.inputSchema.properties).not.toHaveProperty("context");
-    await c.call("remove_context");
+    await c.call("use_context", { mode: "remove" });
     expect((await c.call("context_info")).context).toBe(null);
     expect((await me.chat({ id: "chat-1" }).then((x) => x.call("context_info"))).context).toBe(null);
   });
@@ -200,8 +200,8 @@ describe("pinning one context to a folder", () => {
     const me = machine("alice");
     const c = await me.chat({ id: "chat-1", cwd: "/work/shop" });
     await c.call("use_context", { name: "incident", description: "The checkout slowdown" });
-    await c.call("add_context", { name: "infra", description: "How our infrastructure is set up" });
-    await c.call("remove_context", { name: "infra" });
+    await c.call("use_context", { name: "infra", description: "How our infrastructure is set up", mode: "add" });
+    await c.call("use_context", { name: "infra", mode: "remove" });
     expect((await c.call("context_info")).folder).toMatchObject({ linked: false, pinned: [] });
 
     await c.call("link_folder", { name: "infra" }); // not in this chat
@@ -225,22 +225,22 @@ describe("the TURN server tools", () => {
   it("never take a password: the server is saved for VINE_TURN_PASSWORD, and a kept password is left alone", async () => {
     const me = machine("alice");
     const c = await me.chat({ id: "chat-1" });
-    const tool = (await c.tools()).find((t) => t.name === "set_turn_server")!;
-    expect(Object.keys(tool.inputSchema.properties!).sort()).toEqual(["host", "port", "transport", "username"]);
+    const tool = (await c.tools()).find((t) => t.name === "turn_server")!;
+    expect(Object.keys(tool.inputSchema.properties!).sort()).toEqual(["action", "host", "port", "transport", "username"]);
 
     const before = process.env.VINE_TURN_PASSWORD;
     delete process.env.VINE_TURN_PASSWORD;
     try {
-      const r = await c.call("set_turn_server", { host: "turn.example.org", username: "sam", transport: "tls" });
+      const r = await c.call("turn_server", { action: "set", host: "turn.example.org", username: "sam", transport: "tls" });
       expect(r).toMatchObject({ turn: "turn.example.org:5349 (tls)", password_store: "env", answered: false, terminal_command: "vine turn set turn.example.org:5349 --user sam --tls" });
       expect(readFileSync(join(me.dataDir, "network.json"), "utf8")).not.toMatch(/password/);
 
       // Set in a terminal, with the password kept by vine: the tool won't replace it.
       saveTurn(me.dataDir, { host: "turn.example.org", username: "sam", store: "file", password: "kept-secret" });
-      await expect(c.call("set_turn_server", { host: "other.example.org", username: "sam" })).rejects.toThrow(/already set[\s\S]*vine turn set/);
+      await expect(c.call("turn_server", { action: "set", host: "other.example.org", username: "sam" })).rejects.toThrow(/already set[\s\S]*vine turn set/);
       expect(readTurn(me.dataDir)).toMatchObject({ host: "turn.example.org", store: "file", password: "kept-secret" });
 
-      expect(await c.call("remove_turn_server")).toMatchObject({ removed: true });
+      expect(await c.call("turn_server", { action: "clear" })).toMatchObject({ removed: true });
       expect(readTurn(me.dataDir)).toBeUndefined();
     } finally {
       if (before !== undefined) process.env.VINE_TURN_PASSWORD = before;
@@ -253,14 +253,14 @@ describe("details and deleting", () => {
     const me = machine("alice");
     const c = await me.chat({ id: "chat-1", cwd: "/work/app" });
     await c.call("use_context", { name: "incident", description: "The checkout slowdown" });
-    await c.call("add_context", { name: "infra", description: "How our infrastructure is set up" });
+    await c.call("use_context", { name: "infra", description: "How our infrastructure is set up", mode: "add" });
     await c.call("add_claim", { text: "Checkout p95 rose to 4 s" });
     await c.call("link_folder");
     const other = await me.chat({ id: "chat-2" });
     await other.call("use_context", { name: "incident" });
 
     // Details: for a context in the chat, and for one that isn't.
-    expect(await c.call("context_details", { name: "incident" })).toMatchObject({
+    expect(await c.call("context_info", { context: "incident", details: true })).toMatchObject({
       name: "incident",
       description: "The checkout slowdown",
       role: "admin",
@@ -270,9 +270,9 @@ describe("details and deleting", () => {
       members: 1,
       items: { Claim: 1 },
     });
-    expect(await other.call("context_details", { name: "infra" })).toMatchObject({ name: "infra", in_chat: false, writes_here: false, role: "admin" });
+    expect(await other.call("context_info", { context: "infra", details: true })).toMatchObject({ name: "infra", in_chat: false, writes_here: false, role: "admin" });
     expect((await other.call("context_info")).contexts.map((x: any) => x.name)).toEqual(["incident"]);
-    await expect(c.call("context_details", { name: "lunch" })).rejects.toThrow(/no context 'lunch'/);
+    await expect(c.call("context_info", { context: "lunch", details: true })).rejects.toThrow(/no context 'lunch'/);
 
     // Deleting needs the name again, exactly.
     await expect(c.call("delete_context", { name: "incident", confirm: "yes" })).rejects.toThrow(/Not deleted/);
@@ -303,22 +303,22 @@ describe("renaming, describing and inviting any context here", () => {
     const me = machine("alice", { spawned: true });
     const c = await me.chat({ id: "chat-1", cwd: "/work/app" });
     await c.call("use_context", { name: "incident", description: "The checkout slowdown" });
-    await c.call("add_context", { name: "infra", description: "How our infrastructure is set up" });
+    await c.call("use_context", { name: "infra", description: "How our infrastructure is set up", mode: "add" });
     await c.call("add_claim", { text: "Checkout p95 rose to 4 s", context: "incident" });
     await c.call("link_folder");
     const other = await me.chat({ id: "chat-2" });
     await other.call("use_context", { name: "incident" });
-    const id = (await c.call("context_details", { name: "incident" })).id;
+    const id = (await c.call("context_info", { context: "incident", details: true })).id;
 
-    await expect(c.call("rename_context", { name: "incident", to: "infra" })).rejects.toThrow(/already a context 'infra'/);
-    await expect(c.call("rename_context", { name: "lunch", to: "dinner" })).rejects.toThrow(/no context 'lunch'/);
+    await expect(c.call("update_context", { context: "incident", rename_to: "infra" })).rejects.toThrow(/already a context 'infra'/);
+    await expect(c.call("update_context", { context: "lunch", rename_to: "dinner" })).rejects.toThrow(/no context 'lunch'/);
 
-    const r = await c.call("rename_context", { name: "incident", to: "checkout-slowdown" });
-    expect(r).toMatchObject({ renamed: "incident", to: "checkout-slowdown", id, write_to: "checkout-slowdown" });
+    const r = await c.call("update_context", { context: "incident", rename_to: "checkout-slowdown" });
+    expect(r.renamed).toMatchObject({ renamed: "incident", to: "checkout-slowdown", id, write_to: "checkout-slowdown" });
     expect(readdirSync(join(me.dataDir, "graphs")).sort()).toEqual(["checkout-slowdown", "infra"]);
     expect(existsSync(join(me.dataDir, "hosts", "incident"))).toBe(false);
     // Same context, same items, new name.
-    expect(await c.call("context_details", { name: "checkout-slowdown" })).toMatchObject({ id, description: "The checkout slowdown", in_chat: true, writes_here: true, items: { Claim: 1 } });
+    expect(await c.call("context_info", { context: "checkout-slowdown", details: true })).toMatchObject({ id, description: "The checkout slowdown", in_chat: true, writes_here: true, items: { Claim: 1 } });
     expect((await c.call("context_info")).contexts.map((x: any) => x.name)).toEqual(["checkout-slowdown", "infra"]);
     const links = JSON.parse(readFileSync(join(me.dataDir, "links.json"), "utf8"));
     expect(links.chats["chat-1"].contexts.map((x: any) => x.name)).toEqual(["checkout-slowdown", "infra"]);
@@ -327,7 +327,7 @@ describe("renaming, describing and inviting any context here", () => {
     // Another chat that had it open follows it, rather than losing it.
     expect((await other.call("context_info")).context).toBe("checkout-slowdown");
     // A context the chat doesn't use renames too.
-    await other.call("rename_context", { name: "infra", to: "platform" });
+    await other.call("update_context", { context: "infra", rename_to: "platform" });
     expect((await c.call("context_info")).contexts.map((x: any) => x.name)).toEqual(["checkout-slowdown", "platform"]);
   });
 
@@ -335,21 +335,21 @@ describe("renaming, describing and inviting any context here", () => {
     const me = machine("alice");
     const c = await me.chat({ id: "chat-1" });
     await c.call("use_context", { name: "incident" });
-    await c.call("add_context", { name: "infra" });
-    await c.call("remove_context", { name: "infra" });
+    await c.call("use_context", { name: "infra", mode: "add" });
+    await c.call("use_context", { name: "infra", mode: "remove" });
 
-    await c.call("describe_context", { description: "How our infrastructure is set up", context: "infra" });
-    expect((await c.call("context_details", { name: "infra" })).description).toBe("How our infrastructure is set up");
+    await c.call("update_context", { purpose: "How our infrastructure is set up", context: "infra" });
+    expect((await c.call("context_info", { context: "infra", details: true })).description).toBe("How our infrastructure is set up");
     const inv = await c.call("share_context", { label: "for Sam", context: "infra" });
     expect(inv).toMatchObject({ context: "infra", invite: { label: "for Sam" } });
     expect(inv.code).toMatch(/^vine1_/);
-    expect((await c.call("context_details", { name: "infra" })).open_invites).toBe(1);
+    expect((await c.call("context_info", { context: "infra", details: true })).open_invites).toBe(1);
     // Taking it offline and back works the same.
-    await c.call("stop_sharing", { context: "infra" });
-    expect((await c.call("context_details", { name: "infra" })).sharing).toBe(false);
+    await c.call("sharing", { action: "off", context: "infra" });
+    expect((await c.call("context_info", { context: "infra", details: true })).sharing).toBe(false);
     // The chat is unchanged.
     expect((await c.call("context_info")).contexts.map((x: any) => x.name)).toEqual(["incident"]);
-    await expect(c.call("describe_context", { description: "x", context: "lunch" })).rejects.toThrow(/no context 'lunch'/);
+    await expect(c.call("update_context", { purpose: "x", context: "lunch" })).rejects.toThrow(/no context 'lunch'/);
   });
 });
 
@@ -364,7 +364,7 @@ describe("question threads", () => {
     expect(t.replies.map((x: any) => x.text)).toEqual(["Bob says Thursday suits most people"]);
     await c.call("add_claim", { text: "The team lunch is on Thursdays", answers: [q.id] });
     expect(await c.call("thread", { question: q.id })).toMatchObject({ answered: true });
-    expect((await c.call("context_activity")).recent.map((x: any) => x.summary)).toContainEqual(expect.stringMatching(/^replied to q_/));
+    expect((await c.call("recent", { activity: true })).recent.map((x: any) => x.summary)).toContainEqual(expect.stringMatching(/^replied to q_/));
   });
 });
 
@@ -375,7 +375,7 @@ describe("finding a context", () => {
     expect(await c.call("find_context", { query: "lunch" })).toMatchObject({ found: [], your_contexts: [] });
 
     await c.call("use_context", { name: "lunch", description: "Where and when the team has lunch" });
-    await c.call("add_context", { name: "ops", description: "Runbooks, deploys and on-call notes" });
+    await c.call("use_context", { name: "ops", description: "Runbooks, deploys and on-call notes", mode: "add" });
     await c.call("use_context", { name: "lunch" }); // ops stays on the machine, out of the chat
 
     const r = await c.call("find_context", { query: "on-call runbooks" });
@@ -384,7 +384,7 @@ describe("finding a context", () => {
     expect((await c.call("find_context", { query: "team lunch", limit: 1 })).found).toEqual([expect.objectContaining({ name: "lunch", in_chat: true, writes_here: true })]);
 
     // A description set later is found on the next search.
-    await c.call("describe_context", { description: "Friday lunch spots and the dietary list" });
+    await c.call("update_context", { purpose: "Friday lunch spots and the dietary list" });
     expect((await c.call("find_context", { query: "dietary", limit: 1 })).found[0]).toMatchObject({ name: "lunch", description: "Friday lunch spots and the dietary list" });
   });
 });

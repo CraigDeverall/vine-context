@@ -8,9 +8,48 @@
 // `vine ui`. Agents write; people steer: the view never writes a claim. Answer,
 // Correct, "Keep this one" and the rest hand the person's words to the agent.
 //
-// It reads through `context_activity`, which never uses up the notices meant
+// It reads through `recent` with `activity`, which never uses up the notices meant
 // for the agent, and acts through the server's ordinary tools. It polls.
 
+import { Alert } from "@squonk/ui/alert";
+import { Badge } from "@squonk/ui/badge";
+import { Button } from "@squonk/ui/button";
+import { Card } from "@squonk/ui/card";
+import { Cluster } from "@squonk/ui/cluster";
+import { Code } from "@squonk/ui/code";
+import { Divider } from "@squonk/ui/divider";
+import { Grid } from "@squonk/ui/grid";
+import { Heading } from "@squonk/ui/heading";
+import { HStack } from "@squonk/ui/hstack";
+import {
+  ActivityIcon,
+  AddIcon,
+  AddUserIcon,
+  ChevronDownIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
+  ChevronUpIcon,
+  CloseIcon,
+  EditIcon,
+  HelpIcon,
+  KeyIcon,
+  LinkIcon,
+  PinIcon,
+  RemoveUserIcon,
+  ReplyIcon,
+  TransferIcon,
+} from "@squonk/ui/icon";
+import { IconButton } from "@squonk/ui/icon-button";
+import { Presentation } from "@squonk/ui/presentation";
+import { Select } from "@squonk/ui/select";
+import { Spinner } from "@squonk/ui/spinner";
+import { Split } from "@squonk/ui/split";
+import { Switch } from "@squonk/ui/switch";
+import { Tabs } from "@squonk/ui/tabs";
+import { Text } from "@squonk/ui/text";
+import { TextField } from "@squonk/ui/text-field";
+import { Textarea } from "@squonk/ui/textarea";
+import { VStack } from "@squonk/ui/vstack";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { NoToolCalls, asks, copyText, usePoll, type Bridge } from "../bridge";
 import {
@@ -24,6 +63,7 @@ import {
   prop,
   relations,
   sendLine,
+  plain,
   short,
   tail,
   threads,
@@ -59,35 +99,108 @@ const RECENT = 5;
 const HEADER_PEOPLE = 6;
 // The "you claimed:" part of an activity line is who-did-what metadata: drawn muted so the claim itself reads first.
 const lead = (c: Change) => {
-  const i = /^(claim|question|reply|describe)$/.test(c.kind) ? c.summary.indexOf(": ") : -1;
-  return i < 0 ? { head: "", body: c.summary } : { head: c.summary.slice(0, i + 2), body: c.summary.slice(i + 2) };
+  const summary = plain(c.summary);
+  const i = /^(claim|question|reply|describe)$/.test(c.kind) ? summary.indexOf(": ") : -1;
+  return i < 0 ? { head: "", body: summary } : { head: summary.slice(0, i + 2), body: summary.slice(i + 2) };
 };
-/** A way out of a step (Cancel, Done, Back) leads with a ‹ caret, so it reads as going back. */
-const caret = (label: string) => (label.startsWith("‹") ? label : `‹ ${label}`);
-const ICON: Record<string, string> = { claim: "📌", question: "❓", reply: "↳", link: "🔗", withdraw: "✕", add_member: "👋", remove_member: "🚪", set_role: "🔑", rename: "✎", describe: "✎", create: "✦" };
+/** A way out of a step (Cancel, Done, Back) leads with a back chevron, so it reads as going back. */
+const backLabel = (label: string) => label.replace(/^‹\s*/, "");
+const ICON: Record<string, typeof PinIcon> = {
+  claim: PinIcon,
+  question: HelpIcon,
+  reply: ReplyIcon,
+  link: LinkIcon,
+  withdraw: CloseIcon,
+  add_member: AddUserIcon,
+  remove_member: RemoveUserIcon,
+  set_role: KeyIcon,
+  rename: EditIcon,
+  describe: EditIcon,
+  create: AddIcon,
+};
 const ROLES: Role[] = ["reader", "contributor", "admin"];
 
 type Tone = "warn" | "ok" | "bad" | "accent" | undefined;
+const ALERT_TONE = { warn: "warning", ok: "success", bad: "error" } as const;
+const TEXT_TONE = { warn: "warning", ok: "success", bad: "error", accent: "info" } as const;
 
-const Card = ({ tone, children }: { tone?: Tone; children: ReactNode }) => <div className={`card${tone ? ` ${tone}` : ""}`}>{children}</div>;
-const Meta = ({ children }: { children: ReactNode }) => <p className="faint wrap">{children}</p>;
-const Heading = ({ children, count }: { children: ReactNode; count?: number | string }) => (
-  <h2>
+/**
+ * A box around one thing. A status tone (warn, ok, bad) is the tone's quiet
+ * wash; accent (this chat's context, you) is the raised surface. The wash is
+ * a container here, not an announcement, so it takes no live-region role.
+ */
+const Box = ({ tone, children }: { tone?: Tone; children: ReactNode }) =>
+  tone && tone !== "accent" ? (
+    <Alert variant="tinted" tone={ALERT_TONE[tone]} role={undefined}>
+      {children}
+    </Alert>
+  ) : (
+    <Card variant={tone === "accent" ? "filled" : "outlined"}>{children}</Card>
+  );
+const Meta = ({ children }: { children: ReactNode }) => <Text tone="muted">{children}</Text>;
+/** Text drawn in a tone, inside a line. */
+const Toned = ({ tone, children }: { tone: Tone; children: ReactNode }) => (
+  <Text as="span" tone={tone ? TEXT_TONE[tone] : "secondary"}>
     {children}
-    {count !== undefined && <span className="faint"> {count}</span>}
-  </h2>
+  </Text>
 );
+const SectionTitle = ({ children, count }: { children: ReactNode; count?: number | string }) => (
+  <Heading as="h2" level={5}>
+    {children}
+    {count !== undefined && (
+      <Text as="span" tone="muted">
+        {" "}
+        {count}
+      </Text>
+    )}
+  </Heading>
+);
+/** One of a few choices shown together (a filter, the context shown): pressed when it's the one. */
 const Chip = ({ active, onClick, children }: { active: boolean; onClick: () => void; children: ReactNode }) => (
-  <button className={`chip${active ? " on" : ""}`} aria-pressed={active} onClick={onClick}>
+  <Button variant={active ? "primary" : "secondary"} aria-pressed={active} onClick={onClick}>
     {children}
-  </button>
+  </Button>
+);
+const OpenButton = ({ onClick, variant }: { onClick: () => void; variant?: "primary" | "secondary" }) => (
+  <Button variant={variant} onClick={onClick}>
+    Open <ChevronRightIcon />
+  </Button>
+);
+/** A line of text that's no longer current: struck through and muted. */
+const Ended = ({ ended, children }: { ended: boolean; children: ReactNode }) => (
+  <Text tone={ended ? "muted" : undefined}>{ended ? <s>{children}</s> : children}</Text>
+);
+/** A reply under its question, set in from the left. */
+const Indented = ({ children }: { children: ReactNode }) => (
+  <VStack gap="none" style={{ paddingInlineStart: "var(--squonk-spacing-md)" }}>
+    {children}
+  </VStack>
+);
+const Facts = ({ children }: { children: ReactNode }) => (
+  <Grid as="dl" columns="max-content 1fr" gap="xs">
+    {children}
+  </Grid>
+);
+const Fact = ({ name, children }: { name: string; children: ReactNode }) => (
+  <>
+    <Text as="dt" tone="secondary">
+      {name}
+    </Text>
+    <Text as="dd">{children}</Text>
+  </>
+);
+const Loading = ({ children = "Loading…" }: { children?: ReactNode }) => (
+  <HStack gap="xs" align="center">
+    <Spinner />
+    <Text tone="muted">{children}</Text>
+  </HStack>
 );
 
-/** An underlined link that opens and closes what it's about. */
+/** A link-like button that opens and closes what it's about. */
 const Toggle = ({ open, onClick, children }: { open: boolean; onClick: () => void; children: ReactNode }) => (
-  <button className="link more" aria-expanded={open} onClick={onClick}>
-    {children} <span aria-hidden="true">{open ? "▴" : "▾"}</span>
-  </button>
+  <Button variant="ghost" aria-expanded={open} onClick={onClick}>
+    {children} {open ? <ChevronUpIcon /> : <ChevronDownIcon />}
+  </Button>
 );
 
 /**
@@ -101,9 +214,11 @@ function Folded<T>(p: { list: T[]; first: number; what: string; one?: string; re
   if (hidden <= 0) return <>{p.list.map(p.render)}</>;
   const shown = open ? p.list : p.latest ? p.list.slice(-p.first) : p.list.slice(0, p.first);
   const link = (
-    <Toggle open={open} onClick={() => setOpen(!open)}>
-      {open ? `Show fewer ${p.what}` : `${hidden} ${p.latest ? "earlier" : "more"} ${hidden === 1 && p.one ? p.one : p.what}`}
-    </Toggle>
+    <HStack>
+      <Toggle open={open} onClick={() => setOpen(!open)}>
+        {open ? `Show fewer ${p.what}` : `${hidden} ${p.latest ? "earlier" : "more"} ${hidden === 1 && p.one ? p.one : p.what}`}
+      </Toggle>
+    </HStack>
   );
   return (
     <>
@@ -114,14 +229,16 @@ function Folded<T>(p: { list: T[]; first: number; what: string; one?: string; re
   );
 }
 
-/** Extra detail behind an underlined link, closed until asked for. */
+/** Extra detail behind a link-like button, closed until asked for. */
 function Reveal({ label, hide = "Less", children }: { label: string; hide?: string; children: ReactNode }) {
   const [open, setOpen] = useState(false);
   return (
     <>
-      <Toggle open={open} onClick={() => setOpen(!open)}>
-        {open ? hide : label}
-      </Toggle>
+      <HStack>
+        <Toggle open={open} onClick={() => setOpen(!open)}>
+          {open ? hide : label}
+        </Toggle>
+      </HStack>
       {open && children}
     </>
   );
@@ -144,42 +261,57 @@ function Field(p: {
     setV(x);
     p.onInput?.(x);
   };
+  // A field with no visible label is named by its placeholder.
+  const name = p.label ? undefined : p.placeholder;
+  const control = p.rows ? (
+    <Textarea
+      label={p.label}
+      aria-label={name}
+      rows={p.rows}
+      value={v}
+      placeholder={p.placeholder}
+      autoFocus={p.autoFocus}
+      onChange={(e) => change(e.currentTarget.value)}
+      onKeyDown={(e) => e.key === "Enter" && (e.metaKey || e.ctrlKey) && p.onSubmit(v)}
+    />
+  ) : (
+    <TextField
+      label={p.label}
+      aria-label={name}
+      value={v}
+      placeholder={p.placeholder}
+      autoFocus={p.autoFocus}
+      onChange={(e) => change(e.currentTarget.value)}
+      onKeyDown={(e) => e.key === "Enter" && p.onSubmit(v)}
+    />
+  );
   return (
-    <div className="field">
-      {p.label && <label>{p.label}</label>}
-      <div className="linkbox">
-        {p.rows ? (
-          <textarea
-            rows={p.rows}
-            value={v}
-            placeholder={p.placeholder}
-            autoFocus={p.autoFocus}
-            aria-label={p.label ?? p.placeholder}
-            onInput={(e) => change(e.currentTarget.value)}
-            onKeyDown={(e) => e.key === "Enter" && (e.metaKey || e.ctrlKey) && p.onSubmit(v)}
-          />
-        ) : (
-          <input
-            value={v}
-            placeholder={p.placeholder}
-            autoFocus={p.autoFocus}
-            aria-label={p.label ?? p.placeholder}
-            onInput={(e) => change(e.currentTarget.value)}
-            onKeyDown={(e) => e.key === "Enter" && p.onSubmit(v)}
-          />
-        )}
-        {p.submit && (
-          <button className="primary" onClick={() => p.onSubmit(v)}>
+    <VStack gap="xs">
+      {p.submit ? (
+        <HStack gap="xs" align="end">
+          {control}
+          <Button variant="primary" onClick={() => p.onSubmit(v)}>
             {p.submit}
-          </button>
-        )}
-      </div>
+          </Button>
+        </HStack>
+      ) : (
+        control
+      )}
       {p.help && <Meta>{p.help}</Meta>}
-    </div>
+    </VStack>
   );
 }
 
+/** The panel, in the compact register: it sits inside a chat. */
 export function Contexts({ b }: { b: Bridge }) {
+  return (
+    <Presentation register="compact">
+      <ContextsPanel b={b} />
+    </Presentation>
+  );
+}
+
+function ContextsPanel({ b }: { b: Bridge }) {
   const [a, setA] = useState<Activity | null>(null);
   /** With no context in this chat: the contexts on this machine to choose from. */
   const [none, setNone] = useState<string[] | null>(null);
@@ -201,7 +333,7 @@ export function Contexts({ b }: { b: Bridge }) {
   const [creating, setCreating] = useState<{ error: string | null } | null>(null);
   /** A context that's off for this chat (by name), shown on its own page: it can't be opened. */
   const [managing, setManaging] = useState<string | null>(null);
-  /** Its details (`context_details`), or those of the open context's Settings tab. */
+  /** Its details (`context_info` with `details`), or those of the open context's Settings tab. */
   const [details, setDetails] = useState<ContextDetails | null>(null);
   const [deleting, setDeleting] = useState<{ name: string; error: string | null } | null>(null);
   const [editing, setEditing] = useState(false);
@@ -237,7 +369,7 @@ export function Contexts({ b }: { b: Bridge }) {
 
   const refresh = async (which = viewing.current) => {
     try {
-      take(await b.call<Activity | NoContext>("context_activity", { limit: 40, snapshot: true, ...(which ? { context: which } : {}) }));
+      take(await b.call<Activity | NoContext>("recent", { activity: true, limit: 40, snapshot: true, ...(which ? { context: which } : {}) }));
     } catch (e) {
       setReady(true);
       setTrouble(e instanceof NoToolCalls ? "This app can’t refresh the view by itself. Ask your agent to open the contexts panel again to see the latest." : (e as Error).message);
@@ -299,7 +431,7 @@ export function Contexts({ b }: { b: Bridge }) {
     const name = managingNow.current;
     if (!name) return;
     try {
-      const d = await b.call<ContextDetails>("context_details", { name });
+      const d = await b.call<ContextDetails>("context_info", { context: name, details: true });
       if (managingNow.current === name) setDetails(d);
     } catch (e) {
       setError((e as Error).message);
@@ -356,37 +488,37 @@ export function Contexts({ b }: { b: Bridge }) {
   };
 
   const messages = (error || notice) && (
-    <div className={`notice ${error ? "bad" : "ok"} item`} role={error ? "alert" : "status"}>
-      <span className="grow wrap">{error ?? notice}</span>
-      <button
-        className="link"
-        aria-label="Dismiss"
-        onClick={() => {
-          setError(null);
-          setNotice(null);
-        }}
-      >
-        ×
-      </button>
-    </div>
+    <Alert
+      tone={error ? "error" : "success"}
+      onDismiss={() => {
+        setError(null);
+        setNotice(null);
+      }}
+    >
+      {error ?? notice}
+    </Alert>
   );
 
   /** A step that takes the whole view: a title, what it's about, its body, and a way out. */
   const modal = (title: string, about: ReactNode, body: ReactNode, close?: { label: string; onClick: () => void }) => (
-    <div className="stack lg">
-      <div className="stack sm">
-        <div className="spread">
-          <h1 className="title wrap">{title}</h1>
-          {close && <button onClick={close.onClick}>{caret(close.label)}</button>}
-        </div>
-        {about && <p className="wrap">{about}</p>}
-      </div>
+    <VStack gap="lg">
+      <VStack gap="sm">
+        <Split align="start">
+          <Heading as="h1" level={3}>{title}</Heading>
+          {close && (
+            <Button onClick={close.onClick}>
+              <ChevronLeftIcon /> {backLabel(close.label)}
+            </Button>
+          )}
+        </Split>
+        {about && <Text>{about}</Text>}
+      </VStack>
       {messages}
       {body}
-    </div>
+    </VStack>
   );
 
-  if (!ready && !a && !none) return <p className="faint">Loading the context…</p>;
+  if (!ready && !a && !none) return <Loading>Loading the context…</Loading>;
 
   const here = none ?? a?.your_contexts ?? [];
   const using = a?.contexts ?? [];
@@ -394,8 +526,13 @@ export function Contexts({ b }: { b: Bridge }) {
   /** Turns a context on or off for this chat. */
   const toggle = (n: string) =>
     void (inChat(n)
-      ? act("remove_context", { name: n }, `'${n}' is off for this chat. It stays on this machine.`)
-      : act(using.length ? "add_context" : "use_context", { name: n }, `'${n}' is on for this chat.`));
+      ? act("use_context", { name: n, mode: "remove" }, `'${n}' is off for this chat. It stays on this machine.`)
+      : act("use_context", { name: n, ...(using.length ? { mode: "add" } : {}) }, `'${n}' is on for this chat.`));
+  /** The switch that turns a context on or off for this chat. */
+  const onSwitch = (n: string) => {
+    const c = inChat(n);
+    return <Switch label={c ? "On" : "Off"} aria-label={`${n} in this chat`} checked={!!c} onChange={() => toggle(n)} />;
+  };
   /** Leaves the contexts list for one of the chat's contexts. */
   const show = async (n: string) => {
     await view(n);
@@ -413,7 +550,7 @@ export function Contexts({ b }: { b: Bridge }) {
     draft.current.invite = "";
     return show(n).then(() => setInviting("contributor"));
   };
-  const writeHere = (n: string) => void act("add_context", { name: n, write_here: true }, `New items go to '${n}' unless another fits better.`);
+  const writeHere = (n: string) => void act("use_context", { name: n, mode: "add", write_here: true }, `New items go to '${n}' unless another fits better.`);
 
   /** A context's pin: whether new chats started in this chat's folder (or below it) start with it. */
   const pin = (n: string) => {
@@ -421,14 +558,18 @@ export function Contexts({ b }: { b: Bridge }) {
     if (!f) return null;
     const pinned = (f.pinned ?? []).includes(n);
     return (
-      <button
-        className="link pin"
-        aria-pressed={pinned}
-        onClick={() => void act("link_folder", pinned ? { name: n, off: true } : { name: n }, pinned ? `New chats in this folder no longer start with '${n}'.` : `New chats in this folder start with '${n}'.`)}
-      >
-        {pinned ? "📌 On for new chats in " : "📌 Turn on for new chats in "}
-        <span className="faint">{tail(f.folder, 32)}</span>
-      </button>
+      <HStack>
+        <Button
+          variant="ghost"
+          aria-pressed={pinned}
+          onClick={() => void act("link_folder", pinned ? { name: n, off: true } : { name: n }, pinned ? `New chats in this folder no longer start with '${n}'.` : `New chats in this folder start with '${n}'.`)}
+        >
+          <PinIcon /> {pinned ? "On for new chats in " : "Turn on for new chats in "}
+          <Text as="span" tone="muted">
+            {tail(f.folder, 32)}
+          </Text>
+        </Button>
+      </HStack>
     );
   };
 
@@ -448,18 +589,20 @@ export function Contexts({ b }: { b: Bridge }) {
     /** No one else has joined, so there is nobody to sync with. */
     const alone = d?.members === 1;
     return (
-      <div className="stack lg">
-        <div className="stack sm">
-          <Heading>This chat</Heading>
-          <div className="spread">
-            <div className="row">
-              <Chip active={!!c} onClick={() => toggle(n)}>
-                {c ? "◉ On" : "○ Off"}
-              </Chip>
-              {c && severalOn && !c.writes_here && <button onClick={() => writeHere(n)}>✎ Write here</button>}
-            </div>
-            {c && !inTab && <button onClick={() => void show(n)}>Open ›</button>}
-          </div>
+      <VStack gap="lg">
+        <VStack gap="sm">
+          <SectionTitle>This chat</SectionTitle>
+          <Split wrap>
+            <Cluster>
+              {onSwitch(n)}
+              {c && severalOn && !c.writes_here && (
+                <Button onClick={() => writeHere(n)}>
+                  <EditIcon /> Write here
+                </Button>
+              )}
+            </Cluster>
+            {c && !inTab && <OpenButton onClick={() => void show(n)} />}
+          </Split>
           <Meta>
             {c
               ? severalOn
@@ -470,23 +613,25 @@ export function Contexts({ b }: { b: Bridge }) {
               : "This chat isn’t using this context. Turn it on to open it here, share it or change its settings."}
           </Meta>
           {pin(n)}
-        </div>
-        <div className="stack sm">
-          <Heading>Sharing</Heading>
+        </VStack>
+        <VStack gap="sm">
+          <SectionTitle>Sharing</SectionTitle>
           {sharing === undefined ? (
-            <p className="faint">Loading…</p>
+            <Loading />
           ) : (
-            <p className="wrap">
-              <span className={sharing ? "t-ok" : "t-warn"}>● </span>
+            <Text>
+              <Text as="span" tone={sharing ? "success" : "warning"} aria-hidden="true">
+                ●{" "}
+              </Text>
               {!sharing ? "Offline" : alone ? "Only you so far" : "Syncing"}
               {d && (
-                <span className="muted">
+                <Text as="span" tone="secondary">
                   {!sharing && alone ? " · only you so far" : ""}
                   {!alone ? ` · ${d.members} members · ${d.online} of the others online now` : ""}
                   {d.open_invites ? ` · ${d.open_invites} join code${d.open_invites === 1 ? "" : "s"} not used yet` : ""}
-                </span>
+                </Text>
               )}
-            </p>
+            </Text>
           )}
           <Meta>
             {sharing === false
@@ -500,82 +645,75 @@ export function Contexts({ b }: { b: Bridge }) {
                   : "Every member keeps a full copy. Changes travel directly between your machines whenever you’re both online."}
           </Meta>
           {c && (
-            <div className="row">
+            <Cluster>
               {isAdmin && (
-                <button
-                  className="primary"
+                <Button
+                  variant="primary"
                   onClick={() => {
                     draft.current.invite = "";
                     if (inTab) setInviting("contributor");
                     else void share(n);
                   }}
                 >
-                  + Invite someone
-                </button>
+                  <AddIcon /> Invite someone
+                </Button>
               )}
               {sharing !== undefined &&
                 (sharing ? (
-                  <button onClick={() => void act("stop_sharing", { context: n }, `'${n}' is offline: not syncing until you go online again.`)}>Go offline</button>
+                  <Button onClick={() => void act("sharing", { action: "off", context: n }, `'${n}' is offline: not syncing until you go online again.`)}>Go offline</Button>
                 ) : (
-                  <button onClick={() => void act("start_sharing", { context: n }, `'${n}' is back online: syncing with the other members.`)}>Go online</button>
+                  <Button onClick={() => void act("sharing", { action: "on", context: n }, `'${n}' is back online: syncing with the other members.`)}>Go online</Button>
                 ))}
-            </div>
+            </Cluster>
           )}
           {c && !isAdmin && <Meta>Only an admin can invite people.</Meta>}
-        </div>
-        <div className="stack sm">
-          <Heading>About</Heading>
+        </VStack>
+        <VStack gap="sm">
+          <SectionTitle>About</SectionTitle>
           {d ? (
             <>
-              <dl className="kv">
-                <dt>Your role</dt>
-                <dd>{d.role ?? "removed (you keep your copy to read)"}</dd>
-                <dt>Made by</dt>
-                <dd>{d.yours ? "you" : (d.created_by ?? "unknown")}</dd>
-                <dt>Holds</dt>
-                <dd>
+              <Facts>
+                <Fact name="Your role">{d.role ?? "removed (you keep your copy to read)"}</Fact>
+                <Fact name="Made by">{d.yours ? "you" : (d.created_by ?? "unknown")}</Fact>
+                <Fact name="Holds">
                   {count("Claim", "claim", "claims")} · {count("Question", "question", "questions")} · {count("Reply", "reply", "replies")}
-                </dd>
-                {d.held > 0 && (
-                  <>
-                    <dt>Not yet sent</dt>
-                    <dd>{d.held} just written, still only on this machine</dd>
-                  </>
-                )}
-              </dl>
+                </Fact>
+                {d.held > 0 && <Fact name="Not yet sent">{d.held} just written, still only on this machine</Fact>}
+              </Facts>
               <Reveal label="Id, storage and history" hide="Hide id, storage and history">
-                <dl className="kv">
-                  <dt>Changes</dt>
-                  <dd>
-                    {d.changes} in all, withdrawn items included
-                  </dd>
-                  <dt>Id</dt>
-                  <dd className="mono">{d.id ?? "none"}</dd>
-                  <dt>Stored at</dt>
-                  <dd className="mono">{d.stored_at}</dd>
-                </dl>
+                <Facts>
+                  <Fact name="Changes">{d.changes} in all, withdrawn items included</Fact>
+                  <Fact name="Id">
+                    <Code>{d.id ?? "none"}</Code>
+                  </Fact>
+                  <Fact name="Stored at">
+                    <Code>{d.stored_at}</Code>
+                  </Fact>
+                </Facts>
               </Reveal>
             </>
+          ) : error ? (
+            <Meta>Couldn’t read its details.</Meta>
           ) : (
-            <p className="faint">{error ? "Couldn’t read its details." : "Loading…"}</p>
+            <Loading />
           )}
-        </div>
-        <div className="stack sm">
-          <Heading>Delete</Heading>
+        </VStack>
+        <VStack gap="sm">
+          <SectionTitle>Delete</SectionTitle>
           <Meta>Deletes this machine’s copy for good. Other members keep theirs. You’ll be asked to confirm.</Meta>
-          <div className="row">
-            <button
-              className="danger"
+          <Cluster>
+            <Button
+              variant="danger"
               onClick={() => {
                 draft.current.del = "";
                 setDeleting({ name: n, error: null });
               }}
             >
               Delete from this machine…
-            </button>
-          </div>
-        </div>
-      </div>
+            </Button>
+          </Cluster>
+        </VStack>
+      </VStack>
     );
   };
 
@@ -602,35 +740,35 @@ export function Contexts({ b }: { b: Bridge }) {
     return modal(
       `Delete ${n}?`,
       `This permanently deletes this machine’s copy of '${n}'${items !== null ? `: its ${items} item${items === 1 ? "" : "s"}, their history` : ": its claims, questions and replies, their history"}, the join codes made here, and every chat’s and folder’s link to it. It can’t be undone.`,
-      <div className="stack lg">
-        <Card tone="warn">
-          <div className="stack sm">
+      <VStack gap="lg">
+        <Box tone="warn">
+          <VStack gap="sm">
             {others === null ? (
-              <p className="wrap">Other members keep their own copies. If you’re its only member, it’s gone for good.</p>
+              <Text>Other members keep their own copies. If you’re its only member, it’s gone for good.</Text>
             ) : others > 0 ? (
-              <p className="wrap">
+              <Text>
                 {others} other member{others === 1 ? " keeps their" : "s keep their"} own copy, and nothing is deleted for them. To get it back you’d need a new join code from one of its admins.
-              </p>
+              </Text>
             ) : (
-              <p className="t-warn wrap">You’re its only member, so this is the only copy: once deleted, it’s gone for good.</p>
+              <Text tone="warning">You’re its only member, so this is the only copy: once deleted, it’s gone for good.</Text>
             )}
             {known?.yours && others !== null && others > 0 && (
-              <p className="t-warn wrap">You made this context. The other members keep syncing with each other, but the join codes you made stop working.</p>
+              <Text tone="warning">You made this context. The other members keep syncing with each other, but the join codes you made stop working.</Text>
             )}
             {inChat(n) && <Meta>To only stop using it in this chat, turn it off instead: it stays on this machine.</Meta>}
-          </div>
-        </Card>
+          </VStack>
+        </Box>
         <Field key={`delete-${n}`} label={`Type ${n} to confirm`} placeholder={n} autoFocus onInput={(v) => (draft.current.del = v)} onSubmit={confirm} />
-        {deleting.error && <p className="t-bad wrap">{deleting.error}</p>}
-        <div className="row">
-          <button className="primary" onClick={close}>
+        {deleting.error && <Text tone="error">{deleting.error}</Text>}
+        <Cluster>
+          <Button variant="primary" onClick={close}>
             Keep it
-          </button>
-          <button className="danger" onClick={() => confirm(draft.current.del ?? "")}>
+          </Button>
+          <Button variant="danger" onClick={() => confirm(draft.current.del ?? "")}>
             Delete permanently
-          </button>
-        </div>
-      </div>,
+          </Button>
+        </Cluster>
+      </VStack>,
       { label: "Cancel", onClick: close },
     );
   }
@@ -647,12 +785,12 @@ export function Contexts({ b }: { b: Bridge }) {
       setCreating(null);
       setSwitching(false);
       viewing.current = name;
-      void act(a ? "add_context" : "use_context", { name, description }, `Created '${name}'${a ? " and added it to this chat" : ""}. No one is invited yet: use Invite someone when you want to let a person in.`);
+      void act("use_context", { name, description, ...(a ? { mode: "add" } : {}) }, `Created '${name}'${a ? " and added it to this chat" : ""}. No one is invited yet: use Invite someone when you want to let a person in.`);
     };
     return modal(
       "Create a new context",
       "A context holds what a group knows, as claims and questions, shared with the people you invite.",
-      <div className="stack lg">
+      <VStack gap="lg">
         <Field label="Name" placeholder="e.g. checkout-incident" autoFocus help="Short: lower-case letters, digits and dashes." onInput={(v) => (draft.current.name = v)} onSubmit={create} />
         <Field
           label="What is it for?"
@@ -662,15 +800,17 @@ export function Contexts({ b }: { b: Bridge }) {
           onInput={(v) => (draft.current.description = v)}
           onSubmit={create}
         />
-        {creating.error && <p className="t-bad wrap">{creating.error}</p>}
-        <div className="row">
-          <button className="primary" onClick={create}>
+        {creating.error && <Text tone="error">{creating.error}</Text>}
+        <Cluster>
+          <Button variant="primary" onClick={create}>
             Create
-          </button>
-          <button onClick={close}>‹ Cancel</button>
-        </div>
+          </Button>
+          <Button onClick={close}>
+            <ChevronLeftIcon /> Cancel
+          </Button>
+        </Cluster>
         <Meta>It’s yours: you’re its admin, and it’s added to this chat. Invite people from its People tab, or with Share in the list.</Meta>
-      </div>,
+      </VStack>,
       { label: "Cancel", onClick: close },
     );
   }
@@ -689,13 +829,13 @@ export function Contexts({ b }: { b: Bridge }) {
       return modal(
         n,
         null,
-        <div className="stack lg">
-          <div className="stack sm">
-            <Heading>What it’s for</Heading>
-            {description ? <p className="wrap">{description}</p> : <p className="faint wrap">No description yet, so agents won’t know what belongs here.</p>}
-          </div>
+        <VStack gap="lg">
+          <VStack gap="sm">
+            <SectionTitle>What it’s for</SectionTitle>
+            {description ? <Text>{description}</Text> : <Meta>No description yet, so agents won’t know what belongs here.</Meta>}
+          </VStack>
           {settings(n, false)}
-        </div>,
+        </VStack>,
         { label: "‹ Contexts", onClick: () => void manage(null) },
       );
     }
@@ -709,59 +849,65 @@ export function Contexts({ b }: { b: Bridge }) {
         : many
           ? "Your agent reads all of these, and puts each new item in the one whose description fits. ✎ marks where it writes when none clearly does."
           : "Most chats use one context. Turn another on to use it too: your agent then picks the right one for each item.",
-      <div className="stack">
-        <div className="stack sm">
-          <div className="row">
-            <button
-              className="primary"
+      <VStack gap="md">
+        <VStack gap="sm">
+          <Cluster>
+            <Button
+              variant="primary"
               onClick={() => {
                 draft.current.name = draft.current.description = "";
                 setCreating({ error: null });
               }}
             >
-              + Create new context
-            </button>
-          </div>
+              <AddIcon /> Create new context
+            </Button>
+          </Cluster>
           <Meta>Got a join code? Paste it to your agent.</Meta>
-        </div>
+        </VStack>
         {here.map((n) => {
           const c = inChat(n);
           return (
-            <Card key={n} tone={c ? "accent" : undefined}>
-              <div className="stack sm">
-                <div className="item">
-                  <div className="row grow">
-                    <button className="link name" onClick={() => void (c ? show(n) : manage(n))}>
+            <Box key={n} tone={c ? "accent" : undefined}>
+              <VStack gap="sm">
+                <Split align="start">
+                  <Cluster gap="xs">
+                    <Button variant="ghost" onClick={() => void (c ? show(n) : manage(n))}>
                       {n}
-                    </button>
-                    {c && <span className="muted">· {c.role ?? "removed"}</span>}
-                    {c && many && c.writes_here && <span className="t-accent">✎ writes here</span>}
-                  </div>
-                  <Chip active={!!c} onClick={() => toggle(n)}>
-                    {c ? "◉ On" : "○ Off"}
-                  </Chip>
-                </div>
-                {c && <p className="faint wrap">{c.description ?? "No description yet"}</p>}
-                <div className="spread">
-                  <div className="row">
-                    <button onClick={() => void (c ? settingsTab(n) : manage(n))}>Settings</button>
-                    {c?.role === "admin" && <button onClick={() => void share(n)}>Share</button>}
-                    {c && many && !c.writes_here && <button onClick={() => writeHere(n)}>✎ Write here</button>}
-                  </div>
-                  {c && <button onClick={() => void show(n)}>Open ›</button>}
-                </div>
+                    </Button>
+                    {c && <Text as="span" tone="secondary">· {c.role ?? "removed"}</Text>}
+                    {c && many && c.writes_here && <Badge tone="primary">✎ writes here</Badge>}
+                  </Cluster>
+                  {onSwitch(n)}
+                </Split>
+                {c && <Meta>{c.description ?? "No description yet"}</Meta>}
+                <Split wrap>
+                  <Cluster>
+                    <Button onClick={() => void (c ? settingsTab(n) : manage(n))}>Settings</Button>
+                    {c?.role === "admin" && <Button onClick={() => void share(n)}>Share</Button>}
+                    {c && many && !c.writes_here && (
+                      <Button onClick={() => writeHere(n)}>
+                        <EditIcon /> Write here
+                      </Button>
+                    )}
+                  </Cluster>
+                  {c && <OpenButton onClick={() => void show(n)} />}
+                </Split>
                 {pin(n)}
-              </div>
-            </Card>
+              </VStack>
+            </Box>
           );
         })}
-        {a?.folder && here.length > 0 && <Meta>📌 A pinned context is on in every new chat started in that folder, or below it. It’s kept on this machine: nothing is written into the folder.</Meta>}
-      </div>,
+        {a?.folder && here.length > 0 && (
+          <Meta>
+            <PinIcon /> A pinned context is on in every new chat started in that folder, or below it. It’s kept on this machine: nothing is written into the folder.
+          </Meta>
+        )}
+      </VStack>,
       none ? undefined : { label: "Done", onClick: () => setSwitching(false) },
     );
   }
 
-  if (!a) return <p className="notice bad">{trouble ?? "Couldn’t load the context."}</p>;
+  if (!a) return <Alert tone="error">{trouble ?? "Couldn’t load the context."}</Alert>;
 
   const many = a.contexts.length > 1;
   /** The context an action is about: named only when the chat has several (the tools take `context` then). */
@@ -781,14 +927,14 @@ export function Contexts({ b }: { b: Bridge }) {
     const at = prop(n, "recorded_at");
     return `${by === a.you.name ? "you" : by}${at ? ` · ${ago(at, now)}` : ""}`;
   };
-  const held = (n: GraphNode) => heldByNode.has(n.key) && <span className="t-warn"> · still only on this machine</span>;
+  const held = (n: GraphNode) => heldByNode.has(n.key) && <Toned tone="warn"> · still only on this machine</Toned>;
   const undo = (n: GraphNode) => {
     const change = heldByNode.get(n.key);
     return (
       change && (
-        <button className="primary" onClick={() => void act("take_back", { id: change.id, ...ctx }, "Taken back. It never left this machine.")}>
+        <Button variant="primary" onClick={() => void act("withdraw", { id: change.id, undo_only: true, ...ctx }, "Taken back. It never left this machine.")}>
           Undo
-        </button>
+        </Button>
       )
     );
   };
@@ -798,14 +944,14 @@ export function Contexts({ b }: { b: Bridge }) {
     !n.ended &&
     canWrite &&
     (isMine(n) || admin) && (
-      <button
+      <Button
         onClick={() => {
           openItem(null);
           void act("withdraw", { id: n.key, ...ctx }, "Withdrawn. It stays in the history.");
         }}
       >
         Withdraw
-      </button>
+      </Button>
     );
 
   // Editing the description: only that.
@@ -822,7 +968,7 @@ export function Contexts({ b }: { b: Bridge }) {
         autoFocus
         onSubmit={(v) => {
           setEditing(false);
-          if (v.trim() && v.trim() !== a.description) void act("describe_context", { description: v.trim(), ...ctx }, "Saved. Every member’s agent sees it.");
+          if (v.trim() && v.trim() !== a.description) void act("update_context", { purpose: v.trim(), ...ctx }, "Saved. Every member’s agent sees it.");
         }}
       />,
       { label: "Cancel", onClick: () => setEditing(false) },
@@ -840,7 +986,7 @@ export function Contexts({ b }: { b: Bridge }) {
         autoFocus
         onSubmit={(v) => {
           setRenaming(false);
-          if (v.trim() && v.trim() !== a.you.name) void act("set_my_name", { name: v.trim() }, `You're now ${v.trim()} in every context on this machine.`);
+          if (v.trim() && v.trim() !== a.you.name) void act("update_context", { my_name: v.trim() }, `You're now ${v.trim()} in every context on this machine.`);
         }}
       />,
       { label: "Cancel", onClick: () => setRenaming(false) },
@@ -853,7 +999,7 @@ export function Contexts({ b }: { b: Bridge }) {
     return modal(
       "Correct this claim",
       composeOn.title,
-      <div className="stack">
+      <VStack gap="md">
         <Meta>
           {byline(composeOn)} · {composeOn.key}
         </Meta>
@@ -867,7 +1013,7 @@ export function Contexts({ b }: { b: Bridge }) {
           onSubmit={send}
         />
         <Meta>The old claim stays in the history, marked as replaced, so anyone can see what was believed before.</Meta>
-      </div>,
+      </VStack>,
       { label: "Cancel", onClick: () => setComposing(null) },
     );
   }
@@ -884,15 +1030,17 @@ export function Contexts({ b }: { b: Bridge }) {
     return modal(
       `Invite someone to ${a.context}`,
       "A join code lets one person in: whoever uses it first. Send it to them privately. It expires in 24 hours if no one uses it.",
-      <div className="stack">
-        <div className="field">
-          <label htmlFor="invite-role">They can</label>
-          <select id="invite-role" value={role} onChange={(e) => setInviting(e.currentTarget.value as Role)}>
-            <option value="contributor">Read and add (contributor)</option>
-            <option value="reader">Only read (reader)</option>
-            <option value="admin">Read, add and invite (admin)</option>
-          </select>
-        </div>
+      <VStack gap="md">
+        <Select<Role>
+          label="They can"
+          value={role}
+          onChange={(v) => v && setInviting(v)}
+          options={[
+            { value: "contributor", label: "Read and add (contributor)" },
+            { value: "reader", label: "Only read (reader)" },
+            { value: "admin", label: "Read, add and invite (admin)" },
+          ]}
+        />
         <Field
           label="Who is it for? (optional)"
           placeholder="e.g. Sam: shown when they join, so a code used by someone else stands out"
@@ -900,13 +1048,13 @@ export function Contexts({ b }: { b: Bridge }) {
           onInput={(v) => (draft.current.invite = v)}
           onSubmit={make}
         />
-        <div className="row">
-          <button className="primary" onClick={() => make(draft.current.invite ?? "")}>
+        <Cluster>
+          <Button variant="primary" onClick={() => make(draft.current.invite ?? "")}>
             Make join code
-          </button>
-        </div>
+          </Button>
+        </Cluster>
         <Meta>This machine answers the code, so it must be online when they use it. Everyone in the context is told who joined.</Meta>
-      </div>,
+      </VStack>,
       { label: "Cancel", onClick: () => setInviting(null) },
     );
   }
@@ -917,17 +1065,17 @@ export function Contexts({ b }: { b: Bridge }) {
     return modal(
       `Remove ${leaving.name}?`,
       `Every member’s machine stops syncing with ${leaving.name} and refuses their later changes. What they wrote stays, and they keep the copy they already had.`,
-      <div className="row">
-        <button
-          className="primary"
+      <Cluster>
+        <Button
+          variant="primary"
           onClick={() => {
             setConfirmRemove(null);
-            void act("remove_peer", { name: leaving.name, ...ctx }, `${leaving.name} was removed. They keep the copy they already had.`);
+            void act("manage_member", { action: "remove", name: leaving.name, ...ctx }, `${leaving.name} was removed. They keep the copy they already had.`);
           }}
         >
           Remove {leaving.name}
-        </button>
-      </div>,
+        </Button>
+      </Cluster>,
       { label: "Cancel", onClick: () => setConfirmRemove(null) },
     );
 
@@ -937,25 +1085,25 @@ export function Contexts({ b }: { b: Bridge }) {
     const back = { label: trail.current.length > 1 ? "‹ Back" : "‹ Back to the list", onClick: backItem };
     /** A linked item: its text, who and when, and a way to open it. */
     const related = (label: string, tone: Tone, n: GraphNode) => (
-      <div key={`${label}-${n.key}`} className="item">
-        <div className="grow">
-          <p className={`wrap${n.label === "Claim" && !rel.current(n) ? " ended" : ""}`}>
-            <span className={tone ? `t-${tone}` : "muted"}>{label} </span>
+      <Split key={`${label}-${n.key}`} align="start">
+        <VStack gap="none">
+          <Ended ended={n.label === "Claim" && !rel.current(n)}>
+            <Toned tone={tone}>{label} </Toned>
             {short(n.title, 300)}
-          </p>
+          </Ended>
           <Meta>
             {byline(n)} · {n.key}
           </Meta>
-        </div>
-        <button onClick={() => openItem(n.key)}>Open ›</button>
-      </div>
+        </VStack>
+        <OpenButton onClick={() => openItem(n.key)} />
+      </Split>
     );
     const group = (title: string, label: string, tone: Tone, list: GraphNode[]) =>
       list.length > 0 && (
-        <div key={title} className="stack sm">
-          <Heading count={list.length}>{title}</Heading>
+        <VStack key={title} gap="sm">
+          <SectionTitle count={list.length}>{title}</SectionTitle>
           {list.map((n) => related(label, tone, n))}
-        </div>
+        </VStack>
       );
 
     if (item.label === "Question") {
@@ -965,34 +1113,36 @@ export function Contexts({ b }: { b: Bridge }) {
       return modal(
         item.ended ? "Withdrawn question" : answered ? "Answered question" : "Open question",
         item.title,
-        <div className="stack">
+        <VStack gap="md">
           <Meta>
             asked by {byline(item)} · {item.key}
             {held(item)}
           </Meta>
           {group("It’s about", "→", undefined, rel.linked(item.id, "ABOUT", "out"))}
           {th && th.replies.length > 0 && (
-            <div className="stack sm">
-              <Heading count={th.replies.length}>Thread</Heading>
+            <VStack gap="sm">
+              <SectionTitle count={th.replies.length}>Thread</SectionTitle>
               {th.replies.map((r) => (
-                <div key={r.key} className="item">
-                  <div className="grow">
-                    <p className="wrap">
-                      <span className="muted">↳ </span>
+                <Split key={r.key} align="start">
+                  <VStack gap="none">
+                    <Text>
+                      <Text as="span" tone="secondary">
+                        ↳{" "}
+                      </Text>
                       {short(r.title, 600)}
-                    </p>
+                    </Text>
                     <Meta>
                       {byline(r)}
                       {held(r)}
                     </Meta>
-                  </div>
-                  <div className="row">
+                  </VStack>
+                  <Cluster>
                     {undo(r)}
-                    {open && canWrite && <button onClick={() => void ask(answerPrompt(item, { reply: r }, named))}>Answer with this</button>}
-                  </div>
-                </div>
+                    {open && canWrite && <Button onClick={() => void ask(answerPrompt(item, { reply: r }, named))}>Answer with this</Button>}
+                  </Cluster>
+                </Split>
               ))}
-            </div>
+            </VStack>
           )}
           {th && group("Answer", "✓", "ok", th.answers)}
           {group("Questions about this one", "?", "warn", rel.linked(item.id, "ABOUT", "in"))}
@@ -1006,14 +1156,14 @@ export function Contexts({ b }: { b: Bridge }) {
               onSubmit={(v) => v.trim() && void ask(answerPrompt(item, { text: v.trim() }, named))}
             />
           )}
-          <div className="row">
-            {open && canWrite && <button onClick={() => void ask(prompts.investigate(item, named))}>Ask my agent to look into it</button>}
-            <button onClick={() => void copy(`${item.title} (${item.key})`)}>Copy</button>
+          <Cluster>
+            {open && canWrite && <Button onClick={() => void ask(prompts.investigate(item, named))}>Ask my agent to look into it</Button>}
+            <Button onClick={() => void copy(`${item.title} (${item.key})`)}>Copy</Button>
             {undo(item)}
             {withdraw(item)}
-          </div>
+          </Cluster>
           {open && <Meta>Agents reply on the thread. Your answer goes to your agent, which records it as a claim that answers the question.</Meta>}
-        </div>,
+        </VStack>,
         back,
       );
     }
@@ -1026,9 +1176,9 @@ export function Contexts({ b }: { b: Bridge }) {
     return modal(
       state,
       null,
-      <div className="stack">
-        <p className={`wrap${rel.current(item) ? "" : " ended"}`}>{item.title}</p>
-        <div>
+      <VStack gap="md">
+        <Ended ended={!rel.current(item)}>{item.title}</Ended>
+        <VStack gap="none">
           <Meta>
             recorded by {byline(item)} · {item.key}
             {held(item)}
@@ -1036,13 +1186,13 @@ export function Contexts({ b }: { b: Bridge }) {
           {prop(item, "source") && <Meta>Source: {prop(item, "source")}</Meta>}
           {(from || to) && <Meta>About {from && to ? `${from.slice(0, 10)} to ${to.slice(0, 10)}` : from ? `${from.slice(0, 10)} onwards` : `up to ${to.slice(0, 10)}`}</Meta>}
           {item.ended && (
-            <p className="faint t-warn wrap">
+            <Text tone="warning">
               Withdrawn{prop(item, "withdrawn_by") ? ` by ${prop(item, "withdrawn_by")}` : ""}
               {prop(item, "withdrawn_at") ? ` · ${ago(prop(item, "withdrawn_at"), now)}` : ""}
               {prop(item, "withdraw_reason") ? `: ${prop(item, "withdraw_reason")}` : ""}
-            </p>
+            </Text>
           )}
-        </div>
+        </VStack>
         {newer && group("Replaced by", "↑", "ok", [newer])}
         {group("Can’t be true alongside", "⚡", "warn", contradicts)}
         {group("Answers", "?", undefined, rel.linked(item.id, "ANSWERS", "out"))}
@@ -1050,18 +1200,18 @@ export function Contexts({ b }: { b: Bridge }) {
         {group("It’s evidence for", "→", undefined, rel.linked(item.id, "SUPPORTS", "out"))}
         {group("Earlier versions", "↓", undefined, rel.linked(item.id, "REPLACES", "out"))}
         {group("Questions about it", "?", "warn", rel.linked(item.id, "ABOUT", "in"))}
-        <div className="row">
+        <Cluster>
           {rel.current(item) && canWrite && !heldByNode.has(item.key) && (
-            <button className="primary" onClick={() => setComposing(item.key)}>
+            <Button variant="primary" onClick={() => setComposing(item.key)}>
               Correct it
-            </button>
+            </Button>
           )}
-          <button onClick={() => void copy(`${item.title} (${item.key})`)}>Copy</button>
+          <Button onClick={() => void copy(`${item.title} (${item.key})`)}>Copy</Button>
           {undo(item)}
           {withdraw(item)}
-        </div>
+        </Cluster>
         {rel.current(item) && canWrite && <Meta>Correct it when it’s wrong or out of date: the new claim replaces this one, which stays in the history. Withdraw it when it should never have been recorded.</Meta>}
-      </div>,
+      </VStack>,
       back,
     );
   }
@@ -1108,86 +1258,80 @@ export function Contexts({ b }: { b: Bridge }) {
   const unshownOnline = members.filter((p) => p.online).length - shown.filter((p) => p.online).length;
   const counts: Record<Tab, number | undefined> = { overview: undefined, questions: t?.open.length, claims: t?.claims.length, people: members.length, settings: undefined };
   const goOnline = (
-    <button className="primary" onClick={() => void act("start_sharing", { ...ctx }, "Back online: syncing with the other members.")}>
+    <Button variant="primary" onClick={() => void act("sharing", { action: "on", ...ctx }, "Back online: syncing with the other members.")}>
       Go online
-    </button>
+    </Button>
   );
   // The latest news from someone else: what their changes meant for you if that's newest, else their latest change.
   const digest = a.digest?.at(-1);
   const latest = a.recent.find((c) => !c.mine && !c.held && c.kind !== "create");
-  const news = digest?.lines[0] && (!latest || digest.at >= latest.at) ? `${short(digest.lines[0], 90)} (${ago(digest.at, now)})` : latest ? `${latest.by} ${short(latest.summary, 80)} (${ago(latest.at, now)})` : "";
+  const news = digest?.lines[0] && (!latest || digest.at >= latest.at) ? `${short(plain(digest.lines[0]), 90)} (${ago(digest.at, now)})` : latest ? `${latest.by} ${short(plain(latest.summary), 80)} (${ago(latest.at, now)})` : "";
 
   const header = (
-    <div className="stack sm">
-      <div className="spread">
-        <h1 className="title wrap">{a.context}</h1>
-        <button onClick={() => setSwitching(true)}>{many ? `⇄ ${a.contexts.length} contexts` : "⇄ Contexts"}</button>
-      </div>
+    <VStack gap="sm">
+      <Split align="start">
+        <Heading as="h1" level={3}>{a.context}</Heading>
+        <Button onClick={() => setSwitching(true)}>
+          <TransferIcon /> {many ? `${a.contexts.length} contexts` : "Contexts"}
+        </Button>
+      </Split>
       {many && (
-        <div className="row">
+        <Cluster>
           {a.contexts.map((c) => (
             <Chip key={c.name} active={c.name === a.context} onClick={() => void view(c.name)}>
               {c.name}
               {c.writes_here ? " ✎" : ""}
             </Chip>
           ))}
-        </div>
+        </Cluster>
       )}
-      <div className="item">
-        {a.description ? <p className="grow wrap">{a.description}</p> : <p className="grow faint wrap">No description yet{admin ? "" : ": an admin can add one"}, so agents won’t know what belongs here.</p>}
-        {admin && (
-          <button className="link" aria-label="Edit description" onClick={() => setEditing(true)}>
-            ✎
-          </button>
-        )}
-      </div>
-      <div className="row who">
-        <span className={a.sharing ? "t-ok" : "t-warn"} title={a.sharing ? `Syncing with the other members · ${a.relays_up} signalling relay${a.relays_up === 1 ? "" : "s"} reachable` : "Not syncing: what you write stays on this machine until you go online"}>
-          {a.sharing ? "⇅ Syncing" : "● Offline"}
-        </span>
-        <button className="link" onClick={() => void act(a.sharing ? "stop_sharing" : "start_sharing", { ...ctx }, a.sharing ? "Offline: not syncing until you go online again." : "Back online: syncing with the other members.")}>
+      <Split align="start">
+        {a.description ? <Text>{a.description}</Text> : <Meta>No description yet{admin ? "" : ": an admin can add one"}, so agents won’t know what belongs here.</Meta>}
+        {admin && <IconButton icon={<EditIcon />} label="Edit description" onClick={() => setEditing(true)} />}
+      </Split>
+      <Cluster gap="xs">
+        <Badge
+          variant="dot"
+          tone={a.sharing ? "success" : "warning"}
+          title={a.sharing ? `Syncing with the other members · ${a.relays_up} signalling relay${a.relays_up === 1 ? "" : "s"} reachable` : "Not syncing: what you write stays on this machine until you go online"}
+        >
+          {a.sharing ? "Syncing" : "Offline"}
+        </Badge>
+        <Button variant="ghost" onClick={() => void act("sharing", { action: a.sharing ? "off" : "on", ...ctx }, a.sharing ? "Offline: not syncing until you go online again." : "Back online: syncing with the other members.")}>
           {a.sharing ? "Go offline" : "Go online"}
-        </button>
-        <span className="faint" aria-hidden="true">
-          |
-        </span>
+        </Button>
+        <Divider orientation="vertical" aria-hidden="true" />
         {shown.map((p) => (
-          <span
+          <Text
+            as="span"
             key={p.fingerprint}
-            className={p.online ? "on" : ""}
+            tone={p.online ? "secondary" : "muted"}
             title={`${p.name} · ${p.role}${p.creator ? " · made this context" : ""} · ${p.online ? "online now" : "offline"} · key ${p.fingerprint}${p.agent ? ` · ${p.agent}` : ""}${p.platform ? ` · ${p.platform}` : ""}`}
           >
-            <span className={p.online ? "t-ok" : ""}>●</span> {p.name}
+            <Text as="span" tone={p.online ? "success" : "muted"} aria-hidden="true">
+              ●
+            </Text>{" "}
+            {p.name}
             {p.you ? " (you)" : ""}
-          </span>
+          </Text>
         ))}
         {unshown > 0 && (
-          <button className="link" onClick={() => setTab("people")}>
+          <Button variant="ghost" onClick={() => setTab("people")}>
             +{unshown} more{unshownOnline ? ` · ${unshownOnline} online` : ""}
-          </button>
+          </Button>
         )}
-      </div>
+      </Cluster>
       {news && <Meta>Latest: {news}</Meta>}
-      <div className="tabs" role="tablist">
-        {TABS.map((x) => (
-          <button key={x.tab} role="tab" aria-selected={tab === x.tab} onClick={() => setTab(x.tab)}>
-            {x.label}
-            {counts[x.tab] !== undefined ? ` ${counts[x.tab]}` : ""}
-          </button>
-        ))}
-      </div>
-      {trouble && <p className="notice bad wrap">{trouble}</p>}
-      {messages}
-    </div>
+    </VStack>
   );
 
   /** The filter box above a list, and what it's filtering by: its words, and how many more are close in meaning. */
   const filterBox = (what: string, byMeaning: number) => (
-    <div className="stack sm">
+    <VStack gap="sm">
       <Field key={`filter-${tab}-${f.text}`} value={f.text} placeholder={`Search ${what} by meaning, words, a person or an id`} submit="Search" onSubmit={(v) => setFilter({ text: v.trim() })} />
       {f.text && (
-        <div className="row">
-          <span className="faint">
+        <Cluster gap="xs">
+          <Text as="span" tone="muted">
             Showing {what} matching “{short(f.text, 40)}”
             {!b.canCall
               ? ""
@@ -1198,64 +1342,69 @@ export function Contexts({ b }: { b: Bridge }) {
                   : byMeaning
                     ? `, then ${byMeaning} close in meaning`
                     : ""}
-          </span>
-          <button className="link" onClick={() => setFilter({ text: "" })}>
-            × Clear
-          </button>
-        </div>
+          </Text>
+          <Button variant="ghost" onClick={() => setFilter({ text: "" })}>
+            <CloseIcon /> Clear
+          </Button>
+        </Cluster>
       )}
-    </div>
+    </VStack>
   );
   /** The first page of a list, and a button for the rest. */
   const paged = <T,>(list: T[]) => list.slice(0, PAGE + more);
   const showMore = (total: number) =>
     total > PAGE + more && (
-      <button className="link more" onClick={() => setMore((n) => n + PAGE)}>
-        Show {Math.min(PAGE, total - PAGE - more)} more of {total}
-      </button>
+      <HStack>
+        <Button variant="ghost" onClick={() => setMore((n) => n + PAGE)}>
+          Show {Math.min(PAGE, total - PAGE - more)} more of {total}
+        </Button>
+      </HStack>
     );
+  /** What a list says when it has nothing to show. */
+  const empty = (text: string) => <Text tone="muted">{text}</Text>;
 
   let body: ReactNode;
-  if (!snap || !t || !rel) body = <p className="faint">Loading…</p>;
+  if (!snap || !t || !rel) body = <Loading />;
   else if (tab === "overview") {
     const heldMine = a.recent.filter((c) => c.held && c.mine);
     const waiting = t.open.filter((th) => th.replies.length);
     const mineOpen = t.open.filter((th) => isMine(th.q) && th.replies.length);
     const need = (key: string, tone: Tone, text: ReactNode, button: ReactNode) => (
-      <Card key={key} tone={tone}>
-        <div className="item center">
-          <span className="grow wrap">{text}</span>
+      <Box key={key} tone={tone}>
+        <Split>
+          <Text>{text}</Text>
           {button}
-        </div>
-      </Card>
+        </Split>
+      </Box>
     );
     const needs = [
       !a.sharing && need("offline", "warn", "You’re offline: what you write stays on this machine, and you don’t see what others add, until you’re back.", goOnline),
-      a.sharing && a.relays_up === 0 && need("relays", "warn", "No signalling relay is reachable, so the other members can’t find this machine right now.", null),
+      // Members already linked need no relay: it only matters for finding each other.
+      a.sharing && a.relays_up === 0 && a.online.length === 0 && a.members > 1 && need("relays", "warn", "No signalling relay is reachable, so the other members can’t find this machine right now.", null),
       rel.conflicts.length > 0 &&
         need(
           "conflicts",
           "warn",
           `⚡ ${rel.conflicts.length} pair${rel.conflicts.length === 1 ? "" : "s"} of claims can’t both be true. Someone needs to say which stands.`,
-          <button className="primary" onClick={() => setTab("claims", { text: "", claims: "conflicts" })}>
+          <Button variant="primary" onClick={() => setTab("claims", { text: "", claims: "conflicts" })}>
             Settle
-          </button>,
+          </Button>,
         ),
       mineOpen.length > 0 &&
         need(
           "replies",
           "accent",
           `↳ ${mineOpen.length} of your questions ${mineOpen.length === 1 ? "has" : "have"} replies: ${short(mineOpen[0]!.q.title, 80)}`,
-          <button className="primary" onClick={() => openItem(mineOpen[0]!.q.key)}>
+          <Button variant="primary" onClick={() => openItem(mineOpen[0]!.q.key)}>
             Read
-          </button>,
+          </Button>,
         ),
       t.open.length > 0 &&
         need(
           "questions",
           undefined,
           `❓ ${t.open.length} open question${t.open.length === 1 ? "" : "s"}${waiting.length ? `, ${waiting.length} with replies` : ""}.`,
-          <button onClick={() => setTab("questions", { text: "", questions: "open" })}>See</button>,
+          <Button onClick={() => setTab("questions", { text: "", questions: "open" })}>See</Button>,
         ),
       admin &&
         !a.description &&
@@ -1263,9 +1412,9 @@ export function Contexts({ b }: { b: Bridge }) {
           "describe",
           "accent",
           "This context has no description, so agents can’t tell what belongs in it.",
-          <button className="primary" onClick={() => setEditing(true)}>
+          <Button variant="primary" onClick={() => setEditing(true)}>
             Describe
-          </button>,
+          </Button>,
         ),
       admin &&
         members.length === 1 &&
@@ -1274,93 +1423,86 @@ export function Contexts({ b }: { b: Bridge }) {
           "alone",
           "accent",
           "It’s just you here so far.",
-          <button className="primary" onClick={() => setInviting("contributor")}>
+          <Button variant="primary" onClick={() => setInviting("contributor")}>
             Invite someone
-          </button>,
+          </Button>,
         ),
-      invites.length > 0 && need("invites", undefined, `${invites.length} join code${invites.length === 1 ? " is" : "s are"} waiting to be used.`, <button onClick={() => setTab("people")}>See</button>),
+      invites.length > 0 && need("invites", undefined, `${invites.length} join code${invites.length === 1 ? " is" : "s are"} waiting to be used.`, <Button onClick={() => setTab("people")}>See</Button>),
     ].filter(Boolean);
     body = (
-      <div className="stack">
+      <VStack gap="md">
         {heldMine.length > 0 && (
-          <Card tone="warn">
-            <div className="stack sm">
-              <p className="t-warn">Just written, still only on this machine:</p>
+          <Box tone="warn">
+            <VStack gap="sm">
+              <Text tone="warning">Just written, still only on this machine:</Text>
               {heldMine.map((c) => (
-                <div key={c.id} className="item center">
-                  <span className="grow wrap">{short(c.summary, 140)}</span>
-                  <button className="primary" onClick={() => void act("take_back", { id: c.id, ...ctx }, "Taken back. It never left this machine.")}>
+                <Split key={c.id}>
+                  <Text>{short(plain(c.summary), 140)}</Text>
+                  <Button variant="primary" onClick={() => void act("withdraw", { id: c.id, undo_only: true, ...ctx }, "Taken back. It never left this machine.")}>
                     Undo
-                  </button>
-                </div>
+                  </Button>
+                </Split>
               ))}
-            </div>
-          </Card>
+            </VStack>
+          </Box>
         )}
-        <Heading count={needs.length || undefined}>Needs you</Heading>
+        <SectionTitle count={needs.length || undefined}>Needs you</SectionTitle>
         {needs.length ? (
           <Folded list={needs} first={3} what="things" one="thing" render={(x) => x} />
         ) : (
-          <Card tone="ok">
-            <span className="t-ok">✓ Nothing needs you right now.</span>
-          </Card>
+          <Box tone="ok">
+            <Text tone="success">✓ Nothing needs you right now.</Text>
+          </Box>
         )}
         {digest && digest.lines.length > 0 && (
           <>
-            <Heading>What changed for you</Heading>
-            <Card tone="accent">
-              <div className="stack sm">
-                <Folded
-                  list={digest.lines.map((line, i) => ({ line, i }))}
-                  first={3}
-                  what="changes"
-                  one="change"
-                  render={({ line, i }) => (
-                    <p key={i} className="wrap">
-                      {line}
-                    </p>
-                  )}
-                />
+            <SectionTitle>What changed for you</SectionTitle>
+            <Box tone="accent">
+              <VStack gap="sm">
+                <Folded list={digest.lines.map((line, i) => ({ line, i }))} first={3} what="changes" one="change" render={({ line, i }) => <Text key={i}>{plain(line)}</Text>} />
                 <Meta>{ago(digest.at, now)}</Meta>
-              </div>
-            </Card>
+              </VStack>
+            </Box>
           </>
         )}
-        <Heading>Ask your agent</Heading>
-        <div className="row">
-          <button onClick={() => void ask(prompts.catchUp(a.context))}>Catch me up</button>
-          {canWrite && <button onClick={() => void ask(prompts.saveChat(a.context))}>Save what this chat learned</button>}
-        </div>
-        <Heading>Recent activity</Heading>
+        <SectionTitle>Ask your agent</SectionTitle>
+        <Cluster>
+          <Button onClick={() => void ask(prompts.catchUp(a.context))}>Catch me up</Button>
+          {canWrite && <Button onClick={() => void ask(prompts.saveChat(a.context))}>Save what this chat learned</Button>}
+        </Cluster>
+        <SectionTitle>Recent activity</SectionTitle>
         {!a.recent.length && <Meta>Nothing yet. What your agent and the other members’ agents record shows up here.</Meta>}
         <Folded
           list={a.recent}
           first={RECENT}
           what="changes"
           one="change"
-          render={(c: Change) => (
-            <div key={c.id} className="item">
-              <div className="grow">
-                <p className="wrap">
-                  <span className="muted">
-                    {ICON[c.kind] ?? "·"} {c.mine ? "you" : c.by} {lead(c).head}
-                  </span>
-                  {short(lead(c).body, 200)}
-                </p>
-                <Meta>
-                  {ago(c.at, now)}
-                  {c.held && <span className="t-warn"> · still only on this machine</span>}
-                </Meta>
-              </div>
-              {c.node && rel.byKey.has(c.node) && <button onClick={() => openItem(c.node)}>Open ›</button>}
-            </div>
-          )}
+          render={(c: Change) => {
+            const KindIcon = ICON[c.kind] ?? ActivityIcon;
+            return (
+              <Split key={c.id} align="start">
+                <VStack gap="none">
+                  <Text>
+                    <Text as="span" tone="secondary">
+                      <KindIcon /> {c.mine ? "you" : c.by} {lead(c).head}
+                    </Text>
+                    {short(lead(c).body, 200)}
+                  </Text>
+                  <Meta>
+                    {ago(c.at, now)}
+                    {c.held && <Toned tone="warn"> · still only on this machine</Toned>}
+                  </Meta>
+                </VStack>
+                {c.node && rel.byKey.has(c.node) && <OpenButton onClick={() => openItem(c.node)} />}
+              </Split>
+            );
+          }}
         />
         <Meta>
           {t.claims.length} claim{t.claims.length === 1 ? "" : "s"} · {t.open.length} open and {t.answered.length} answered question{t.answered.length === 1 ? "" : "s"} · {rel.history.length} replaced or withdrawn · {a.changes} changes in all
           {snap.truncated ? " · showing the latest items only" : ""}
         </Meta>
-      </div>
+      </VStack>
     );
   } else if (tab === "questions") {
     const scopes = { open: t.open, answered: t.answered, mine: [...t.open, ...t.answered].filter((th) => isMine(th.q)) };
@@ -1375,31 +1517,29 @@ export function Contexts({ b }: { b: Bridge }) {
       const q = th.q;
       const answered = th.answers.length > 0;
       return (
-        <Card key={q.key} tone={heldByNode.has(q.key) ? "warn" : answered ? "ok" : undefined}>
-          <div className="stack sm">
-            <div className="item">
-              <div className="grow">
-                <p className="wrap">
-                  <strong>{short(q.title, 300)}</strong>
-                </p>
+        <Box key={q.key} tone={heldByNode.has(q.key) ? "warn" : undefined}>
+          <VStack gap="sm">
+            <Split align="start">
+              <VStack gap="none">
+                <Text weight="bold">{short(q.title, 300)}</Text>
                 <Meta>
                   asked by {byline(q)}
                   {th.replies.length ? ` · ${th.replies.length} repl${th.replies.length === 1 ? "y" : "ies"}` : ""}
                   {byMeaning.has(q.key) ? " · close in meaning" : ""}
                   {held(q)}
                 </Meta>
-              </div>
-              <div className="row">
+              </VStack>
+              <Cluster>
                 {undo(q)}
                 {answered || !canWrite ? (
-                  <button onClick={() => openItem(q.key)}>Open ›</button>
+                  <OpenButton onClick={() => openItem(q.key)} />
                 ) : (
-                  <button className="primary" onClick={() => openItem(q.key)}>
+                  <Button variant="primary" onClick={() => openItem(q.key)}>
                     Answer
-                  </button>
+                  </Button>
                 )}
-              </div>
-            </div>
+              </Cluster>
+            </Split>
             <Folded
               list={th.replies}
               first={2}
@@ -1407,34 +1547,38 @@ export function Contexts({ b }: { b: Bridge }) {
               what="replies"
               one="reply"
               render={(r) => (
-                <div key={r.key} className="reply">
-                  <p className="wrap">
-                    <span className="muted">↳ </span>
+                <Indented key={r.key}>
+                  <Text>
+                    <Text as="span" tone="secondary">
+                      ↳{" "}
+                    </Text>
                     {short(r.title, 240)}
-                  </p>
+                  </Text>
                   <Meta>
                     {byline(r)}
                     {held(r)}
                   </Meta>
-                </div>
+                </Indented>
               )}
             />
             {th.answers.map((c) => (
-              <div key={c.key} className="reply">
-                <p className="wrap">
-                  <span className="t-ok">✓ </span>
+              <Indented key={c.key}>
+                <Text>
+                  <Text as="span" tone="success">
+                    ✓{" "}
+                  </Text>
                   {short(c.title, 300)}
-                </p>
+                </Text>
                 <Meta>answered by {byline(c)}</Meta>
-              </div>
+              </Indented>
             ))}
-          </div>
-        </Card>
+          </VStack>
+        </Box>
       );
     };
     body = (
-      <div className="stack">
-        <div className="row">
+      <VStack gap="md">
+        <Cluster>
           <Chip active={scope === "open"} onClick={() => setFilter({ questions: "open" })}>
             Open {t.open.length}
           </Chip>
@@ -1444,11 +1588,11 @@ export function Contexts({ b }: { b: Bridge }) {
           <Chip active={scope === "mine"} onClick={() => setFilter({ questions: "mine" })}>
             Mine {scopes.mine.length}
           </Chip>
-        </div>
+        </Cluster>
         {filterBox("questions", byMeaning.size)}
-        {!list.length && (
-          <p className="empty">
-            {f.text
+        {!list.length &&
+          empty(
+            f.text
               ? "No questions match."
               : scope === "open"
                 ? t.answered.length
@@ -1456,13 +1600,12 @@ export function Contexts({ b }: { b: Bridge }) {
                   : "No questions yet. When your agent records something the group needs to find out, it shows up here with its thread."
                 : scope === "answered"
                   ? "No question has been answered yet."
-                  : "You haven’t asked anything here yet."}
-          </p>
-        )}
+                  : "You haven’t asked anything here yet.",
+          )}
         {paged(list).map(question)}
         {showMore(list.length)}
         <Meta>Agents ask and reply. Answer gives your agent your answer, and it records it as a claim.</Meta>
-      </div>
+      </VStack>
     );
   } else if (tab === "claims") {
     const scopes = { current: t.claims, mine: t.claims.filter(isMine), conflicts: t.claims.filter((n) => rel.inConflict.has(n.id)), history: rel.history };
@@ -1470,18 +1613,18 @@ export function Contexts({ b }: { b: Bridge }) {
     const { list, byMeaning } = filtered(scopes[scope], (n) => n.key, (n) => matches(n, f.text), near?.ids);
     const pairs = scope === "history" ? [] : rel.conflicts.filter(([x, y]) => matches(x, f.text) || matches(y, f.text));
     const side = (keep: GraphNode, drop: GraphNode) => (
-      <div className="item">
-        <div className="grow">
-          <p className="wrap">{short(keep.title, 300)}</p>
+      <Split align="start">
+        <VStack gap="none">
+          <Text>{short(keep.title, 300)}</Text>
           <Meta>
             {byline(keep)} · {keep.key}
           </Meta>
-        </div>
-        <div className="row">
-          {canWrite && <button onClick={() => void ask(prompts.settle(keep, drop, named))}>Keep this one</button>}
-          <button onClick={() => openItem(keep.key)}>Open ›</button>
-        </div>
-      </div>
+        </VStack>
+        <Cluster>
+          {canWrite && <Button onClick={() => void ask(prompts.settle(keep, drop, named))}>Keep this one</Button>}
+          <OpenButton onClick={() => openItem(keep.key)} />
+        </Cluster>
+      </Split>
     );
     const badges = (n: GraphNode) => {
       const evidence = rel.linked(n.id, "SUPPORTS", "in").filter(rel.current).length;
@@ -1496,8 +1639,8 @@ export function Contexts({ b }: { b: Bridge }) {
         .join("");
     };
     body = (
-      <div className="stack">
-        <div className="row">
+      <VStack gap="md">
+        <Cluster>
           <Chip active={scope === "current"} onClick={() => setFilter({ claims: "current" })}>
             Current {t.claims.length}
           </Chip>
@@ -1512,45 +1655,47 @@ export function Contexts({ b }: { b: Bridge }) {
           <Chip active={scope === "history"} onClick={() => setFilter({ claims: "history" })}>
             History {rel.history.length}
           </Chip>
-        </div>
+        </Cluster>
         {filterBox("claims", byMeaning.size)}
         {pairs.map(([x, y]) => (
-          <Card key={`${x.key}-${y.key}`} tone="warn">
-            <div className="stack sm">
-              <strong className="t-warn">⚡ These can’t both be true</strong>
+          <Box key={`${x.key}-${y.key}`} tone="warn">
+            <VStack gap="sm">
+              <Text weight="bold" tone="warning">
+                ⚡ These can’t both be true
+              </Text>
               {side(x, y)}
-              <span className="faint">— or —</span>
+              <Text tone="muted">— or —</Text>
               {side(y, x)}
-            </div>
-          </Card>
+            </VStack>
+          </Box>
         ))}
         {scope === "conflicts" && !pairs.length && (
-          <Card tone="ok">
-            <span className="t-ok">✓ No claims contradict each other.</span>
-          </Card>
+          <Box tone="ok">
+            <Text tone="success">✓ No claims contradict each other.</Text>
+          </Box>
         )}
-        {scope !== "conflicts" && !list.length && (
-          <p className="empty">
-            {f.text
+        {scope !== "conflicts" &&
+          !list.length &&
+          empty(
+            f.text
               ? "No claims match."
               : scope === "current"
                 ? "No claims yet. What your agent records as true shows up here. Try “Save what this chat learned” on the Overview."
                 : scope === "mine"
                   ? "None of the current claims are yours."
-                  : "Nothing has been replaced or withdrawn."}
-          </p>
-        )}
+                  : "Nothing has been replaced or withdrawn.",
+          )}
         {scope !== "conflicts" &&
           paged(list).map((n) => {
             const newer = rel.replacedBy.get(n.id);
             return (
-              <Card key={n.key} tone={heldByNode.has(n.key) || rel.inConflict.has(n.id) ? "warn" : undefined}>
-                <div className="item">
-                  <div className="grow">
-                    <p className={`wrap${scope === "history" ? " ended" : ""}`}>
-                      {rel.inConflict.has(n.id) && <span className="t-warn">⚡ </span>}
+              <Box key={n.key} tone={heldByNode.has(n.key) || rel.inConflict.has(n.id) ? "warn" : undefined}>
+                <Split align="start">
+                  <VStack gap="none">
+                    <Ended ended={scope === "history"}>
+                      {rel.inConflict.has(n.id) && <Toned tone="warn">⚡ </Toned>}
                       {short(n.title, 300)}
-                    </p>
+                    </Ended>
                     <Meta>
                       {byline(n)}
                       {byMeaning.has(n.key) ? " · close in meaning" : ""}
@@ -1563,18 +1708,18 @@ export function Contexts({ b }: { b: Bridge }) {
                         : badges(n)}
                       {held(n)}
                     </Meta>
-                  </div>
-                  <div className="row">
+                  </VStack>
+                  <Cluster>
                     {undo(n)}
-                    <button onClick={() => openItem(n.key)}>Open ›</button>
-                  </div>
-                </div>
-              </Card>
+                    <OpenButton onClick={() => openItem(n.key)} />
+                  </Cluster>
+                </Split>
+              </Box>
             );
           })}
         {scope !== "conflicts" && showMore(list.length)}
         {scope === "history" && <Meta>Nothing is deleted: replaced and withdrawn claims stay, so anyone can see what the group believed before.</Meta>}
-      </div>
+      </VStack>
     );
   } else if (tab === "settings") {
     body = settings(a.context, true);
@@ -1596,100 +1741,132 @@ export function Contexts({ b }: { b: Bridge }) {
       return `${p.joined_at ? `joined ${ago(p.joined_at, now)}` : ""}${parts.length ? ` · ${parts.join(", ")}` : " · nothing recorded yet"}${last ? ` · active ${ago(last.at, now)}` : ""}`.replace(/^ · /, "");
     };
     const person = (p: Person) => (
-      <Card key={p.fingerprint} tone={p.you ? "accent" : undefined}>
-        <div className="item center">
-          <div className="grow">
-            <p>
-              <span className={p.online ? "t-ok" : "muted"}>●</span> <strong className={p.role ? "" : "muted"}>{p.name}</strong>
-              <span className="muted">
+      <Box key={p.fingerprint} tone={p.you ? "accent" : undefined}>
+        <Split>
+          <VStack gap="none">
+            <Text>
+              <Text as="span" tone={p.online ? "success" : "secondary"} aria-hidden="true">
+                ●
+              </Text>{" "}
+              <Text as="span" weight="bold" tone={p.role ? undefined : "secondary"}>
+                {p.name}
+              </Text>
+              <Text as="span" tone="secondary">
                 {p.you ? " (you)" : ""} · {p.role ?? "removed"}
                 {p.creator ? " · made this context" : ""}
                 {p.role ? (p.online ? " · online" : " · offline") : ""}
-              </span>
-            </p>
+              </Text>
+            </Text>
             <Meta>{wrote(p)}</Meta>
             <Reveal label="Key and agent" hide="Hide key and agent">
-              <p className="faint mono wrap">
-                {p.fingerprint}
+              <Text tone="muted">
+                <Code>{p.fingerprint}</Code>
                 {p.agent ? ` · ${p.agent}` : ""}
                 {p.platform ? ` · ${p.platform}` : ""}
-              </p>
+              </Text>
             </Reveal>
-          </div>
-          <div className="row">
-            {p.you && <button onClick={() => setRenaming(true)}>✎ Rename</button>}
+          </VStack>
+          <Cluster>
+            {p.you && (
+              <Button onClick={() => setRenaming(true)}>
+                <EditIcon /> Rename
+              </Button>
+            )}
             {admin && !p.creator && !p.you && p.role && (
               <>
-                <select aria-label={`Role of ${p.name}`} value={p.role} onChange={(e) => void act("set_peer_role", { name: p.name, role: e.currentTarget.value, ...ctx }, `${p.name} is now ${e.currentTarget.value}.`)}>
-                  {ROLES.map((r) => (
-                    <option key={r} value={r}>
-                      {r}
-                    </option>
-                  ))}
-                </select>
-                <button onClick={() => setConfirmRemove(p.fingerprint)}>Remove</button>
+                <Select<Role>
+                  aria-label={`Role of ${p.name}`}
+                  fullWidth={false}
+                  value={p.role}
+                  onChange={(v) => v && v !== p.role && void act("manage_member", { action: "set_role", name: p.name, role: v, ...ctx }, `${p.name} is now ${v}.`)}
+                  options={ROLES.map((r) => ({ value: r, label: r }))}
+                />
+                <Button onClick={() => setConfirmRemove(p.fingerprint)}>Remove</Button>
               </>
             )}
-          </div>
-        </div>
-      </Card>
+          </Cluster>
+        </Split>
+      </Box>
     );
     body = (
-      <div className="stack">
-        <Heading count={members.length}>Members</Heading>
+      <VStack gap="md">
+        <SectionTitle count={members.length}>Members</SectionTitle>
         {members.map(person)}
         {admin && (
-          <Card tone="accent">
-            <div className="stack">
-              <div className="spread">
-                <span>
-                  <strong>Join codes</strong>
-                  <span className="muted"> {invites.length ? `${invites.length} waiting` : "none waiting"}</span>
-                </span>
-                <button className="primary" onClick={() => setInviting("contributor")}>
-                  + Invite someone
-                </button>
-              </div>
+          <Box tone="accent">
+            <VStack gap="md">
+              <Split>
+                <Text as="span">
+                  <Text as="span" weight="bold">
+                    Join codes
+                  </Text>
+                  <Text as="span" tone="secondary">
+                    {" "}
+                    {invites.length ? `${invites.length} waiting` : "none waiting"}
+                  </Text>
+                </Text>
+                <Button variant="primary" onClick={() => setInviting("contributor")}>
+                  <AddIcon /> Invite someone
+                </Button>
+              </Split>
               {invites.length === 0 ? (
                 <Meta>Each code lets one person in: whoever uses it first. Codes stay here until they’re used, cancelled or expire.</Meta>
               ) : (
                 invites.map((i) => {
                   const hours = Math.round(Math.max(0, Date.parse(i.expires_at) - now) / 3600_000);
                   return (
-                    <div key={i.id} className="stack sm">
-                      <div className="spread">
-                        <span>
-                          <strong>{i.label ? `For ${i.label.replace(/^for\s+/i, "")}` : "No note"}</strong>
-                          <span className="muted">
+                    <VStack key={i.id} gap="sm">
+                      <Split>
+                        <Text as="span">
+                          <Text as="span" weight="bold">
+                            {i.label ? `For ${i.label.replace(/^for\s+/i, "")}` : "No note"}
+                          </Text>
+                          <Text as="span" tone="secondary">
                             {" "}
                             · {i.role} · {hours >= 1 ? `expires in ${hours}h` : "expires soon"}
-                          </span>
-                          {i.id === made && <span className="t-ok"> · new: send it now</span>}
-                        </span>
-                        <button onClick={() => void act("revoke_invite", { id: i.id, ...ctx }, "Cancelled: that code no longer works.")}>Cancel</button>
-                      </div>
-                      <div className="linkbox">
-                        <input readOnly value={sendLine(i.code)} onFocus={(e) => e.currentTarget.select()} aria-label="Message to send" />
-                        <button onClick={() => void copy(sendLine(i.code), "Copied: send it privately, to that one person.")}>Copy</button>
-                      </div>
-                    </div>
+                          </Text>
+                          {i.id === made && <Toned tone="ok"> · new: send it now</Toned>}
+                        </Text>
+                        <Button onClick={() => void act("manage_member", { action: "revoke_invite", invite: i.id, ...ctx }, "Cancelled: that code no longer works.")}>Cancel</Button>
+                      </Split>
+                      <HStack gap="xs">
+                        <TextField readOnly value={sendLine(i.code)} onFocus={(e) => e.currentTarget.select()} aria-label="Message to send" />
+                        <Button onClick={() => void copy(sendLine(i.code), "Copied: send it privately, to that one person.")}>Copy</Button>
+                      </HStack>
+                    </VStack>
                   );
                 })
               )}
-              {!a.sharing && invites.length > 0 && <p className="t-warn">You’re offline, so these codes won’t work until you go online.</p>}
-            </div>
-          </Card>
+              {!a.sharing && invites.length > 0 && <Text tone="warning">You’re offline, so these codes won’t work until you go online.</Text>}
+            </VStack>
+          </Box>
         )}
-        {gone.length > 0 && <Heading count={gone.length}>Removed</Heading>}
+        {gone.length > 0 && <SectionTitle count={gone.length}>Removed</SectionTitle>}
         {gone.map(person)}
-      </div>
+      </VStack>
     );
   }
 
   return (
-    <div className="stack lg">
+    <VStack gap="lg">
       {header}
-      {body}
-    </div>
+      <Tabs<Tab>
+        value={tab}
+        onValueChange={(x) => setTab(x)}
+        items={TABS.map((x) => ({
+          value: x.tab,
+          label: x.label,
+          badge: counts[x.tab] !== undefined ? <Badge tone="neutral">{counts[x.tab]}</Badge> : undefined,
+          content:
+            x.tab === tab ? (
+              <VStack gap="lg">
+                {trouble && <Alert tone="error">{trouble}</Alert>}
+                {messages}
+                {body}
+              </VStack>
+            ) : null,
+        }))}
+      />
+    </VStack>
   );
 }

@@ -6,16 +6,33 @@
 import { AppBridge, PostMessageTransport } from "@modelcontextprotocol/ext-apps/app-bridge";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { Alert } from "@squonk/ui/alert";
+import { Container } from "@squonk/ui/container";
+import { HStack } from "@squonk/ui/hstack";
+import { Spinner } from "@squonk/ui/spinner";
+import { Tabs } from "@squonk/ui/tabs";
+import { Textarea } from "@squonk/ui/textarea";
+import { VStack } from "@squonk/ui/vstack";
 import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { LOGO_PATH, LOGO_VIEWBOX } from "./logo";
-import "./styles.css";
+import { Brand } from "./brand";
+import { VineTheme } from "./theme";
 
+/** One tab: a tool that shows a view, and the arguments to call it with. */
 interface AppTool {
+  key: string;
   name: string;
+  args: Record<string, unknown>;
   title: string;
   uri: string;
 }
+
+/** open_view shows any of these, so it is a tab for each. */
+const OPEN_VIEWS = [
+  ["contexts", "Contexts"],
+  ["console", "Console"],
+  ["explorer", "Explorer"],
+] as const;
 
 // The token comes in the URL fragment, so it never reaches a server log or a Referer header.
 const token = new URLSearchParams(location.hash.slice(1)).get("token") ?? "";
@@ -33,20 +50,36 @@ async function appTools(client: Client): Promise<AppTool[]> {
   const { tools } = await client.listTools();
   return tools
     .filter((t) => typeof (t._meta as any)?.ui?.resourceUri === "string" && !(t.inputSchema.required ?? []).length)
-    .map((t) => ({ name: t.name, title: t.title ?? t.name, uri: (t._meta as any).ui.resourceUri as string }));
+    .flatMap((t) => {
+      const uri = (t._meta as any).ui.resourceUri as string;
+      if (t.name === "open_view") return OPEN_VIEWS.map(([view, title]) => ({ key: view, name: t.name, args: { view }, title, uri }));
+      return [{ key: t.name, name: t.name, args: {}, title: t.title ?? t.name, uri }];
+    });
 }
 
-function View({ client, tool: { name, title, uri }, onMessage }: { client: Client; tool: AppTool; onMessage: (text: string) => void }) {
+// A view's page is over a megabyte and never changes while this page is open: read it once.
+const pages = new Map<string, Promise<string>>();
+function page(client: Client, uri: string): Promise<string> {
+  let p = pages.get(uri);
+  if (!p) {
+    p = client.readResource({ uri }).then((res) => (res.contents[0] as { text?: string }).text ?? "");
+    p.catch(() => pages.delete(uri));
+    pages.set(uri, p);
+  }
+  return p;
+}
+
+function View({ client, tool: { name, args, title, uri }, onMessage }: { client: Client; tool: AppTool; onMessage: (text: string) => void }) {
   const frame = useRef<HTMLIFrameElement>(null);
   const [height, setHeight] = useState(480);
   const [error, setError] = useState<string>();
+  const [ready, setReady] = useState(false);
 
   useEffect(() => {
     let bridge: AppBridge | undefined;
     let cancelled = false;
     (async () => {
-      const res = await client.readResource({ uri: uri });
-      const html = (res.contents[0] as { text?: string }).text ?? "";
+      const html = await page(client, uri);
       const iframe = frame.current!;
       const theme = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
       bridge = new AppBridge(
@@ -66,24 +99,32 @@ function View({ client, tool: { name, title, uri }, onMessage }: { client: Clien
         return {};
       };
       bridge.oninitialized = async () => {
-        await bridge!.sendToolInput({ arguments: {} });
-        const result = await client.callTool({ name: name, arguments: {} });
-        if (!cancelled) await bridge!.sendToolResult(result as never);
+        await bridge!.sendToolInput({ arguments: args });
+        const result = await client.callTool({ name: name, arguments: args });
+        if (cancelled) return;
+        await bridge!.sendToolResult(result as never);
+        setReady(true);
       };
+      // Listen before the view loads, so its first message (ui/initialize) can't be missed.
+      await bridge.connect(new PostMessageTransport(iframe.contentWindow!, iframe.contentWindow!));
       // The view gets an opaque origin: scripts only, no access to this page.
       iframe.srcdoc = html;
-      await new Promise((r) => iframe.addEventListener("load", r, { once: true }));
-      await bridge.connect(new PostMessageTransport(iframe.contentWindow!, iframe.contentWindow!));
     })().catch((e: Error) => setError(e.message));
     return () => {
       cancelled = true;
       void bridge?.close();
     };
-  }, [client, name, uri, onMessage]);
+  }, [client, name, args, uri, onMessage]);
 
   return (
     <>
-      {error && <p className="notice bad">{error}</p>}
+      {error && <Alert tone="error">{error}</Alert>}
+      {!ready && !error && (
+        <HStack gap="xs" align="center" role="status">
+          <Spinner />
+          <span>Loading…</span>
+        </HStack>
+      )}
       <iframe ref={frame} title={title} sandbox="allow-scripts" style={{ width: "100%", height, border: 0, display: "block" }} />
     </>
   );
@@ -92,7 +133,7 @@ function View({ client, tool: { name, title, uri }, onMessage }: { client: Clien
 function Shell() {
   const [client, setClient] = useState<Client>();
   const [tools, setTools] = useState<AppTool[]>([]);
-  const [active, setActive] = useState<string>(new URLSearchParams(location.search).get("view") ?? "open_console");
+  const [active, setActive] = useState<string>(new URLSearchParams(location.search).get("view") ?? "console");
   const [error, setError] = useState<string>();
   const [message, setMessage] = useState<string>();
   const [gen, setGen] = useState(0);
@@ -106,46 +147,57 @@ function Shell() {
       .catch((e: Error) => setError(`Can't reach vine: ${e.message}. Is \`vine ui\` still running?`));
   }, []);
 
-  const pick = async (name: string) => {
-    setActive(name);
+  const pick = async (key: string) => {
+    setActive(key);
     setGen((g) => g + 1);
     if (client) setTools(await appTools(client)); // the model's tools change after use_context or a role change
-    history.replaceState(null, "", `?view=${name}${location.hash}`);
+    history.replaceState(null, "", `?view=${key}${location.hash}`);
   };
 
-  const tool = tools.find((t) => t.name === active) ?? tools[0];
+  const tool = tools.find((t) => t.key === active) ?? tools[0];
+  const label = (t: AppTool) => t.title.replace(/^Open the /, "").replace(/^./, (c) => c.toUpperCase());
   return (
-    <div style={{ maxWidth: 1000, margin: "0 auto" }}>
-      <div className="head">
-        <h1 className="brand">
-          <svg viewBox={LOGO_VIEWBOX} aria-hidden="true">
-            <path fillRule="evenodd" d={LOGO_PATH} />
-          </svg>
-          Vine Context
-        </h1>
-        <div className="tabs" role="tablist" style={{ margin: 0, border: 0 }}>
-          {tools.map((t) => (
-            <button key={t.name} role="tab" aria-selected={tool?.name === t.name} onClick={() => pick(t.name)}>
-              {t.title.replace(/^Open the /, "").replace(/^./, (c) => c.toUpperCase())}
-            </button>
-          ))}
-        </div>
-      </div>
-      {message && (
-        <div className="notice" style={{ margin: "8px 0" }}>
-          <div className="spread">
-            <strong>Paste this to your agent</strong>
-            <button className="link" onClick={() => setMessage(undefined)}>
-              Dismiss
-            </button>
-          </div>
-          <textarea readOnly value={message} style={{ width: "100%", minHeight: 60, marginTop: 6, font: "inherit" }} onFocus={(e) => e.currentTarget.select()} />
-        </div>
-      )}
-      {error && <p className="notice bad">{error}</p>}
-      {client && tool && <View key={`${tool.name}:${gen}`} client={client} tool={tool} onMessage={setMessage} />}
-    </div>
+    <Container size="desktop">
+      <VStack gap="md" style={{ paddingBlock: "var(--squonk-spacing-md)" }}>
+        <Brand />
+        {message && (
+          <Alert tone="info" variant="tinted" title="Paste this to your agent" onDismiss={() => setMessage(undefined)}>
+            <Textarea
+              label="Message for your agent"
+              readOnly
+              value={message}
+              fullWidth
+              autoResize
+              onFocus={(e: React.FocusEvent<HTMLTextAreaElement>) => e.currentTarget.select()}
+            />
+          </Alert>
+        )}
+        {error && <Alert tone="error">{error}</Alert>}
+        {tools.length === 0 && !error && (
+          <HStack gap="xs" align="center" role="status">
+            <Spinner />
+            <span>Loading…</span>
+          </HStack>
+        )}
+        {tools.length > 0 && (
+          <Tabs
+            listLabel="Views"
+            value={tool?.key}
+            onValueChange={pick}
+            items={tools.map((t) => ({
+              value: t.key,
+              label: label(t),
+              content: client && tool?.key === t.key ? <View key={`${t.key}:${gen}`} client={client} tool={t} onMessage={setMessage} /> : null,
+            }))}
+          />
+        )}
+      </VStack>
+    </Container>
   );
 }
 
-createRoot(document.getElementById("root")!).render(<Shell />);
+createRoot(document.getElementById("root")!).render(
+  <VineTheme>
+    <Shell />
+  </VineTheme>,
+);

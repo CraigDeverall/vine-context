@@ -453,9 +453,20 @@ export class Host {
   }
 
   /** Undo, while a write is still held: it is removed and never leaves this machine. */
-  takeBack(changeId: string) {
+  takeBack(changeId: string, newOnly = false) {
     return this.serial(async () => {
-      const held = this.log.heldChanges().find((h) => h.change.id === changeId || h.change.body.node === changeId);
+      // With newOnly, an item's id only finds the write that made it, not a held withdrawal of it.
+      const held = this.log.heldChanges().find((h) => h.change.id === changeId || (h.change.body.node === changeId && !(newOnly && h.change.kind === "withdraw")));
+      // With newOnly, an item something else already links to is left for a withdrawal, which keeps those links meaningful.
+      if (newOnly && held && held.change.id !== changeId) {
+        const node = held.change.body.node;
+        const points = (c: { id: string; body: Record<string, unknown> }) =>
+          c.id !== held.change.id &&
+          c.body.node !== node &&
+          [c.body.supports, c.body.contradicts, c.body.replaces, c.body.answers, c.body.about, c.body.question, c.body.from, c.body.to].flat().includes(node);
+        if (this.log.heldChanges().some((h) => points(h.change)) || this.log.all().some(points))
+          throw new ToolError("Other items already link to it, so it can't be undone without trace. Withdraw it instead (it stays in the history).");
+      }
       if (!held) {
         if (this.log.get(changeId) || this.log.all().some((c) => c.body.node === changeId))
           throw new ToolError("It has already been shared with the other members, so it can't be taken back without trace. Withdraw it instead (it stays in the history).");
@@ -626,7 +637,7 @@ export class Host {
         return { deny: "You are already in this graph, and this code is for someone else. It hasn't been used up: they can still join with it." };
       if (!existing || existing.removed_at) {
         const taken = this.members.current().some((m) => m.name === n.name);
-        if (taken) return { deny: `The name '${n.name}' is taken in this graph. Set another name (set_my_name) and use the code again.` };
+        if (taken) return { deny: `The name '${n.name}' is taken in this graph. Set another name (update_context with my_name) and use the code again.` };
         await this.member("add_member", {
           key: n.key,
           name: n.name,
@@ -789,7 +800,7 @@ export class Host {
         return this.graph.call(p.tool, p.args, this.readCaller());
       }
       case "take_back":
-        return this.takeBack(String(p.id ?? ""));
+        return this.takeBack(String(p.id ?? ""), Boolean(p.new_only));
       case "info":
         return this.info();
       case "snapshot":

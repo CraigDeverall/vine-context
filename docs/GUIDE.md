@@ -20,6 +20,7 @@ Back to the [README](../README.md).
 - [Removing someone](#removing-someone)
 - [The Claude Code panel](#the-claude-code-panel)
 - [Commands](#commands)
+- [Settings](#settings)
 - [Trying it with two identities on one machine](#trying-it-with-two-identities-on-one-machine)
 
 ## Install
@@ -157,19 +158,19 @@ Each code is for one person's machine.
 - Whoever uses it first is let in. Anyone else who uses it is turned away, and told to warn you that it may have leaked.
 - There is no approval step: the single-use code is the credential, so send it privately.
 - An unused code expires after 24 hours (*"invite Sam, valid for a week"* changes that).
-- The console and `sharing_status` list the invites. *Cancel*, or `revoke_invite`, stops one working.
+- The console and `sharing` (action `status`) list the invites. *Cancel*, or `manage_member` with `revoke_invite`, stops one working.
 - A code isn't needed again. A joined context is on the member's machine, so *"use the incident-42 context"* brings it back in any later chat.
 
 ## A chat's contexts
 
 A chat usually uses one context, and keeps it when you reopen the chat. The choice is remembered on your machine under the chat's id (Claude Code's session id, or `VINE_CHAT`), with nothing written into your project.
 
-- *"Use the incident-42 context"* (`use_context`) sets or switches it. A new name starts a new context, and the agent asks what it's for. That description can be changed later (`describe_context`, or ✎ in the panel).
-- *"Also use the infra context"* (`add_context`) adds another, and `remove_context` takes one out. With several, reads search them all, and the agent puts each write in the one whose description fits.
+- *"Use the incident-42 context"* (`use_context`) sets or switches it. A new name starts a new context, and the agent asks what it's for. That description can be changed later (`update_context`, or ✎ in the panel).
+- *"Also use the infra context"* (`use_context` with mode `add`) adds another, and mode `remove` takes one out. With several, reads search them all, and the agent puts each write in the one whose description fits.
 - There is no default. A new chat has no context until you choose, so the agent asks before its first write.
 - Pin contexts to a folder (`link_folder`; the 📌 on each context in the panel): new chats started in that folder, or below it, start with the pinned ones. That is kept on your machine too.
 - *"Delete the old-draft context"* (`delete_context`) deletes this machine's copy for good, after you confirm it by name; other members keep theirs. In the panel it's under a context's **Settings**.
-- *"Rename the incident-42 context to checkout-slowdown"* (`rename_context`) changes this machine's name for it; other members keep their own name for it. A context's **Settings** in the panel (the same whether it's on for the chat or not) changes its name and description, invites people and takes it offline.
+- *"Rename the incident-42 context to checkout-slowdown"* (`update_context` with `rename_to`) changes this machine's name for it; other members keep their own name for it. A context's **Settings** in the panel (the same whether it's on for the chat or not) changes its name and description, invites people and takes it offline.
 
 ## Questions have threads
 
@@ -188,7 +189,7 @@ Nothing is linked automatically. The agent records `SUPPORTS`, `CONTRADICTS` or 
 
 ## Undo and withdraw
 
-A write stays on your machine for 10 seconds before it is sent. *Undo* on the receipt (or `take_back`) removes it without trace in that time, so a slip such as personal details in the wrong chat never reaches anyone.
+A write stays on your machine for 10 seconds before it is sent. *Undo* on the receipt (or `withdraw`, which undoes instead of withdrawing while the write is still on your machine) removes it without trace in that time, so a slip such as personal details in the wrong chat never reaches anyone.
 
 After that it can only be *withdrawn*, which keeps it in everyone's history.
 
@@ -207,7 +208,7 @@ If two machines can't reach each other directly (some networks block it), one of
 - `vine turn set turn.example.org --user sam` asks for the password in the terminal and keeps it in a file only you can read (`--store keychain` uses the macOS Keychain or the Linux secret service; `--store env` keeps nothing and reads `VINE_TURN_PASSWORD`). `--tcp` and `--tls` pick how the server is reached.
 - `vine turn show`, `vine turn test` and `vine turn clear` show, check and remove it; `vine doctor` checks it too.
 - It applies to every context on the machine from the next connection on, with nothing to restart. `vine status` and the console say which links are direct and which are relayed.
-- An agent can set the server and username (`set_turn_server`) but never takes the password: it's read from `VINE_TURN_PASSWORD`, or you run `vine turn set` yourself.
+- An agent can set the server and username (`turn_server`) but never takes the password: it's read from `VINE_TURN_PASSWORD`, or you run `vine turn set` yourself.
 
 **STUN servers.** To find a route between two machines, Vine asks public STUN servers for each machine's public address: by default `stun.l.google.com:19302` and `stun.cloudflare.com:3478`. Those servers see your public IP address, nothing else. To use your own, or none, set `VINE_ICE` where vine runs (for Claude Code, in the environment it starts with), then stop each running context's host (`vine host stop --context NAME`) so it picks it up:
 
@@ -248,6 +249,7 @@ The panel never writes a claim or question itself: your agent does, from what yo
 |---|---|
 | `vine setup` | Set the machine up, or repair it ([install](#install)); `npx vine-context setup` before `vine` is installed |
 | `vine demo` | Four members in one process replay the example, syncing peer to peer; `--join` lets your agent join as a fifth |
+| `vine example [DIR]` | Copy the example Relate store to a folder, to open with Relate's own CLI |
 | `vine mcp` | Run the MCP server (your agent starts this) |
 | `vine doctor` | Check Node, Relate, WebRTC, the model, the data directory, the network (does it need TURN?) and the TURN server |
 | `vine status --graph <name>` | Members, live links and relay reachability for one context |
@@ -255,7 +257,37 @@ The panel never writes a claim or question itself: your agent does, from what yo
 | `vine turn set \| show \| test \| clear` | Set (`--provider cloudflare`, or a server of your own), show, check or remove a TURN server ([strict networks](#turn-and-stun-on-strict-networks)) |
 | `vine autostart on` | Keep contexts syncing after login (macOS) |
 
-Every option and environment variable, with its default, is listed in the README's [Settings](../README.md#settings) section.
+Every option and environment variable, with its default, is under [Settings](#settings).
+
+## Settings
+
+Everything works without settings. These change the defaults, and `vine --help` lists them too.
+
+**Command options**
+
+| Command | Options |
+|---|---|
+| `vine setup` | `--yes` takes the default answer to every question (secrets are still typed, unseen) · `--agent claude,codex` or `none` picks which agents get the plugin (default: those found) · `--turn cloudflare`, `custom` or `none` instead of asking · `--json` prints the results as JSON · `--dry-run` runs only the read-only checks and prints what it would do |
+| `vine demo` | `--pace SECONDS` between steps (default 4; `0` plays it all at once) · `--join` meets through the public Nostr relays and prints a join code for your own agent · `--port N` for the browser page · `--no-open` doesn't open the browser · `--verbose` |
+
+**Environment variables**
+
+| Variable | What it changes | Default |
+|---|---|---|
+| `VINE_USER` | Your name in contexts | The name you saved (`update_context`, or `vine setup`), else git's `user.name`, else your computer account's full name, else a made-up one |
+| `VINE_DATA_DIR` | Where contexts live | `~/.local/share/vine-context` |
+| `VINE_CONTEXT` | The context a new chat starts with when its folder has none linked | None: the agent asks |
+| `VINE_CHAT` | The chat's id, used to remember its context | Claude Code's or Codex's session id |
+| `VINE_EMBEDDER` | How search turns text into vectors: `auto`, `hash` (words only) or `bge-small` | `auto`: `bge-small` when its package runs here, else `hash` |
+| `VINE_AUTO_SHARE` | `off`: new contexts don't sync until you share them | On |
+| `VINE_HOOKS` | `quiet`: no reminder beside each prompt (the session briefing and others' news stay) · `off`: the hooks say nothing | On |
+| `VINE_HOLD_MS` | How long a write waits on this machine, so Undo can remove it, before it is sent | `10000` (10 seconds) |
+| `VINE_RELAYS` | Nostr relays members use to find each other, comma-separated | Four public relays |
+| `VINE_ICE` | STUN and TURN servers, comma-separated; replaces the defaults and the `vine turn` setting | Google's and Cloudflare's STUN |
+| `VINE_TURN_PASSWORD` | The TURN server's password, when it was saved with `--store env` | None |
+| `VINE_CLOUDFLARE_TURN_SECRET` | The Cloudflare TURN key's secret, when it was saved with `--store env` | None |
+
+The other commands are listed under [Commands](#commands).
 
 ## Trying it with two identities on one machine
 

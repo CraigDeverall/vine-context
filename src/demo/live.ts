@@ -26,8 +26,8 @@ import { CAST, CREATOR, GRAPH_DESCRIPTION, GRAPH_NAME, NAMES, playScenario, STEP
 
 export { NAMES, type Name };
 
-/** What each member's install says about itself, as the console shows it. The creator's is this machine's. */
-const ABOUT = Object.fromEntries(CAST.map((c) => [c.name, { agent: c.agent, platform: c.name === CREATOR ? `${process.platform} ${process.arch}` : c.platform }])) as Record<Name, { agent: string; platform: string }>;
+/** What each member's install says about itself, as the console shows it. All four run on this machine. */
+const ABOUT = Object.fromEntries(CAST.map((c) => [c.name, { agent: c.agent, platform: `${process.platform} ${process.arch}` }])) as Record<Name, { agent: string; platform: string }>;
 const DIR = Object.fromEntries(CAST.map((c) => [c.name, c.dir])) as Record<Name, string>;
 
 export interface Member {
@@ -127,7 +127,7 @@ export async function startDemo(o: DemoOptions = {}): Promise<Demo> {
   for (const n of NAMES) {
     members[n].local.on("event", (e: { event: string; data: any }) => {
       if (e.event === "changed" && e.data?.from) say(`  ↳ reached ${n} (from ${e.data.from})`);
-      if (e.event === "digest" && n === CREATOR) for (const line of e.data?.lines ?? []) say(`  ↳ ${CREATOR}'s agent is told: ${line}`);
+      if (e.event === "digest" && n === CREATOR) for (const line of e.data?.lines ?? []) say(`  ↳ ${CREATOR}'s agent is told: ${String(line).replace(/\s*\b[cqr]_[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b/g, "")}`);
     });
   }
 

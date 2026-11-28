@@ -9,7 +9,8 @@
 // everyone), a claim replaced twice (the search embedder), a claim withdrawn,
 // a conflict settled (why CI was blocked) and one left open (the judging
 // weights), a member writing while offline and catching up, questions answered
-// and questions still open with replies in their threads.
+// and questions still open with replies in their threads. The last decision
+// rests on evidence three steps deep, some of it replaced and some contested.
 //
 // Two things play it: `scripts/make-examples.ts` writes it, backdated, into
 // the example store that ships with the package, and `vine demo` runs it live
@@ -87,8 +88,8 @@ export const STEPS: Step[] = [
   },
   {
     who: T, day: 16, time: "15:00", tool: "add_claim", as: "hash",
-    args: { text: "Search uses the offline hash-256 embedder: a real sentence model would add about 100 MB and a download on first run, which works against 'clone, run, see it'", source: "plan notes, 16 Nov" },
-    note: "records the search embedder: hash-256, to keep the install small",
+    args: { text: "Search uses the offline hash-256 embedder: a real sentence model would add about 100 MB and a download on first run, which works against 'clone, run, see it'", source: "plan notes, 16 Nov", supports: ["@deadline"] },
+    note: "records the search embedder: hash-256, to keep the install small. It supports the deadline claim: judges must be able to run it unaided",
   },
   {
     who: R, day: 16, time: "16:20", tool: "add_claim", as: "packs",
@@ -172,6 +173,8 @@ export const STEPS: Step[] = [
     args: { text: "vine-context 0.1.0 is on npm: installed into an empty folder it brings the embedder package for the machine, and `vine doctor` passes every check", source: "https://github.com/CraigDeverall/vine-context/releases/tag/v0.1.0", replaces: ["@placeholder"], answers: ["@oneCommand"] },
     note: "replaces the placeholder claim: 0.1.0 is on npm, so the answer to Craig's question is now yes",
   },
+  { who: T, day: 25, time: "12:55", tool: "link", args: { from: "@public", relation: "SUPPORTS", to: "@published" }, note: "links the green CI run as support for the release" },
+  { who: T, day: 25, time: "12:57", tool: "link", args: { from: "@published", relation: "SUPPORTS", to: "@deadline" }, note: "links the release as support for the deadline claim: a judge can now install it unaided" },
   {
     who: L, day: 25, time: "15:00", tool: "add_claim", as: "copyFirst",
     args: { text: "Running the relate command on a store rewrites the store's files, so the README tells judges to query a copy of the example", source: "README.md, Where the data lives", supports: ["@deadline"] },
@@ -194,6 +197,8 @@ export const STEPS: Step[] = [
     args: { text: "The example story is this one: the team building Vine Context, with every decision taken from the real build", source: "src/demo/scenario.ts", replaces: ["@party"], supports: ["@field"] },
     note: "replaces the example story with this one. You are looking at it",
   },
+  { who: C, day: 25, time: "18:44", tool: "link", args: { from: "@deadline", relation: "SUPPORTS", to: "@us" }, note: "links what the new story rests on: judges must see the graph without asking" },
+  { who: C, day: 25, time: "18:46", tool: "link", args: { from: "@weights", relation: "SUPPORTS", to: "@us" }, note: "and the 30 points for connected context. That claim is the contested one, so the decision rests on an open conflict" },
   { who: C, day: 25, time: "18:50", tool: "ask_question", as: "video", args: { text: "Who records the two-minute demo video?", about: ["@deadline"] }, note: "asks who records the demo video" },
   {
     who: R, day: 25, time: "18:55", tool: "reply",

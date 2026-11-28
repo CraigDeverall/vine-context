@@ -63,7 +63,7 @@ The questions a team asks are questions about how statements relate, not about a
 - **"What do we believe?"** is every claim that no later claim `REPLACES` and that hasn't been withdrawn.
 - **"Where do we disagree?"** is every `CONTRADICTS` between two claims that are both still current.
 - **"What's still open?"** is every question with no current claim that `ANSWERS` it.
-- **"Why do we think that?"** is the `SUPPORTS` chain behind a claim.
+- **"Why do we think that, and does it still hold?"** is the `SUPPORTS` chain behind a claim, however long, with each link in it tested for whether it has been replaced, withdrawn or contradicted.
 - **"What did we believe on Tuesday?"** is any of the above, counting only nodes and relationships recorded by Tuesday.
 
 An agent without the graph would have to re-read every statement and guess which ones still stand. With it, the agent follows links that people and other agents recorded on purpose.
@@ -77,7 +77,8 @@ An agent without the graph would have to re-read every statement and guess which
 | Vector index and full-text index across labels | `search_embedding` and `search_text`, over `Claim` and `Question` |
 | Hybrid search: `SEARCH … COMBINE (VECTOR …, FULLTEXT …) USING WRRF` (the `hybrid-search` preview) | The `search` tool, and the check for a new claim that overlaps an existing one |
 | Temporal values and `EXISTS {}` subqueries | The *as of* reads: `beliefs`, `conflicts`, `open_questions` |
-| Pattern comprehensions and traversal | `beliefs` and `history`; the explorer's snapshot |
+| Pattern comprehensions | `beliefs` and `history`; the explorer's snapshot |
+| Variable-length paths (`SUPPORTS*1..6`) with a time test on every relationship in the path | `basis`: what a claim rests on, as of a moment |
 | Transactions (`begin` / `commit` / `rollback`) | Every read is one transaction. Every applied change is one. A write's checks run in one that is rolled back |
 
 The hybrid search query, from [`models/temporal-claims/tools.yaml`](../models/temporal-claims/tools.yaml):
@@ -93,17 +94,15 @@ The embedder is a small sentence model (bge-small, 384 numbers) that installs wi
 
 ## Explore the example store
 
-The example is the building of this project: four people, 15 to 25 Nov 2026, and the decisions, changes of mind and breakages the project really went through. The cast is made up (all four are versions of the one Craig who built it with his agents). It holds 23 claims (one withdrawn), 7 questions, 2 replies and 27 relationships, of every kind.
+The example is the building of this project: four people, 15 to 25 Nov 2026, and the decisions, changes of mind and breakages the project really went through. The cast is made up (all four are versions of the one Craig who built it with his agents). It holds 23 claims (one withdrawn, seven replaced), 7 questions, 2 replies and 32 relationships, of every kind. The last decision in it rests on evidence three steps deep, and by the end some of that evidence no longer stands.
 
-Install [Relate's CLI](https://relatedb.ai/docs/get-started/install/), then work on a copy, because Relate tidies a store's files when it opens one.
+Install [Relate's CLI](https://relatedb.ai/docs/get-started/install/), then work on a copy, because Relate rewrites a store's files when it opens one. This makes the copy, from the npm package or from a clone of this repo:
 
 ```bash
-cp -R "$(npm root -g)/vine-context/examples/data/graphs/vine-entry" /tmp/vine-entry
+npx vine-context example /tmp/vine-entry
 ```
 
-In a clone of this repo, copy `examples/data/graphs/vine-entry` instead.
-
-**What's in it?** Seven `REPLACES`, six `ANSWERS`, six `ABOUT`, four `SUPPORTS`, two `CONTRADICTS` and two `REPLIES_TO`.
+**What's in it?** Nine `SUPPORTS`, seven `REPLACES`, six `ANSWERS`, six `ABOUT`, two `CONTRADICTS` and two `REPLIES_TO`.
 
 ```bash
 relate -d /tmp/vine-entry --mode table "MATCH ()-[r]->() RETURN type(r) AS relationship, count(*) AS n"
@@ -139,6 +138,20 @@ relate -d /tmp/vine-entry --mode table "MATCH p=(:Claim)-[:REPLACES*2..]->(:Clai
 relate -d /tmp/vine-entry --mode table "MATCH (q:Question) OPTIONAL MATCH (c:Claim)-[:ANSWERS]->(q) RETURN q.text AS question, collect(c.text) AS answers"
 ```
 
+**What does the last decision rest on, and does it all still stand?** Follow `SUPPORTS` back from the decision, any number of steps, and test each piece of evidence against the other relationships. The decision to make the team's own build the example story is still current, but of the six things it rests on, one has been replaced (the hash-256 embedder, two steps back) and one is contradicted by a claim nobody has settled (the judging weights). No single statement says that; only the paths do.
+
+```bash
+relate -d /tmp/vine-entry --mode table "MATCH (d:Claim) WHERE d.text STARTS WITH 'The example story is this one' MATCH p = (e:Claim)-[:SUPPORTS*1..6]->(d) RETURN length(p) AS steps, e.recorded_by AS who, e.text AS evidence, e.withdrawn_at IS NOT NULL AS withdrawn, EXISTS { MATCH (:Claim)-[:REPLACES]->(e) } AS replaced, EXISTS { MATCH (o:Claim)-[:CONTRADICTS]-(e) WHERE o.withdrawn_at IS NULL AND NOT EXISTS { MATCH (:Claim)-[:REPLACES]->(o) } } AS contested ORDER BY steps"
+```
+
+Agents get the same answer from the `basis` tool, as of any moment.
+
+**Which claims are about one day?** A claim can say which days it is about (`about_from` to `about_to`), apart from when it was recorded. Two claims are about Wednesday 25 Nov: the repo going public, and the size of the field.
+
+```bash
+relate -d /tmp/vine-entry --mode table "MATCH (c:Claim) WHERE c.about_from <= date('2026-11-25') AND c.about_to >= date('2026-11-25') RETURN c.recorded_by AS who, c.text AS claim, c.recorded_at AS recorded"
+```
+
 **What was said in the threads?** A reply is a message in a question's thread, not an answer. One of these threads was later closed by a claim that answers its question. The other has only its reply, so the question stays open.
 
 ```bash
@@ -171,5 +184,6 @@ Agents never write Cypher. They get the model's tools over MCP, each with a desc
 | `search` | Hybrid search over current claims and live questions |
 | `beliefs`, `conflicts`, `open_questions` | What is current, where it conflicts, what is unanswered: now, or as of a given moment |
 | `thread`, `history`, `recent` | A question's replies, every link into and out of one item (replaced and withdrawn ones too), the latest changes |
+| `basis` | Everything a claim rests on, following `SUPPORTS` back any number of steps, with whether each piece of evidence still stands: now, or as of a given moment |
 
 The tools are defined in [`models/temporal-claims/tools.yaml`](../models/temporal-claims/tools.yaml), and the guidance agents follow when writing is in [`models/temporal-claims/instructions.md`](../models/temporal-claims/instructions.md). Write tools only check a change. The change itself is applied by fixed code in [`src/core/graph.ts`](../src/core/graph.ts), the same way on every member's machine.

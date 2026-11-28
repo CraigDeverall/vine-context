@@ -2,6 +2,8 @@
 
 Two measurements, both of which you can rerun from a clone of this repo. Each section says what was run, what came out, and what the number does not show.
 
+Back to the [README](../README.md).
+
 ## Do copies end up the same?
 
 This is the claim the project rests on: members who come and go, and write while they are apart, all end up holding the same graph.
@@ -16,12 +18,12 @@ Each run is a process of its own, which starts five hosts. They join with real j
 |---|---|
 | Runs | 100 |
 | Runs where all five copies ended identical | **100** |
-| Changes written | 11,943, of which 5,726 while their author was offline |
-| Times a member went offline or came back | 1,854 |
-| Writes a copy refused | 26 |
-| Time from everyone coming back to every copy agreeing | median 2.0 s, 95th percentile 3.9 s, longest 5.1 s |
+| Changes written | 11,941, of which 5,683 while their author was offline |
+| Times a member went offline or came back | 1,858 |
+| Writes a copy refused | 29 |
+| Time from everyone coming back to every copy agreeing | median 1.8 s, 95th percentile 3.6 s, longest 5.1 s |
 
-Run on 26 Nov 2026 on a Mac (macOS, arm64, Node 22.17) with seed 1. The full results are in [`measured/churn.json`](measured/churn.json).
+Run on 27 Nov 2026 on a Mac (macOS, arm64, Node 22.17) with seed 1. The full results are in [`measured/churn.json`](measured/churn.json).
 
 **What it does not show.** The five hosts share one machine and one clock, and their links never cross a real network, so this says nothing about NAT, relays or slow links. A context is sized for about 20 members, and this used five. An earlier version ran all 100 runs inside one process, and after about 80 of them new members could not connect for a while. No copies differed, and it did not happen with a process for each run, which is how hosts run, but what a host does after thousands of links in one lifetime has not been looked into. The writes are random, not a team's real work.
 

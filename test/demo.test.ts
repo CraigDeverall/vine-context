@@ -40,6 +40,12 @@ describe("vine demo", () => {
       const conflicts = (await m.call<Row[]>("conflicts", {})) as Row[];
       expect(conflicts).toHaveLength(1);
       expect(JSON.stringify(conflicts)).toContain("weighted equally");
+      // The last decision rests on evidence three steps deep: one claim replaced since, one contested.
+      const decision = ((await m.call<Row[]>("beliefs", {})) as Row[]).find((c) => c.text.startsWith("The example story is this one"))!;
+      const basis = (await m.call<Row[]>("basis", { id: decision.id })) as Row[];
+      expect(basis.map((e) => e.steps)).toEqual([1, 1, 2, 2, 2, 3]);
+      expect(basis.filter((e) => !e.current).map((e) => [e.steps, e.withdrawn, e.replaced_by.length])).toEqual([[2, false, 1]]);
+      expect(basis.filter((e) => e.contradicted_by.length).map((e) => e.steps)).toEqual([1]);
       // Three questions still open; the one Craig asked while offline reached everyone and was answered.
       const open = ((await m.call<Row[]>("open_questions", {})) as Row[]).map((q) => q.text).sort();
       expect(open).toHaveLength(3);

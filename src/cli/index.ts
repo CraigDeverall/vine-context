@@ -4,7 +4,8 @@ import { packageInfo } from "../core/package-root.js";
 const pkg = packageInfo();
 const [command, ...rest] = process.argv.slice(2);
 
-const USAGE = `vine ${pkg.version}: a shared context graph of claims and questions, replicated peer to peer between people's AI agents
+const USAGE = `vine ${pkg.version}: Vine Context – P2P Shared Context Graphs
+One graph of claims and questions, replicated peer to peer between people's AI agents
 
 Usage: vine <command> [options]
 
@@ -19,6 +20,7 @@ Commands:
   autostart on|off                    Run \`vine up\` at login (macOS), so your contexts sync after a reboot
   demo [--pace SECONDS] [--join] [--port N] [--no-open] [--verbose]
                                       Three members in one process replay the example, syncing peer to peer (nothing of yours changes; --join lets your agent join)
+  example [DIR]                       Copy the example Relate store to DIR (default ./vine-entry), to open with Relate's own CLI
   ui [--context NAME] [--port N] [--open]
                                       Show the console and explorer in a browser
   status [--context NAME]             Show a context's host: sharing, members, links, relays, invites
@@ -33,7 +35,7 @@ Commands:
   --version                           Print the version
 
 Environment:
-  VINE_USER        Your name in contexts (default: the name you set with set_my_name, else git's user.name, else your computer account's full name, else your login name, else a made-up one)
+  VINE_USER        Your name in contexts (default: the name you set (update_context, or vine setup), else git's user.name, else your computer account's full name, else your login name, else a made-up one)
   VINE_CONTEXT     The context a new chat starts with when its folder has none linked (default: none; the agent asks)
   VINE_CHAT        The chat's id, to remember its context (default: Claude Code's session id)
   VINE_DATA_DIR    Where contexts live (default: ~/.local/share/vine-context)
@@ -151,7 +153,7 @@ async function demo(args: string[]): Promise<number> {
 Open this on this machine (it acts as ${CREATOR}; don't share it):
 ${server.url}
 
-Sharing console: the four members and their live links. Explore a context: the graph as it grows; drag the time slider back to replay it. Conflicts: the judging weights, which stay open, and why CI was blocked, until Craiginator gives way.
+Console: the four members and their live links. Explorer: the graph as it grows; drag the time slider back to replay it. Conflicts: why CI was blocked, until Craiginator gives way, and the judging weights, which stay open and which the last decision rests on.
 `);
   if (!values["no-open"]) {
     const { spawn } = await import("node:child_process");
@@ -493,6 +495,26 @@ if (help) {
   }
 }
 
+// Copies the example store that ships with vine, because Relate rewrites a
+// store's files when it opens one: a judge should open a copy, not the package's.
+async function example(args: string[]): Promise<number> {
+  const { cp } = await import("node:fs/promises");
+  const { existsSync } = await import("node:fs");
+  const { join, resolve } = await import("node:path");
+  const { packageRoot } = await import("../core/package-root.js");
+  const { GRAPH_NAME } = await import("../demo/scenario.js");
+  const to = resolve(args[0] ?? GRAPH_NAME);
+  if (existsSync(to)) {
+    console.error(`${to} already exists. Name a folder that doesn't, for example: vine example /tmp/vine-entry-2`);
+    return 1;
+  }
+  await cp(join(packageRoot(), "examples", "data", "graphs", GRAPH_NAME), to, { recursive: true });
+  console.log(`The example Relate store is at ${to}`);
+  console.log(`Open it with Relate's CLI (https://relatedb.ai/docs/get-started/install/):`);
+  console.log(`  relate -d ${JSON.stringify(to)} --mode table "MATCH ()-[r]->() RETURN type(r) AS relationship, count(*) AS n"`);
+  return 0;
+}
+
 async function run(): Promise<void> {
 switch (command) {
   case "--version":
@@ -512,6 +534,9 @@ switch (command) {
     if (code >= 0) process.exitCode = code;
     break;
   }
+  case "example":
+    process.exitCode = await example(rest);
+    break;
   case "ui": {
     const code = await ui(rest);
     if (code >= 0) process.exitCode = code;

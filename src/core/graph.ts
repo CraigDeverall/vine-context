@@ -67,12 +67,22 @@ export interface ApplyContext {
   isAdmin(key: string, at: string): boolean;
 }
 
-function scalar(type: string, spec: Pick<InputSpecT, "max_length" | "min" | "max">): z.ZodType {
+/** A calendar day, checked strictly (a real date, YYYY-MM-DD). */
+export const isoDay = () => z.iso.date({ error: "must be a real calendar date as YYYY-MM-DD, for example 2026-03-01" });
+/** A moment, checked strictly (ISO 8601 with seconds and a time zone). */
+export const isoMoment = () => z.iso.datetime({ offset: true, error: "must be an ISO 8601 date-time with a time zone, for example 2026-03-01T09:00:00Z" });
+
+/**
+ * `listing` is the shape a tool listing shows: dates are a plain string with a
+ * JSON Schema `format`, not zod's long validation pattern. The strict check is
+ * made where the call is handled, with the full shape.
+ */
+function scalar(type: string, spec: Pick<InputSpecT, "max_length" | "min" | "max">, listing = false): z.ZodType {
   switch (type) {
     case "string":
       return z.string().max(spec.max_length ?? 20_000);
     case "id":
-      return z.string().min(1).max(64);
+      return listing ? z.string() : z.string().min(1).max(64);
     case "integer": {
       let s = z.number().int();
       if (spec.min !== undefined) s = s.min(spec.min);
@@ -88,24 +98,24 @@ function scalar(type: string, spec: Pick<InputSpecT, "max_length" | "min" | "max
     case "boolean":
       return z.boolean();
     case "date":
-      return z.iso.date();
+      return listing ? z.string().meta({ format: "date" }) : isoDay();
     case "datetime":
-      return z.iso.datetime({ offset: true });
+      return listing ? z.string().meta({ format: "date-time" }) : isoMoment();
     default:
       throw new Error(`unknown type ${type}`);
   }
 }
 
-/** The zod shape of a tool's input, for MCP tool listings and for validation. */
-export function inputShape(input: Record<string, InputSpecT>): Record<string, z.ZodType> {
+/** The zod shape of a tool's input: for validation, or with `listing` for MCP tool listings (see scalar). */
+export function inputShape(input: Record<string, InputSpecT>, listing = false): Record<string, z.ZodType> {
   const shape: Record<string, z.ZodType> = {};
   for (const [name, spec] of Object.entries(input)) {
     let s: z.ZodType =
       spec.type === "enum"
         ? z.enum(spec.values as [string, ...string[]])
         : spec.type === "array"
-          ? z.array(scalar(spec.items!, spec)).max(100)
-          : scalar(spec.type, spec);
+          ? z.array(scalar(spec.items!, spec, listing)).max(100)
+          : scalar(spec.type, spec, listing);
     s = s.describe(spec.description);
     if (spec.default !== undefined) s = (s as z.ZodType & { default(v: unknown): z.ZodType }).default(spec.default);
     else if (!spec.required) s = s.optional();

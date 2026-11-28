@@ -1,4 +1,4 @@
-# Tools for the temporal-claims model. See docs/model-packs.md for the format.
+# Tools for the temporal-claims model. src/core/pack.ts reads this format.
 #
 # Write tools only check their input against the graph here (steps that return
 # `_error`); `apply` names the change they make, which src/core/graph.ts applies
@@ -42,13 +42,12 @@ tools:
     view: receipt
     undo: { tool: withdraw }
     description: >-
-      Record one statement you or the person believe is true, in one or two
-      sentences. Use it in the course of ordinary work, without being asked:
-      when the chat reaches a decision, establishes a fact or settles how
-      something works, and it fits what the context is for.
-      Link it to existing claims it supports, contradicts or replaces,
-      and to questions it answers. Use replaces to correct or update an earlier
-      claim rather than withdrawing it. Returns the new claim's id.
+      Record one statement you or the person believe is true. Use it in the
+      course of ordinary work, without being asked: when the chat reaches a
+      decision, establishes a fact or settles how something works, and it fits
+      what the context is for. Link it to the claims it supports, contradicts or
+      replaces and the questions it answers; to correct an earlier claim, use
+      replaces rather than withdrawing it.
     input:
       text: { type: string, required: true, max_length: 2000, description: The statement, in one or two sentences }
       source: { type: string, max_length: 500, description: Where it came from (URL, file, meeting, person) }
@@ -159,9 +158,9 @@ tools:
     kind: write
     apply: withdraw
     description: >-
-      Take back a claim, question or reply you recorded, for example one made by
-      mistake. It stays in the graph's history. To correct a claim, prefer
-      add_claim with replaces. Only its author or an admin can withdraw it.
+      Take back a claim, question or reply, for example one made by mistake
+      (only its author or an admin can). It stays in the history. To correct a
+      claim, prefer add_claim with replaces.
     input:
       id: { type: id, required: true, description: The claim, question or reply to withdraw }
       reason: { type: string, max_length: 500, description: Why it is withdrawn }
@@ -179,14 +178,13 @@ tools:
     title: Search
     kind: read
     description: >-
-      Find claims and questions related to a text, ranked by hybrid search (meaning
-      plus keywords). Returns only claims that are current and questions that are
-      not withdrawn, unless include_ended; questions show whether they are
+      Find claims and questions related to a text, by hybrid search (meaning
+      plus keywords): current claims, and questions with whether they are
       answered. Search before adding, to avoid duplicates and to find what to
       link to.
     input:
       query: { type: string, required: true, max_length: 1000, description: What to look for }
-      include_ended: { type: boolean, default: false, description: Also find claims that were replaced or withdrawn and questions that were withdrawn (each row says whether it is current) }
+      include_ended: { type: boolean, default: false, description: Also find replaced or withdrawn claims and withdrawn questions (each row says whether it is current) }
       kind: { type: enum, values: [any, claim, question], default: any, description: Only claims, only questions, or both }
       at: { type: datetime, description: Search the graph as it stood at this time (ISO 8601). Default now. }
       limit: { type: integer, min: 1, max: 50, default: 10, description: How many results }
@@ -220,9 +218,7 @@ tools:
     kind: read
     description: >-
       List the claims that were current at a moment (default now), newest first,
-      with what each supports, contradicts, replaces and answers. Give at to see
-      what the group believed back then. Give about_from/about_to to keep only
-      claims about that period.
+      with what each supports, contradicts, replaces and answers.
     input:
       at: { type: datetime, description: The moment to look at (ISO 8601). Default now. }
       about_from: { type: date, description: Keep claims about days on or after this (YYYY-MM-DD) }
@@ -327,6 +323,39 @@ tools:
                  [(n)-[r]->(x) | {direction: 'out', type: type(r), id: x.id, text: x.text, recorded_at: r.recorded_at, recorded_by: r.recorded_by}]
                  + [(x)-[r]->(n) | {direction: 'in', type: type(r), id: x.id, text: x.text, recorded_at: r.recorded_at, recorded_by: r.recorded_by}] AS links
         single: true
+
+  - name: basis
+    title: What a claim rests on
+    kind: read
+    description: >-
+      Follow SUPPORTS back from one claim to everything it rests on, however many
+      steps away: each piece of evidence, how far back it is, and whether it
+      still stood at that moment (default now). Evidence that was replaced or
+      withdrawn, or that a current claim contradicts, is marked, so you can say
+      when a belief rests on something the group no longer holds. Use it before
+      relying on a claim, and when asked why the group believes something.
+    input:
+      id: { type: id, required: true, description: The claim to trace back }
+      at: { type: datetime, description: Trace it as the graph stood at this time (ISO 8601). Default now. }
+      depth: { type: integer, min: 1, max: 6, default: 4, description: How many steps of support to follow back }
+    steps:
+      - cypher: |
+          OPTIONAL MATCH (c:Claim {id: $id})
+          RETURN CASE WHEN c IS NULL THEN 'No claim ' + $id + '.' END AS _error
+      - cypher: |
+          WITH datetime(coalesce($at, $now)) AS T
+          MATCH p = (e:Claim)-[:SUPPORTS*1..6]->(c:Claim {id: $id})
+          WHERE length(p) <= $depth AND all(r IN relationships(p) WHERE r.recorded_at <= T)
+          WITH e, T, min(length(p)) AS steps
+          RETURN e.id AS id, e.text AS text, e.source AS source,
+                 e.recorded_at AS recorded_at, e.recorded_by AS recorded_by,
+                 steps,
+                 [(e)-[r:SUPPORTS]->(x:Claim) WHERE r.recorded_at <= T | x.id] AS supports,
+                 {{current_claim e}} AS current,
+                 e.withdrawn_at IS NOT NULL AND e.withdrawn_at <= T AS withdrawn,
+                 [(n:Claim)-[r:REPLACES]->(e) WHERE r.recorded_at <= T | n.id] AS replaced_by,
+                 [(o:Claim)-[r:CONTRADICTS]-(e) WHERE r.recorded_at <= T AND {{current_claim o}} | o.id] AS contradicted_by
+          ORDER BY steps, recorded_at
 
   - name: recent
     title: Recent changes

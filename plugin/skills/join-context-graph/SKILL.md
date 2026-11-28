@@ -7,7 +7,7 @@ description: Join someone else's shared context (Vine Context) with the join cod
 
 **First: is it already on this machine?** If the person names a context and
 gives no code, call `context_info`: if that name is in `your_contexts`, call
-`use_context` with it (it becomes this chat's context), or `add_context` to use
+`use_context` with it (it becomes this chat's context), or with mode `add` to use
 it alongside the chat's others. That covers their own contexts and ones they joined before: no code is
 needed again.
 

@@ -124,9 +124,9 @@ function engine(on: any, calls: Calls, prompts: string[] = [], state: unknown = 
   on('mcp.call', (_: unknown, e: any) => {
     calls.push({ tool: e.tool, args: e.args })
     if (failing[e.tool]) return { value: { content: [{ type: 'text', text: failing[e.tool] }], isError: true } }
-    if (e.tool === 'context_activity') return { value: { content: [{ type: 'text', text: JSON.stringify(state) }], isError: false, structuredContent: state } }
-    if (e.tool === 'context_details') {
-      const d = { ...DETAILS, name: e.args.name, in_chat: e.args.name === 'team', writes_here: e.args.name === 'team' }
+    if (e.tool === 'recent') return { value: { content: [{ type: 'text', text: JSON.stringify(state) }], isError: false, structuredContent: state } }
+    if (e.tool === 'context_info') {
+      const d = { ...DETAILS, name: e.args.context, in_chat: e.args.context === 'team', writes_here: e.args.context === 'team' }
       return { value: { content: [{ type: 'text', text: JSON.stringify(d) }], isError: false, structuredContent: d } }
     }
     if (e.tool === 'search') {
@@ -137,7 +137,7 @@ function engine(on: any, calls: Calls, prompts: string[] = [], state: unknown = 
     return { value: { content: [{ type: 'text', text: '{}' }], isError: false } }
   })
 }
-const acts = (calls: Calls) => calls.filter(c => c.tool !== 'context_activity' && c.tool !== 'search')
+const acts = (calls: Calls) => calls.filter(c => c.tool !== 'recent' && c.tool !== 'search')
 
 test('the band shows loading until the server answers', async ($, on) => {
   engine(on, [])
@@ -203,7 +203,7 @@ test('the overview says what needs you, hands steering to the agent, and opens i
   expect((await desk.find({ key: 'fold-needs' }))?.text).toMatch(/^Show fewer things ▴/)
   expect(await desk.find({ type: 'Text', text: /bob replaced your claim c_old/ })).toBeDefined()
   await desk.press({ key: 'undo-change-x1' })
-  expect(calls).toContainEqual({ tool: 'take_back', args: { id: 'x1' } })
+  expect(calls).toContainEqual({ tool: 'withdraw', args: { id: 'x1', undo_only: true } })
 
   await desk.press({ key: 'catch-up' })
   expect(prompts.at(-1)).toMatch(/^Catch me up on the context 'team'/)
@@ -284,7 +284,7 @@ test('editing the description takes the whole panel; claims show conflicts and h
   await desk.press({ key: 'edit-description' })
   expect(await desk.find({ key: 'tab-claims' })).toBeUndefined()
   await desk.input({ key: 'describe', text: 'What the team knows about checkout', kind: 'submit' })
-  expect(calls).toContainEqual({ tool: 'describe_context', args: { description: 'What the team knows about checkout', context: 'team' } })
+  expect(calls).toContainEqual({ tool: 'update_context', args: { purpose: 'What the team knows about checkout', context: 'team' } })
 
   await desk.press({ key: 'tab-claims' })
   expect((await desk.find({ key: 'tab-claims' }))?.props.variant).toBe('primary')
@@ -295,7 +295,7 @@ test('editing the description takes the whole panel; claims show conflicts and h
   await desk.press({ key: 'keep-c_bob-over-c_cache' })
   expect(prompts.at(-1)).toMatch(/The claims c_bob \("The deploy caused it"\) and c_cache \("The cache caused it"\) contradict each other\. c_bob is the one that's right[\s\S]*withdraw c_cache/)
   await desk.press({ key: 'undo-c_held' })
-  expect(calls).toContainEqual({ tool: 'take_back', args: { id: 'x1' } })
+  expect(calls).toContainEqual({ tool: 'withdraw', args: { id: 'x1', undo_only: true } })
 
   // History: what was believed before, and why it no longer stands.
   await desk.press({ key: 'scope-history' })
@@ -335,7 +335,7 @@ test('the people tab confirms a removal on its own, and invites to this context'
   expect(await desk.find({ type: 'Text', text: /Remove carol\?/ })).toBeDefined()
   expect(await desk.find({ key: 'invite' })).toBeUndefined()
   await desk.press({ key: 'confirm-cccc-dddd-eeee' })
-  expect(calls).toContainEqual({ tool: 'remove_peer', args: { name: 'carol' } })
+  expect(calls).toContainEqual({ tool: 'manage_member', args: { action: 'remove', name: 'carol' } })
   // The open join codes, each to copy or cancel; making one is its own step.
   expect(await desk.find({ type: 'Text', text: /2 waiting/ })).toBeDefined()
   expect(await desk.find({ type: 'Text', text: /For Sam · contributor · expires in 23h/ })).toBeDefined()
@@ -344,7 +344,7 @@ test('the people tab confirms a removal on its own, and invites to this context'
   await desk.press({ key: 'copy-inv_1' })
   expect(prompts).toContain('copied: Join my context graph: /vine-context:join vine1_room.secret')
   await desk.press({ key: 'cancel-inv_2' })
-  expect(calls).toContainEqual({ tool: 'revoke_invite', args: { id: 'inv_2' } })
+  expect(calls).toContainEqual({ tool: 'manage_member', args: { action: 'revoke_invite', invite: 'inv_2' } })
   await desk.press({ key: 'invite' })
   expect(await desk.find({ type: 'Text', text: /Invite someone to team/ })).toBeDefined()
   expect(await desk.find({ key: 'rename' })).toBeUndefined()
@@ -366,9 +366,9 @@ test('the people tab confirms a removal on its own, and invites to this context'
   await desk.press({ key: 'rename' })
   expect(await desk.find({ key: 'invite' })).toBeUndefined()
   await desk.input({ key: 'my-name', text: 'Ally', kind: 'submit' })
-  expect(calls).toContainEqual({ tool: 'set_my_name', args: { name: 'Ally' } })
+  expect(calls).toContainEqual({ tool: 'update_context', args: { my_name: 'Ally' } })
   await desk.press({ key: 'sync-toggle' })
-  expect(calls).toContainEqual({ tool: 'stop_sharing', args: {} })
+  expect(calls).toContainEqual({ tool: 'sharing', args: { action: 'off' } })
   await desk.unmount()
 })
 
@@ -385,9 +385,9 @@ test('the Contexts view turns contexts on and off, creates one in its own step, 
   // A long name can push the toggle to its own line, never past the card's edge.
   expect((await desk.find({ key: 'ctx-head-team' }))?.props.flexWrap).toBe('wrap')
   await desk.press({ key: 'toggle-own' })
-  expect(calls).toContainEqual({ tool: 'add_context', args: { name: 'own' } })
+  expect(calls).toContainEqual({ tool: 'use_context', args: { name: 'own', mode: 'add' } })
   await desk.press({ key: 'toggle-team' })
-  expect(calls).toContainEqual({ tool: 'remove_context', args: { name: 'team' } })
+  expect(calls).toContainEqual({ tool: 'use_context', args: { name: 'team', mode: 'remove' } })
   // Each context has its own pin for the chat's folder, whose path keeps its end.
   // The folder shows as much of its path as the pane has room for.
   expect((await desk.find({ key: 'pin-team' }))?.text).toBe('📌 Turn on for new chats in /Users/alice/work/shop/services/checkout')
@@ -419,7 +419,7 @@ test('the Contexts view turns contexts on and off, creates one in its own step, 
   expect(calls.some(c => c.args.name === 'ops-notes')).toBe(false)
   await desk.input({ key: 'new-description', text: 'Runbooks and on-call notes', kind: 'change' })
   await desk.press({ key: 'create-context' })
-  expect(calls).toContainEqual({ tool: 'add_context', args: { name: 'ops-notes', description: 'Runbooks and on-call notes' } })
+  expect(calls).toContainEqual({ tool: 'use_context', args: { name: 'ops-notes', description: 'Runbooks and on-call notes', mode: 'add' } })
   expect(await desk.find({ key: 'new-name' })).toBeUndefined()
 
   // Cancel leaves the list as it was.
@@ -450,7 +450,7 @@ test('a context opens from the list on its tabs or its Settings tab, an off one 
   await desk.press({ key: 'switch' })
   await desk.press({ key: 'name-team' })
   expect(await desk.find({ key: 'tab-overview' })).toBeDefined() // open, on the tab it was left on
-  expect(calls.some(c => c.tool === 'context_details')).toBe(false)
+  expect(calls.some(c => c.tool === 'context_info')).toBe(false)
   await desk.press({ key: 'switch' })
   expect(await desk.find({ key: 'details-team' })).toBeUndefined()
   await desk.press({ key: 'open-team' })
@@ -459,7 +459,7 @@ test('a context opens from the list on its tabs or its Settings tab, an off one 
   await desk.press({ key: 'switch' })
   await desk.press({ key: 'settings-team' })
   expect((await desk.find({ key: 'tab-settings' }))?.props.variant).toBe('primary')
-  expect(calls).toContainEqual({ tool: 'context_details', args: { name: 'team' } })
+  expect(calls).toContainEqual({ tool: 'context_info', args: { context: 'team', details: true } })
   expect(await desk.find({ type: 'Text', text: /6 claims · 2 questions · 2 replies/ })).toBeDefined()
   expect(await desk.find({ type: 'Text', text: /Syncing · 3 members · 1 of the others online now · 2 join codes not used yet/ })).toBeDefined()
   // The id every member shares sits under this machine's name for it.
@@ -480,7 +480,7 @@ test('a context opens from the list on its tabs or its Settings tab, an off one 
   expect(await desk.find({ key: 'edit-description' })).toBeUndefined()
   expect(await desk.find({ key: 'detail-offline-team' })).toBeUndefined()
   await desk.press({ key: 'sync-toggle' })
-  expect(calls.some(c => c.tool === 'stop_sharing')).toBe(true)
+  expect(calls.some(c => c.tool === 'sharing')).toBe(true)
   await desk.press({ key: 'detail-invite-team' })
   expect(await desk.find({ type: 'Text', text: /Invite someone to team/ })).toBeDefined()
   // A way out of a step leads with the ‹ caret, like Back.
@@ -492,17 +492,17 @@ test('a context opens from the list on its tabs or its Settings tab, an off one 
   await desk.press({ key: 'switch' })
   expect(await desk.find({ key: 'open-own' })).toBeUndefined()
   await desk.press({ key: 'settings-own' })
-  expect(calls).toContainEqual({ tool: 'context_details', args: { name: 'own' } })
+  expect(calls).toContainEqual({ tool: 'context_info', args: { context: 'own', details: true } })
   expect(await desk.find({ key: 'tab-settings' })).toBeUndefined()
   // Its page is the same Settings as an open context's: its name and description change here, and it can be shared.
   expect(await desk.find({ key: 'name-row-own' })).toBeDefined()
   await desk.press({ key: 'describe-own' })
   expect(await desk.find({ type: 'Text', text: /Describe own/ })).toBeDefined()
   await desk.input({ key: 'describe', text: 'My own notes', kind: 'submit' })
-  expect(calls).toContainEqual({ tool: 'describe_context', args: { description: 'My own notes', context: 'own' } })
+  expect(calls).toContainEqual({ tool: 'update_context', args: { purpose: 'My own notes', context: 'own' } })
   expect(await desk.find({ key: 'ask-delete-own' })).toBeDefined() // back on its page
   await desk.press({ key: 'detail-offline-own' })
-  expect(calls).toContainEqual({ tool: 'stop_sharing', args: { context: 'own' } })
+  expect(calls).toContainEqual({ tool: 'sharing', args: { action: 'off', context: 'own' } })
   await desk.press({ key: 'detail-invite-own' })
   expect(await desk.find({ type: 'Text', text: /Invite someone to own/ })).toBeDefined()
   await desk.input({ key: 'invite-note', text: 'Sam', kind: 'submit' })
@@ -516,9 +516,9 @@ test('a context opens from the list on its tabs or its Settings tab, an off one 
   expect(await desk.find({ type: 'Text', text: /Rename own/ })).toBeDefined()
   await desk.input({ key: 'rename-context-own', text: 'team', kind: 'submit' })
   expect(await desk.find({ type: 'Text', text: /already a context 'team'/ })).toBeDefined()
-  expect(calls.some(c => c.tool === 'rename_context')).toBe(false)
+  expect(calls.some(c => c.tool === 'update_context')).toBe(false)
   await desk.input({ key: 'rename-context-own', text: 'My Notes', kind: 'submit' })
-  expect(calls).toContainEqual({ tool: 'rename_context', args: { name: 'own', to: 'my-notes' } })
+  expect(calls).toContainEqual({ tool: 'update_context', args: { context: 'own', rename_to: 'my-notes' } })
   // (This fake server keeps calling it 'own', so the page closes back to the list.)
   await desk.press({ key: 'settings-own' })
 
@@ -553,7 +553,7 @@ test('a context opens from the list on its tabs or its Settings tab, an off one 
 
 test('an action that fails says why, and the next poll doesn\'t clear it', async ($, on) => {
   const calls: Calls = []
-  engine(on, calls, [], ACTIVITY, { stop_sharing: 'The graph host failed to start', context_details: 'The embedder is not installed' })
+  engine(on, calls, [], ACTIVITY, { sharing: 'The graph host failed to start', context_info: 'The embedder is not installed' })
   await $.session.start(START)
   await $.command.run(RUN)
   const desk = await $.ui.mount({ ...PANE, surface: 'desktop' })
@@ -621,9 +621,9 @@ test('with several contexts, the band lists them and the panel shows one at a ti
   expect(await desk.find({ key: 'view-infra' })).toBeDefined()
   await desk.press({ key: 'tab-claims' })
   await desk.press({ key: 'undo-c_held' })
-  expect(calls).toContainEqual({ tool: 'take_back', args: { id: 'x1', context: 'team' } })
+  expect(calls).toContainEqual({ tool: 'withdraw', args: { id: 'x1', undo_only: true, context: 'team' } })
   await desk.press({ key: 'view-infra' })
-  expect(calls.some(c => c.tool === 'context_activity' && c.args.context === 'infra')).toBe(true)
+  expect(calls.some(c => c.tool === 'recent' && c.args.context === 'infra')).toBe(true)
   await desk.unmount()
 })
 
@@ -651,7 +651,7 @@ test('every view draws in the terminal too, and a reader gets no way to write', 
   // Offline shows on the Overview, with the way back.
   expect(await term.find({ type: 'Text', text: /You’re offline/ })).toBeDefined()
   await term.press({ key: 'go-online' })
-  expect(calls).toContainEqual({ tool: 'start_sharing', args: {} })
+  expect(calls).toContainEqual({ tool: 'sharing', args: { action: 'on' } })
   expect(await term.find({ key: 'save-chat' })).toBeUndefined()
   for (const tab of ['questions', 'claims', 'people', 'overview']) {
     await term.press({ key: `tab-${tab}` })
@@ -678,7 +678,7 @@ test('the band says what is wrong, instead of loading forever, when the server k
   on('clock.now', () => ({ value: now }))
   on('ui.status', () => ({ value: undefined }))
   on('session.start', (_: unknown, e: any) => ({ cwd: e.cwd }))
-  on('mcp.call', () => ({ value: { content: [{ type: 'text', text: 'Tool context_activity not found' }], isError: true } }))
+  on('mcp.call', () => ({ value: { content: [{ type: 'text', text: 'Tool recent not found' }], isError: true } }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
   await $.session.start(START)
   await $.command.run(RUN)
